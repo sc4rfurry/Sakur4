@@ -438,6 +438,40 @@ CREATE TABLE vectors (
 CREATE INDEX vectors_source ON vectors(source_table, source_id);
 
 -- ---------------------------------------------------------------------------
+-- C8 · Provider-reported usage — prompt-cache accounting over cloud providers
+--
+-- A local llama.cpp slot reports its cache state through its own API. A hosted
+-- provider reports it in the completion response instead: how many prompt tokens
+-- were served from its prompt cache, how many were written to it, and how many
+-- were billed fresh. Sakur4 does not call a provider itself (NG1 — it is a
+-- subsystem, not a harness), so the harness pushes those numbers here and the
+-- receipt accounts for them.
+--
+-- This is what makes the Cache Ledger meaningful off llama.cpp. The failure it
+-- catches is the same one FR-7 exists for: a compaction that rewrites history
+-- invalidates the provider's cached prefix, and the next turn pays full price for
+-- tokens that were previously discounted. On a hosted provider that is a *bill*,
+-- not just a stall, which makes it worth measuring even when there is no KV slot
+-- to align to.
+-- ---------------------------------------------------------------------------
+CREATE TABLE provider_usage (
+    usage_id       TEXT PRIMARY KEY,
+    session_id     TEXT NOT NULL,
+    slot_id        TEXT,
+    turn           INTEGER NOT NULL,
+    prompt_tokens  INTEGER NOT NULL,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens   INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens  INTEGER,
+    cache_write_tokens INTEGER,
+    reasoning_tokens   INTEGER,
+    provider       TEXT,
+    model          TEXT,
+    created_at     TEXT NOT NULL
+);
+CREATE INDEX provider_usage_session ON provider_usage(session_id, turn DESC);
+
+-- ---------------------------------------------------------------------------
 -- Per-language parse tallies, so `doctor` can show what the index covers.
 -- ---------------------------------------------------------------------------
 CREATE VIEW repo_language_summary AS

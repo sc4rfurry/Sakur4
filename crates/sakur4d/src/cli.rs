@@ -67,16 +67,37 @@ pub struct Cli {
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
     /// Run the MCP gateway (default).
+    ///
+    /// `stdio` is the default because every MCP client can spawn a child process;
+    /// `http` is for shared stores, remote harnesses, and concurrent sessions.
     Serve {
-        /// Address to bind. Defaults to localhost, per NFR-11.
+        /// `stdio`, `http`, `http://host:port`, or a bare `host:port`.
+        #[arg(long, global = true, env = "SAKUR4_TRANSPORT", default_value = "stdio")]
+        transport: String,
+        /// Address to bind when serving over HTTP. Defaults to localhost, per NFR-11.
         #[arg(long, default_value = "127.0.0.1:8765")]
         bind: String,
-        /// Run the Idle Consolidator in the background.
-        #[arg(long, default_value_t = true)]
-        dream: bool,
+        /// Disable the Idle Consolidator. It is on by default: memory maintenance
+        /// should not require opting in, and it refuses to run while any tracked
+        /// slot is generating.
+        #[arg(long)]
+        no_dream: bool,
         /// Seconds of quiet before consolidation may run.
         #[arg(long, default_value_t = 90)]
         quiet_secs: u64,
+    },
+
+    /// Print ready-to-paste MCP configuration for a harness.
+    Config {
+        /// `hermes`, `claude`, `claude-code`, `generic-http`, or `generic-stdio`.
+        #[arg(default_value = "hermes")]
+        harness: String,
+        /// Path to the sakur4d binary. Defaults to this executable.
+        #[arg(long)]
+        binary: Option<PathBuf>,
+        /// Memory Fabric path to bake into the generated config.
+        #[arg(long)]
+        db: Option<PathBuf>,
     },
 
     /// Print resolved configuration and component status.
@@ -206,6 +227,17 @@ pub enum Command {
 }
 
 /// Initialise tracing at the requested verbosity.
+///
+/// # Diagnostics go to stderr, always
+///
+/// Over the stdio transport, stdout **is** the JSON-RPC channel. A single log
+/// line written there is not a cosmetic problem: the client reads it as a frame,
+/// fails to parse it, and the session dies. This is not hypothetical — a WARN from
+/// a rejected tool call was observed corrupting stdout, which is why the writer is
+/// pinned to stderr explicitly rather than left to the subscriber's default.
+///
+/// It is also the right choice for the CLI commands: it keeps stdout pipeable, so
+/// `sakur4d repo-map | ...` emits only the map.
 pub fn init_tracing(verbose: u8) {
     let level = match verbose {
         0 => "warn",
@@ -223,6 +255,7 @@ pub fn init_tracing(verbose: u8) {
         )
         .with_target(false)
         .compact()
+        .with_writer(std::io::stderr)
         .init();
 }
 
@@ -259,18 +292,33 @@ async fn open_engine(cli: &Cli) -> Result<Engine> {
 /// Dispatch a parsed command.
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command.clone().unwrap_or(Command::Serve {
+        transport: "stdio".into(),
         bind: "127.0.0.1:8765".into(),
-        dream: true,
+        no_dream: false,
         quiet_secs: 90,
     }) {
         Command::Serve {
+            transport,
             bind,
-            dream,
+            no_dream,
             quiet_secs,
         } => {
+            // `--bind` wins over a bare `http` transport, so the common case
+            // (`--transport http --bind 127.0.0.1:9000`) behaves as written.
+            let resolved = match crate::gateway::Transport::parse(&transport) {
+                crate::gateway::Transport::Http(_) if transport.eq_ignore_ascii_case("http") => {
+                    crate::gateway::Transport::Http(bind)
+                }
+                other => other,
+            };
             let engine = open_engine(&cli).await?;
-            crate::gateway::serve(engine, &bind, dream, quiet_secs).await
+            crate::gateway::serve(engine, resolved, !no_dream, quiet_secs).await
         }
+        Command::Config {
+            harness,
+            binary,
+            db,
+        } => config(&cli, &harness, binary, db),
         Command::Doctor { refresh } => doctor(&cli, refresh).await,
         Command::Index { path, full } => index(&cli, path, full).await,
         Command::RepoMap { budget, focus } => repo_map(&cli, budget, focus).await,
@@ -320,8 +368,161 @@ pub async fn run(cli: Cli) -> Result<()> {
 // Commands
 // ===========================================================================
 
-async fn doctor(cli: &Cli, refresh: bool) -> Result<()> {
-    let engine = open_engine(cli).await?;
+/// Print ready-to-paste MCP configuration for a harness.
+///
+/// # Why this is a command rather than a README section
+///
+/// The path to integration is the thing most likely to be got wrong, and every
+/// harness spells it differently: Hermes takes `command`/`args` or a `url`, the
+/// Claude clients take a `mcpServers` JSON object, and anything else either
+/// spawns a child or connects to a URL. Emitting the exact text — with *this*
+/// binary's absolute path and *this* store baked in — removes the guesswork, and
+/// an absolute path matters because a harness does not inherit the shell's `PATH`
+/// or working directory.
+fn config(
+    cli: &Cli,
+    harness: &str,
+    binary: Option<PathBuf>,
+    db: Option<PathBuf>,
+) -> Result<()> {
+    let exe = binary
+        .or_else(|| std::env::current_exe().ok())
+        .context("could not determine the sakur4d path; pass --binary")?;
+    let exe = exe.display().to_string();
+    let store = db
+        .unwrap_or_else(|| cli.db.clone())
+        .display()
+        .to_string();
+    let project = cli
+        .project_root
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .map(|p| p.display().to_string());
+
+    // A single spawnable command line, used by every stdio-shaped harness.
+    let mut argv = vec![
+        exe.clone(),
+        "--db".into(),
+        store.clone(),
+    ];
+    if let Some(p) = &project {
+        argv.push("--project-root".into());
+        argv.push(p.clone());
+    }
+    argv.push("serve".into());
+    argv.push("--transport".into());
+    argv.push("stdio".into());
+
+    match harness.trim().to_ascii_lowercase().as_str() {
+        "hermes" => {
+            println!("# Hermes Agent — add to ~/.hermes/config.yaml (or $HERMES_HOME/config.yaml)");
+            println!("#");
+            println!("# Hermes resolves transport as: \"HTTP\" if the entry has a `url`,");
+            println!("# otherwise \"stdio\" spawning `command` with `args`. Both work.");
+            println!("#");
+            println!("# Restart Hermes after editing, or run `/mcp` to reconnect.");
+            println!();
+            println!("mcp_servers:");
+            println!("  sakur4:");
+            println!("    command: {}", yaml_scalar(&exe));
+            println!("    args:");
+            for a in &argv[1..] {
+                println!("      - {}", yaml_scalar(a));
+            }
+            println!("    connect_timeout: 60.0");
+            println!("    enabled: true");
+            println!();
+            println!("# Prefer one long-lived server shared by all your sessions? Use");
+            println!("# `sakur4d serve --transport http` in one terminal, then:");
+            println!("#");
+            println!("# mcp_servers:");
+            println!("#   sakur4:");
+            println!("#     url: http://127.0.0.1:8765/");
+            println!("#     transport: http");
+            println!("#     enabled: true");
+        }
+        "claude" | "claude-desktop" => {
+            println!("// Claude Desktop — merge into claude_desktop_config.json");
+            println!("// (Settings → Developer → Edit Config)");
+            println!("//");
+            println!("// Windows: %APPDATA%\\Claude\\claude_desktop_config.json");
+            println!("// macOS:   ~/Library/Application Support/Claude/claude_desktop_config.json");
+            println!("{}", json_mcp_servers(&exe, &argv[1..]));
+        }
+        "claude-code" | "codex" => {
+            // The CLI clients take the same shape and can register it for you.
+            println!("# Claude Code / Codex-style CLI registration");
+            println!("claude mcp add sakur4 -- {}", argv.join(" "));
+            println!();
+            println!("# Equivalent raw JSON, if you prefer to edit the file:");
+            println!("{}", json_mcp_servers(&exe, &argv[1..]));
+        }
+        "generic-http" => {
+            println!("# Generic MCP client over streamable HTTP");
+            println!("#");
+            println!("# 1. Start the server once, in its own terminal:");
+            println!("#      {exe} --db {store} serve --transport http --bind 127.0.0.1:8765");
+            println!("# 2. Point the client at:  http://127.0.0.1:8765/");
+            println!("#");
+            println!("# Protocol: 2026-07-28. Requests carry the revision in per-request");
+            println!("# `_meta`; the SEP-2243 headers `MCP-Protocol-Version` and");
+            println!("# `Mcp-Method` (plus `Mcp-Name` for tools/call) are required.");
+            println!("#");
+            println!("# Bind to 127.0.0.1 unless you mean to expose the store on a");
+            println!("# network; there is no authentication (NFR-11).");
+        }
+        "generic-stdio" | "generic" => {
+            println!("# Generic MCP client over stdio");
+            println!("# Spawn this process and speak JSON-RPC on its stdin/stdout.");
+            println!("{}", argv.join(" "));
+            println!();
+            println!("# stdout carries protocol frames only; diagnostics go to stderr.");
+        }
+        other => {
+            anyhow::bail!(
+                "unknown harness {other:?}. Try: hermes, claude, claude-code, generic-http, \
+                 generic-stdio"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Quote a string for YAML when it contains characters YAML would reinterpret.
+///
+/// Windows paths are full of colons and backslashes, so this matters more than it
+/// looks: an unquoted `C:\path` is a parse error in YAML.
+fn yaml_scalar(s: &str) -> String {
+    let needs_quotes = s.is_empty()
+        || s.chars().any(|c| c.is_whitespace())
+        || s.contains([':', '\\', '#', '"', '\'', '*', '&', '!', '|', '>', '%', '@', '`', ',', '[', ']', '{', '}']);
+    if needs_quotes {
+        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// The `mcpServers` JSON object every Claude-shaped client accepts.
+fn json_mcp_servers(exe: &str, args: &[String]) -> String {
+    let args_json = args
+        .iter()
+        .map(|a| {
+            format!(
+                "        {}",
+                serde_json::to_string(a).unwrap_or_else(|_| "\"\"".into())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
+    format!(
+        "{{\n  \"mcpServers\": {{\n    \"sakur4\": {{\n      \"command\": {},\n      \"args\": [\n{}\n      ]\n    }}\n  }}\n}}",
+        serde_json::to_string(exe).unwrap_or_else(|_| "\"\"".into()),
+        args_json
+    )
+}
+
+async fn doctor(cli: &Cli, refresh: bool) -> Result<()> {    let engine = open_engine(cli).await?;
     if refresh {
         engine.refresh_backend().await?;
     }

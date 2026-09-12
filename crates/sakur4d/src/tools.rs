@@ -45,6 +45,7 @@ use sakur4_core::evict::Pressure;
 use sakur4_core::memory::anchor::{AnchorKind, PinRequest};
 use sakur4_core::memory::episodic::{NewEpisode, Role};
 use sakur4_core::prompt::PromptParts;
+use sakur4_core::provider_cache::ProviderUsage;
 use sakur4_core::receipt::Receipt;
 use sakur4_core::recall::RecallFilters;
 use sakur4_core::{Engine, MCP_PROTOCOL_VERSION};
@@ -206,6 +207,46 @@ pub struct RecallFoldInput {
     pub fold_id: String,
 }
 
+/// `memory.recall_fold` output.
+///
+/// # Why this is a struct and not `serde_json::Value`
+///
+/// It was a bare `Value`, and that broke every Pydantic-based MCP client. A
+/// `Json<Value>` output schema is `{"$schema": ...}` with no `type` — schemars
+/// cannot describe an unconstrained value — and Hermes' client validates the
+/// whole `tools/list` result against a model that requires
+/// `outputSchema.type`. The failure was not confined to this tool: one
+/// unconstrained schema made the *entire catalog* fail validation, so Hermes would
+/// not connect at all.
+///
+/// The lesson is worth keeping: an output schema is part of the contract with
+/// every client, and "I will just return JSON" is not a neutral choice.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct FoldTraceOutput {
+    pub fold_id: String,
+    pub description: String,
+    pub goal: String,
+    /// `open` or `closed`.
+    pub status: String,
+    pub result_summary: Option<String>,
+    pub tokens_at_open: usize,
+    pub tokens_reclaimed: usize,
+    pub created_at: String,
+    pub closed_at: Option<String>,
+    /// Every episode inside the fold, verbatim, in order.
+    pub episodes: Vec<FoldTraceEpisode>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct FoldTraceEpisode {
+    pub episode_id: String,
+    pub seq: i64,
+    pub role: String,
+    pub tool_name: Option<String>,
+    pub token_count: usize,
+    pub content: String,
+}
+
 /// `code.get_repo_map` input.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RepoMapInput {
@@ -327,6 +368,8 @@ pub struct ReceiptOutput {
     pub tokens_reused: Option<usize>,
     pub tokens_prefilled: Option<usize>,
     pub eviction: Option<EvictionView>,
+    /// Provider-reported prompt-cache accounting, when the harness has supplied it.
+    pub provider_cache: Option<String>,
     pub rendered: String,
     pub stats: String,
 }
@@ -390,6 +433,54 @@ pub struct EvictionUpdateView {
     pub tokens_before: usize,
     pub tokens_after: usize,
     pub reason: String,
+}
+
+/// `context.record_usage` input.
+///
+/// Field names differ by provider, so the harness normalises whatever it receives
+/// into these: OpenAI's `prompt_tokens_details.cached_tokens`, Anthropic's
+/// `cache_read_input_tokens`, DeepSeek's `prompt_cache_hit_tokens`, and Gemini's
+/// `cachedContentTokenCount` all mean the same thing.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RecordUsageInput {
+    pub prompt_tokens: usize,
+    #[serde(default)]
+    pub completion_tokens: usize,
+    #[serde(default)]
+    pub total_tokens: Option<usize>,
+    /// Prompt tokens served from the provider's prompt cache.
+    #[serde(default)]
+    pub cache_read_tokens: Option<usize>,
+    /// Prompt tokens written into the cache this turn.
+    #[serde(default)]
+    pub cache_write_tokens: Option<usize>,
+    #[serde(default)]
+    pub reasoning_tokens: Option<usize>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub slot_id: Option<String>,
+}
+
+/// `context.record_usage` output.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct RecordUsageOutput {
+    pub turn: i64,
+    /// `not-reported`, `cache-miss`, `partial-reuse`, `full-reuse`, or
+    /// `PREFIX-BROKEN`.
+    pub verdict: String,
+    pub headline: String,
+    pub detail: String,
+    /// True when this turn was billed for history that had already been paid for
+    /// — the signature of a compaction that rewrote already-sent history.
+    pub regression: bool,
+    pub cached_tokens: Option<usize>,
+    pub uncached_tokens: Option<usize>,
+    pub session_stats: String,
 }
 
 /// `memory.staleness` input.
@@ -749,16 +840,36 @@ impl Sakur4Server {
     async fn recall_fold(
         &self,
         Parameters(input): Parameters<RecallFoldInput>,
-    ) -> Result<Json<serde_json::Value>, ErrorData> {
+    ) -> Result<Json<FoldTraceOutput>, ErrorData> {
         let trace = self
             .engine
             .eviction()
             .recall_fold(&input.fold_id)
             .await
             .map_err(to_error)?;
-        serde_json::to_value(trace)
-            .map(Json)
-            .map_err(to_error)
+        Ok(Json(FoldTraceOutput {
+            fold_id: trace.fold_id,
+            description: trace.description,
+            goal: trace.goal,
+            status: trace.status,
+            result_summary: trace.result_summary,
+            tokens_at_open: trace.tokens_at_open,
+            tokens_reclaimed: trace.tokens_reclaimed,
+            created_at: trace.created_at,
+            closed_at: trace.closed_at,
+            episodes: trace
+                .episodes
+                .into_iter()
+                .map(|e| FoldTraceEpisode {
+                    episode_id: e.episode_id,
+                    seq: e.seq,
+                    role: e.role,
+                    tool_name: e.tool_name,
+                    token_count: e.token_count,
+                    content: e.content,
+                })
+                .collect(),
+        }))
     }
 
     /// A token-budgeted, centrality-ranked outline of the repository.
@@ -988,6 +1099,17 @@ impl Sakur4Server {
             .await
             .map_err(to_error)?;
 
+        // Provider-cache accounting, when the harness has been reporting usage
+        // through `context.record_usage`. Absent means absent — not zero.
+        let provider_cache = self
+            .engine
+            .db()
+            .provider_cache_stats(Some(&session))
+            .await
+            .ok()
+            .filter(|s| s.turns > 0)
+            .map(|s| s.render());
+
         Ok(Json(ReceiptOutput {
             breakdown: BreakdownView {
                 system_prompt: receipt.breakdown.system_prompt,
@@ -1012,6 +1134,7 @@ impl Sakur4Server {
                 snapshot_taken: e.snapshot_taken,
                 boundary: e.boundary.clone(),
             }),
+            provider_cache,
             rendered: receipt.render(),
             stats: stats.render(),
         }))
@@ -1082,6 +1205,60 @@ impl Sakur4Server {
                 .collect(),
             notes: plan.notes.clone(),
             summary: plan.summary(),
+        }))
+    }
+
+    /// Report what the provider said this turn cost, so Sakur4 can account for
+    /// prompt-cache behaviour.
+    #[rmcp::tool(
+        name = "context.record_usage",
+        description = "Report the token usage your provider returned for the last request. \
+                       Include the prompt-cache fields if the provider supplies them \
+                       (OpenAI cached_tokens, Anthropic cache_read_input_tokens, DeepSeek \
+                       prompt_cache_hit_tokens, Gemini cachedContentTokenCount). Sakur4 returns \
+                       a verdict: whether the cached prefix was reused, or whether it SHRANK \
+                       while the prompt grew — which means a rewrite invalidated already-sent \
+                       history and this turn was billed for tokens that had already been paid \
+                       for."
+    )]
+    async fn record_usage(
+        &self,
+        Parameters(input): Parameters<RecordUsageInput>,
+    ) -> Result<Json<RecordUsageOutput>, ErrorData> {
+        let session = session_or_default(input.session_id);
+        let slot = input.slot_id.clone();
+        let usage = ProviderUsage {
+            prompt_tokens: input.prompt_tokens,
+            completion_tokens: input.completion_tokens,
+            total_tokens: input.total_tokens,
+            cache_read_tokens: input.cache_read_tokens,
+            cache_write_tokens: input.cache_write_tokens,
+            reasoning_tokens: input.reasoning_tokens,
+            provider: input.provider,
+            model: input.model,
+        };
+        let record = self
+            .engine
+            .db()
+            .record_provider_usage(&session, slot.as_deref(), usage)
+            .await
+            .map_err(to_error)?;
+        let stats = self
+            .engine
+            .db()
+            .provider_cache_stats(Some(&session))
+            .await
+            .map_err(to_error)?;
+
+        Ok(Json(RecordUsageOutput {
+            turn: record.turn,
+            verdict: record.verdict.as_str().to_string(),
+            headline: record.verdict.headline().to_string(),
+            detail: record.detail,
+            regression: record.verdict.is_regression(),
+            cached_tokens: record.usage.cache_read_tokens,
+            uncached_tokens: record.usage.uncached_prompt_tokens(),
+            session_stats: stats.render(),
         }))
     }
 
