@@ -344,11 +344,10 @@ impl ToolOutputParser {
         // if it happens to look like a header block.
         if let Some(name) = tool_name {
             let n = name.to_ascii_lowercase();
-            if n.contains("diff") || n.contains("patch") {
-                if let Some(f) = Self::parse_diff(content) {
+            if (n.contains("diff") || n.contains("patch"))
+                && let Some(f) = Self::parse_diff(content) {
                     return f;
                 }
-            }
         }
         if let Some(f) = Self::parse_json(content) {
             return f;

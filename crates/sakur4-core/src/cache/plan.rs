@@ -95,6 +95,14 @@ pub struct BoundaryPlan {
     pub partial_state_only: bool,
     /// Tolerance in force when the decision was made.
     pub tolerance_tokens: i64,
+    /// Whether preserving a prefix would actually let the server reuse anything.
+    ///
+    /// False only when there is no boundary the server could rewind to at all — an
+    /// unreachable backend, no checkpoints, or only partial-state checkpoints. A
+    /// preserved prefix is still preserved and still a prefix of the next prompt in
+    /// that case, but the server cannot match it, so reporting reuse would be
+    /// false. The distinction is what keeps G1's headline metric honest.
+    pub pairs_with_cache: bool,
 }
 
 impl BoundaryPlan {
@@ -106,17 +114,15 @@ impl BoundaryPlan {
         candidates_considered: usize,
         partial_state_only: bool,
     ) -> Self {
-        let action = if snap.delta() == 0 {
-            CoherenceAction::EvictAtAlignedBoundary
-        } else {
-            CoherenceAction::EvictAtAlignedBoundary
-        };
         Self {
             requested_cut,
             aligned_cut: Some(aligned_cut),
             nearest_cut: Some(aligned_cut),
             status: CacheStatus::PartialReuse,
-            action,
+            // An aligned boundary is always applied at the aligned position; the
+            // delta is recorded in the reason rather than changing the action, so
+            // callers have one thing to branch on when they commit the plan.
+            action: CoherenceAction::EvictAtAlignedBoundary,
             reason: format!(
                 "{} — the surviving prefix stays LCP-matchable, so the next turn prefills \
                  only the suffix",
@@ -126,6 +132,8 @@ impl BoundaryPlan {
             candidates_considered,
             partial_state_only,
             tolerance_tokens: 0,
+            // A checkpoint was found and snapped to, so the server can rewind here.
+            pairs_with_cache: true,
         }
     }
 
@@ -168,6 +176,8 @@ impl BoundaryPlan {
             candidates_considered: 0,
             partial_state_only: false,
             tolerance_tokens: tolerance,
+            // No boundary could be aligned, so a preserved prefix buys nothing.
+            pairs_with_cache: false,
         }
     }
 
@@ -200,6 +210,10 @@ impl BoundaryPlan {
             candidates_considered,
             partial_state_only,
             tolerance_tokens: 0,
+            // The ring is ahead of the cut, so the tokens below it are gone. The
+            // *caller* may still choose to align forward onto `next_checkpoint`;
+            // that decision is recorded by the resulting plan, not this one.
+            pairs_with_cache: false,
         }
     }
 
@@ -225,6 +239,9 @@ impl BoundaryPlan {
             candidates_considered: 0,
             partial_state_only: false,
             tolerance_tokens: 0,
+            // Nothing to align to. A prefix may still be preserved, but the server
+            // cannot match it, so no reuse can be claimed.
+            pairs_with_cache: false,
         }
     }
 
@@ -293,7 +310,7 @@ mod tests {
         assert!(p.is_reuse());
         assert_eq!(p.delta(), 392);
         assert!(p.summary().contains("4608"));
-        assert!(p.wants_snapshot() == false);
+        assert!(!p.wants_snapshot());
     }
 
     #[test]

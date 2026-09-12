@@ -103,11 +103,11 @@ impl Db {
                                created_at=excluded.created_at",
                 rusqlite::params![source_table, source_id, dim, model, n, blob, now],
             )?;
-            Ok(tx.query_row(
+            tx.query_row(
                 "SELECT embedding_id FROM vectors WHERE source_table=?1 AND source_id=?2 AND model=?3",
                 rusqlite::params![source_table, source_id, model],
                 |r| r.get(0),
-            )?)
+            )
         })
         .await
     }
@@ -198,14 +198,14 @@ impl Db {
     /// Remove vectors whose source row no longer exists.
     pub async fn prune_orphan_vectors(&self) -> Result<usize> {
         self.write(|tx| {
-            Ok(tx.execute(
+            tx.execute(
                 "DELETE FROM vectors
                  WHERE (source_table = 'semantic_atlas'
                         AND source_id NOT IN (SELECT atlas_id FROM semantic_atlas))
                     OR (source_table = 'symbolic_fact'
                         AND source_id NOT IN (SELECT fact_id FROM symbolic_fact))",
                 [],
-            )?)
+            )
         })
         .await
     }
@@ -219,7 +219,7 @@ mod tests {
     fn roundtrip_encoding() {
         let v = vec![0.25f32, -1.5, 3.0, 0.0];
         assert_eq!(decode(&encode(&v)), v);
-        assert!((norm(&vec![3.0, 4.0]) - 5.0).abs() < 1e-6);
+        assert!((norm(&[3.0, 4.0]) - 5.0).abs() < 1e-6);
     }
 
     #[tokio::test]

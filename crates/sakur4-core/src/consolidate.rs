@@ -275,11 +275,10 @@ impl Consolidator {
                 match self.fabric.refresh_semantic(&entry.atlas_id, fresh).await {
                     Ok(updated) => {
                         report.regenerated += 1;
-                        if self.config.reembed {
-                            if let Err(e) = self.embed_atlas(&updated.atlas_id).await {
+                        if self.config.reembed
+                            && let Err(e) = self.embed_atlas(&updated.atlas_id).await {
                                 report.notes.push(format!("re-embed failed: {e}"));
                             }
-                        }
                     }
                     Err(e) => report
                         .notes
@@ -300,11 +299,10 @@ impl Consolidator {
         }
 
         // --- 4. archive long-cold, undepended episodes --------------------
-        if let Some(days) = self.config.archive_after_days {
-            if !report.interrupted {
+        if let Some(days) = self.config.archive_after_days
+            && !report.interrupted {
                 report.archived = self.archive_cold(days).await?;
             }
-        }
 
         // --- 5. housekeeping ----------------------------------------------
         report.pruned_vectors = self.fabric.db().prune_orphan_vectors().await?;
@@ -1081,9 +1079,8 @@ mod tests {
 
         let ep = fabric.episode(&out.episode_id).await.unwrap();
         assert_eq!(ep.eviction_tier, crate::memory::episodic::EpisodeTier::Archived);
-        assert_eq!(
+        assert!(
             ep.content.contains("migration_check"),
-            true,
             "archiving must not touch the stored content"
         );
 

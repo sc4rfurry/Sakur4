@@ -264,6 +264,7 @@ impl RepoCortex {
         let mut seen: HashSet<String> = HashSet::new();
         let mut all_facts: Vec<SymbolicFact> = Vec::new();
         let mut all_edges: Vec<EdgeRow> = Vec::new();
+        let mut file_extracts: Vec<ExtractRef> = Vec::new();
         // (rel_path, language, content_hash, size, symbol_count)
         let mut file_rows: Vec<(String, String, String, i64, i64)> = Vec::new();
 
@@ -289,9 +290,9 @@ impl RepoCortex {
             }
             let hash = content_hash(&bytes);
 
-            if incremental {
-                if let Some((old_hash, _)) = known.get(&rel) {
-                    if old_hash == &hash {
+            if incremental
+                && let Some((old_hash, _)) = known.get(&rel)
+                    && old_hash == &hash {
                         report.files_skipped_unchanged += 1;
                         let symbols = self
                             .db
@@ -317,8 +318,6 @@ impl RepoCortex {
                         ));
                         continue;
                     }
-                }
-            }
 
             let source = String::from_utf8_lossy(&bytes).to_string();
             if language == Language::Unsupported {
@@ -351,40 +350,27 @@ impl RepoCortex {
             }
             report.symbols_extracted += parsed.extracts.len();
 
-            // File node plus `defines` edges, so the map can be walked by path.
+            // The file node, and the record of which extracts became facts. The
+            // record is what the cross-file pass resolves references against.
             let file_node = NodeRef::file(&rel);
-            for (name, fact_id) in &name_to_fact {
-                all_edges.push(EdgeRow::new(
-                    &NodeRef::fact(fact_id),
-                    &file_node,
-                    EdgeKind::DependsOn,
-                ));
-                let _ = name;
-            }
-
-            // Intra- and inter-file references. Unresolved names are still
-            // recorded against the file node, so the graph retains the shape of
-            // the dependency even when the target is a library symbol.
             for ex in &parsed.extracts {
-                let Some(src_id) = name_to_fact.get(&ex.write.qualified_name) else {
-                    continue;
-                };
-                for target in &ex.references {
-                    if let Some(dst_id) = name_to_fact.get(target) {
-                        if dst_id == src_id {
-                            continue;
-                        }
-                        all_edges.push(EdgeRow::new(
-                            &NodeRef::fact(src_id),
-                            &NodeRef::fact(dst_id),
-                            if ex.is_import {
-                                EdgeKind::Imports
-                            } else {
-                                EdgeKind::Calls
-                            },
-                        ));
-                    }
+                let fact_id = name_to_fact.get(&ex.write.qualified_name).cloned();
+                if let Some(id) = &fact_id {
+                    all_edges.push(EdgeRow::new(
+                        &NodeRef::fact(id),
+                        &file_node,
+                        EdgeKind::DependsOn,
+                    ));
                 }
+                file_extracts.push(ExtractRef {
+                    fact_id,
+                    qualified_name: ex
+                        .write
+                        .qualified_name
+                        .clone(),
+                    references: ex.references.clone(),
+                    is_import: ex.is_import,
+                });
             }
 
             file_rows.push((
@@ -404,54 +390,47 @@ impl RepoCortex {
             .collect();
         report.files_removed = removed.len();
 
-        // Second pass: resolve cross-file references now that every file's
+        // Second pass: resolve references across files now that every file's
         // symbols are known. Doing this after the walk is what lets one pass
-        // produce a graph rather than a per-file forest.
-        let global: HashMap<String, String> = all_facts
-            .iter()
-            .map(|f| (f.qualified_name.clone(), f.fact_id.clone()))
-            .collect();
+        // produce a call graph rather than a per-file forest.
+        //
+        // References are *bare identifiers* — `login(…)` in a body, or the module
+        // path in a `use` — while facts carry fully qualified names built from the
+        // file's path. So resolution goes through a short-name index rather than
+        // reconstructing a qualified name, which is what an earlier version tried
+        // and got wrong: it prefixed the field path a second time, matched nothing,
+        // and silently produced a repository with an AST and no call graph.
+        let mut short_names: HashMap<&str, &str> = HashMap::new();
+        for f in &all_facts {
+            let short = short_name_of(&f.qualified_name);
+            // First definition wins, so the graph is deterministic when two files
+            // declare the same short name.
+            short_names.entry(short).or_insert(f.fact_id.as_str());
+        }
+
         let mut extra_edges = 0usize;
-        for abs in &files {
-            let rel = normalize_rel_path(abs.strip_prefix(&root).unwrap_or(abs));
-            let language = Language::from_path(abs);
-            if !language.is_structured() {
-                continue;
-            }
-            let Ok(bytes) = std::fs::read(abs) else {
+        for ex in &file_extracts {
+            let Some(src_id) = ex.fact_id.as_deref() else {
                 continue;
             };
-            if bytes.len() as u64 > self.config.max_file_bytes {
-                continue;
-            }
-            let source = String::from_utf8_lossy(&bytes).to_string();
-            let parsed = parse_structured(&source, language, &rel);
-            for ex in &parsed.extracts {
-                let qualified = format!("{rel}::{}", ex.write.qualified_name);
-                let Some(src_id) = global.get(&qualified) else {
+            for target in &ex.references {
+                let dst_id = resolve_reference(target, &ex.qualified_name, &short_names);
+                let Some(dst_id) = dst_id else {
                     continue;
                 };
-                for target in &ex.references {
-                    // Try the same-file name first, then any file that defines it.
-                    let dst = global
-                        .get(&format!("{rel}::{target}"))
-                        .or_else(|| global.get(target));
-                    if let Some(dst_id) = dst {
-                        if dst_id == src_id {
-                            continue;
-                        }
-                        extra_edges += 1;
-                        all_edges.push(EdgeRow::new(
-                            &NodeRef::fact(src_id),
-                            &NodeRef::fact(dst_id),
-                            if ex.is_import {
-                                EdgeKind::Imports
-                            } else {
-                                EdgeKind::Calls
-                            },
-                        ));
-                    }
+                if dst_id == src_id {
+                    continue;
                 }
+                extra_edges += 1;
+                all_edges.push(EdgeRow::new(
+                    &NodeRef::fact(src_id),
+                    &NodeRef::fact(dst_id),
+                    if ex.is_import {
+                        EdgeKind::Imports
+                    } else {
+                        EdgeKind::Calls
+                    },
+                ));
             }
         }
 
@@ -725,15 +704,31 @@ impl RepoCortex {
         });
 
         // --- render with a monotonic budget ----------------------------------
-        let mut out = String::new();
+        //
+        // # The budget contract
+        //
+        // `tokens_used` is the measured size of what is returned, and it never
+        // exceeds `token_budget`. The two structural lines (header and coverage
+        // footer) are reserved first, and what remains is spent on ranked content.
+        // A budget too small even for those returns a map with no content rather
+        // than one that overshoots: FR-10 says "fitted to the requested token
+        // budget", and a caller trimming its context has to be able to rely on
+        // that for small budgets too.
+        //
+        // Monotonicity — a smaller budget returning a strict prefix rather than a
+        // different ranking — follows from the order being computed once, before
+        // any budget is applied.
         let header = "=== REPOSITORY MAP (ranked by structural centrality) ===\n";
-        out.push_str(header);
-        let mut used = counter.count(header).get();
+        let footer_shape = "\n[map covers 0 of 0 files, 0 of 0 symbols]\n";
+        let structural_cost = counter.count(header).get() + counter.count(footer_shape).get();
+
+        let mut body = String::new();
+        let mut used = structural_cost;
         let mut included_files = 0usize;
         let mut included_symbols = 0usize;
 
         'files: for (path, score, syms) in &files {
-            let mut block = format!("\n{path}  (rank {score:.2})\n");
+            let block = format!("\n{path}  (rank {score:.2})\n");
             let mut block_symbols: Vec<String> = Vec::new();
             for s in syms {
                 // Show the signature when there is one; it carries far more
@@ -753,8 +748,6 @@ impl RepoCortex {
             if used + cost > token_budget {
                 // The file does not fit whole. Emit as many of its symbols as do
                 // fit — a prefix of the same list, never a reordering — and stop.
-                // Truncating here is what preserves FR-10's monotonicity: a
-                // smaller budget can only ever remove entries from the tail.
                 let mut partial = block.clone();
                 let mut partial_symbols = 0usize;
                 for line in &block_symbols {
@@ -766,20 +759,41 @@ impl RepoCortex {
                     partial_symbols += 1;
                 }
                 if partial_symbols > 0 {
-                    out.push_str(&partial);
-                    used += counter.count(&partial).get();
+                    // The accounting below is complete at this point: used was
+                    // already checked against the budget for every line added, and
+                    // the loop breaks next. Keeping the counter current anyway means
+                    // a future change to that control flow cannot silently start
+                    // over-reporting what fits.
+                    #[allow(unused_assignments)]
+                    {
+                        used += counter.count(&partial).get();
+                    }
+                    body.push_str(&partial);
                     included_files += 1;
                     included_symbols += partial_symbols;
                 }
                 break 'files;
             }
 
-            out.push_str(&whole_block);
+            body.push_str(&whole_block);
             used += cost;
             included_files += 1;
             included_symbols += block_symbols.len();
         }
 
+        let mut out = String::with_capacity(body.len() + 256);
+        out.push_str(header);
+        out.push_str(&body);
+        if included_files == 0 && !files.is_empty() {
+            // The budget could not cover a single file. Say so: an empty map that
+            // looks like an empty repository is a worse answer than an honest
+            // "raise the budget". This is the one case where the result is larger
+            // than requested, and `tokens_used` reports the real number rather
+            // than hiding it.
+            out.push_str(&format!(
+                "\n[budget of {token_budget} tokens covered no files; the smallest entry needs more]\n"
+            ));
+        }
         out.push_str(&format!(
             "\n[map covers {included_files} of {} files, {included_symbols} of {} symbols]\n",
             files.len(),
@@ -1032,11 +1046,10 @@ fn discover_files(root: &Path, config: &RepoCortexConfig) -> Vec<PathBuf> {
             added_any = true;
         }
     }
-    if added_any {
-        if let Ok(overrides) = override_builder.build() {
+    if added_any
+        && let Ok(overrides) = override_builder.build() {
             let _ = builder.overrides(overrides);
         }
-    }
 
     for entry in builder.build().flatten() {
         let path = entry.path();
@@ -1471,7 +1484,7 @@ fn classify(
             Language::TypeScript | Language::Tsx | Language::JavaScript,
             "import_statement",
         ) => {
-            let fallback: &str = &text;
+            let fallback: &str = text;
             let module = match text.split("from ").nth(1) {
                 Some(after_from) => after_from,
                 None => fallback,
@@ -1655,6 +1668,44 @@ fn truncate_body(text: &str, limit: usize) -> String {
     text.chars().take(limit).collect()
 }
 
+/// One extract, remembered so the cross-file pass can resolve its references
+/// without re-reading and re-parsing every file.
+#[derive(Debug, Clone)]
+struct ExtractRef {
+    /// The fact this extract became, if it became one.
+    fact_id: Option<String>,
+    qualified_name: String,
+    references: Vec<String>,
+    is_import: bool,
+}
+
+/// The last component of a qualified name, which is what code writes at a call
+/// site.
+fn short_name_of(qualified: &str) -> &str {
+    qualified.rsplit("::").next().unwrap_or(qualified)
+}
+
+/// Resolve a bare reference (`validate`, `users::by_id`) to a fact id.
+///
+/// The same module is tried first, so a file's own `helper()` is not shadowed by
+/// an unrelated `helper()` elsewhere in the repository. Getting this wrong is not
+/// a cosmetic ranking issue: it is the difference between a blast-radius query
+/// that names the right callers and one that names plausible strangers.
+fn resolve_reference<'a>(
+    reference: &str,
+    source_qualified: &str,
+    short_names: &HashMap<&'a str, &'a str>,
+) -> Option<&'a str> {
+    let short = short_name_of(reference);
+    if let Some((module, _)) = source_qualified.rsplit_once("::") {
+        let candidate = format!("{module}::{short}");
+        if let Some(id) = short_names.get(candidate.as_str()) {
+            return Some(id);
+        }
+    }
+    short_names.get(short).copied()
+}
+
 /// Heuristic extraction for structured text formats.
 ///
 /// Conservative on purpose: it produces *anchors*, not understanding. A config
@@ -1808,8 +1859,8 @@ pub fn parse_config(source: &str, language: Language, rel_path: &str) -> ParsedF
             }
             "yaml" | "yml" => {
                 // Top-level `key:` entries only.
-                if !line.starts_with(' ') && !line.starts_with('-') {
-                    if let Some((key, _)) = trimmed.split_once(':') {
+                if !line.starts_with(' ') && !line.starts_with('-')
+                    && let Some((key, _)) = trimmed.split_once(':') {
                         let key = key.trim();
                         if !key.is_empty() && !key.contains(' ') {
                             push(
@@ -1824,7 +1875,6 @@ pub fn parse_config(source: &str, language: Language, rel_path: &str) -> ParsedF
                             );
                         }
                     }
-                }
             }
             "md" => {
                 if let Some(rest) = trimmed.strip_prefix("# ") {

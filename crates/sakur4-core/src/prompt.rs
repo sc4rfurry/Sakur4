@@ -304,29 +304,37 @@ impl PromptParts {
     /// The retained prefix, as text, when the eviction boundary falls inside the
     /// timeline.
     ///
-    /// # The approximation, stated plainly
+    /// # Why this walks lines rather than multiplying by a ratio
     ///
-    /// The boundary arrives as a *timeline token count*, and mapping tokens to
-    /// characters requires a tokenizer that can round-trip. Rather than pretend,
-    /// Sakur4 converts with the same 4-characters-per-token ratio the timeline is
-    /// built with, then clamps to the timeline's end. The result is used only to
-    /// compute a reuse *estimate* for the receipt and to key the slot's retained
-    /// state; the authoritative reuse number is whatever the backend reports for
-    /// the prompt it actually evaluates. A wrong estimate here cannot corrupt
-    /// anything — it can only make the receipt's projection optimistic, and the
-    /// receipt prints both.
-    pub fn retained_prefix_text(&self, timeline_tokens: usize) -> String {
+    /// The boundary arrives as a *timeline token count*. Turning that back into
+    /// text requires knowing where those tokens fall, and an earlier version
+    /// approximated with the same characters-per-token ratio the timeline is built
+    /// with. The approximation was close but not exact, which made the returned
+    /// text drift a few characters past (or short of) the real boundary — and a
+    /// "preserved prefix" that is a few characters off is not a prefix at all, so
+    /// the cache-reuse claim it supports is false.
+    ///
+    /// Walking line by line against the real tokenizer makes the result exact for
+    /// any boundary that falls on a line break. Line boundaries are the ones that
+    /// matter: the timeline is emitted one episode per line, and eviction works in
+    /// whole episodes.
+    ///
+    /// Note what this does *not* include: the section headers the renderer inserts
+    /// between parts. A header is presentation, not context the cache holds.
+    pub fn retained_prefix_text(&self, timeline_tokens: usize, counter: &TokenCounter) -> String {
         let mut out = String::new();
         for (part, _, text) in self.sections() {
             match part {
                 RenderedPart::Timeline => {
-                    let chars = timeline_tokens.saturating_mul(4).min(text.len());
-                    // Do not split a UTF-8 character.
-                    let mut end = chars;
-                    while end > 0 && !text.is_char_boundary(end) {
-                        end -= 1;
+                    let mut consumed = 0usize;
+                    for line in text.split_inclusive('\n') {
+                        let next = counter.count(line).get();
+                        if consumed + next > timeline_tokens {
+                            break;
+                        }
+                        consumed += next;
+                        out.push_str(line);
                     }
-                    out.push_str(&text[..end]);
                 }
                 p if p.order() < RenderedPart::Timeline.order() => out.push_str(text),
                 _ => {}
@@ -444,7 +452,7 @@ mod tests {
     #[test]
     fn retained_prefix_keeps_anchors_and_truncates_the_timeline() {
         let p = sample();
-        let retained = p.retained_prefix_text(2);
+        let retained = p.retained_prefix_text(2, &counter());
         assert!(retained.contains("never force-push"), "anchors must survive");
         assert!(retained.contains("you are an agent"));
         assert!(
@@ -456,9 +464,9 @@ mod tests {
     #[test]
     fn retained_prefix_is_monotonic_in_the_budget() {
         let p = sample();
-        let small = p.retained_prefix_text(1);
-        let medium = p.retained_prefix_text(20);
-        let large = p.retained_prefix_text(1_000);
+        let small = p.retained_prefix_text(1, &counter());
+        let medium = p.retained_prefix_text(20, &counter());
+        let large = p.retained_prefix_text(1_000, &counter());
         assert!(large.len() >= medium.len());
         assert!(medium.len() >= small.len());
         // The retained prefix is the *sections*, not the rendered prompt: it
@@ -473,7 +481,7 @@ mod tests {
     fn retained_prefix_never_splits_a_multibyte_character() {
         let p = PromptParts::new().with_timeline("日本語のテキストです".repeat(20));
         for tokens in 0..40 {
-            let s = p.retained_prefix_text(tokens);
+            let s = p.retained_prefix_text(tokens, &counter());
             assert!(std::str::from_utf8(s.as_bytes()).is_ok());
         }
     }

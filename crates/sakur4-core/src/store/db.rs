@@ -56,11 +56,10 @@ impl Db {
     /// transparently falls back to its built-in exact scan.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)?;
             }
-        }
 
         let p = path.clone();
         let (vector_backend, fts5, schema_version) = tokio::task::spawn_blocking(move || {
@@ -340,13 +339,12 @@ fn is_busy(e: &rusqlite::Error) -> bool {
 /// exists and an exact scan where it does not.
 pub(crate) fn try_load_sqlite_vec(conn: &Connection) -> VectorBackend {
     let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(explicit) = std::env::var("SAKUR4_SQLITE_VEC_PATH") {
-        if !explicit.trim().is_empty() {
+    if let Ok(explicit) = std::env::var("SAKUR4_SQLITE_VEC_PATH")
+        && !explicit.trim().is_empty() {
             candidates.push(PathBuf::from(explicit));
         }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent() {
             for name in [
                 "vec0.dll",
                 "libvec0.so",
@@ -357,7 +355,6 @@ pub(crate) fn try_load_sqlite_vec(conn: &Connection) -> VectorBackend {
                 candidates.push(dir.join(name));
             }
         }
-    }
 
     for candidate in candidates {
         if !candidate.exists() {

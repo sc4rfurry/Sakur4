@@ -44,7 +44,6 @@ use sakur4_core::consolidate::{Consolidator, ConsolidatorConfig};
 use sakur4_core::evict::Pressure;
 use sakur4_core::memory::anchor::{AnchorKind, PinRequest};
 use sakur4_core::memory::episodic::{NewEpisode, Role};
-use sakur4_core::memory::semantic::{AnchorType, SemanticWrite};
 use sakur4_core::prompt::PromptParts;
 use sakur4_core::receipt::Receipt;
 use sakur4_core::recall::RecallFilters;

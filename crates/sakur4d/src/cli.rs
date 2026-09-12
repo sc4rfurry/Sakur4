@@ -12,16 +12,11 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use sakur4_core::cache::CoherenceConfig;
-use sakur4_core::embed;
 use sakur4_core::evict::EvictionPolicy;
-use sakur4_core::llama::BackendSpec;
 use sakur4_core::memory::anchor::{AnchorKind, PinRequest};
 use sakur4_core::memory::episodic::NewEpisode;
-use sakur4_core::memory::symbolic::{FactKind, SymbolicWrite};
 use sakur4_core::prompt::PromptParts;
 use sakur4_core::recall::RecallFilters;
-use sakur4_core::repo::RepoCortexConfig;
-use sakur4_core::tokens::TokenCounter;
 use sakur4_core::{Engine, EngineConfig};
 
 /// A cache-coherent memory and context operating system for local agents.

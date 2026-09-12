@@ -490,11 +490,10 @@ impl RecallEngine {
                     Ok(e) => e,
                     Err(_) => return Ok(None),
                 };
-                if let Some(session) = &filters.session_id {
-                    if &ep.session_id != session {
+                if let Some(session) = &filters.session_id
+                    && &ep.session_id != session {
                         return Ok(None);
                     }
-                }
                 if ep.fold_id.is_some() && !filters.include_folded.unwrap_or(false) {
                     return Ok(None);
                 }
@@ -539,11 +538,10 @@ impl RecallEngine {
                 let Some(fact) = self.fabric.fact_by_id(id).await? else {
                     return Ok(None);
                 };
-                if let Some(path) = &filters.file_path {
-                    if fact.file_path.as_deref() != Some(path.as_str()) {
+                if let Some(path) = &filters.file_path
+                    && fact.file_path.as_deref() != Some(path.as_str()) {
                         return Ok(None);
                     }
-                }
                 let rendered = match &fact.signature {
                     Some(sig) => format!("{} — {}", fact.qualified_name, sig),
                     None => fact.qualified_name.clone(),
@@ -572,11 +570,10 @@ impl RecallEngine {
                     Ok(e) => e,
                     Err(_) => return Ok(None),
                 };
-                if let Some(p) = &filters.project_id {
-                    if entry.project_id.as_deref() != Some(p.as_str()) {
+                if let Some(p) = &filters.project_id
+                    && entry.project_id.as_deref() != Some(p.as_str()) {
                         return Ok(None);
                     }
-                }
                 Ok(Some(self.hit_from_semantic(entry).await?))
             }
         }
@@ -866,7 +863,7 @@ mod tests {
 
     #[tokio::test]
     async fn deleted_anchor_is_treated_as_stale() {
-        let (fabric, engine) = rig().await;
+        let (fabric, _engine) = rig().await;
         let fact = SymbolicWrite::new(FactKind::Function, "m::gone")
             .body("fn gone() {}")
             .into_fact(crate::memory::symbolic::FactSource::TreeSitter, None);
@@ -989,7 +986,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(res.hits.iter().all(|h| h.id != ""));
+        assert!(res.hits.iter().all(|h| !h.id.is_empty()));
         assert_eq!(res.hits.len(), 1);
     }
 

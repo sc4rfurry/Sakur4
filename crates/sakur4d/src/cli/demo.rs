@@ -11,12 +11,11 @@
 //! demo cannot drift into showing behaviour the product does not have.
 
 use anyhow::Result;
-use sakur4_core::memory::anchor::{AnchorKind, PinRequest};
+use sakur4_core::memory::anchor::PinRequest;
 use sakur4_core::memory::episodic::NewEpisode;
 use sakur4_core::memory::symbolic::{FactKind, FactSource, SymbolicWrite};
-use sakur4_core::receipt::EvictionSummary;
-use sakur4_core::recall::RecallFilters;
 use sakur4_core::receipt::Receipt;
+use sakur4_core::recall::RecallFilters;
 
 use crate::cli::{self, Cli};
 
@@ -195,7 +194,7 @@ pub async fn run(cli_args: &Cli, repo: Option<std::path::PathBuf>) -> Result<()>
                 false,
             )
             .await?;
-        if turns % 3 == 0 {
+        if turns.is_multiple_of(3) {
             // Interleave bulky tool output: that is what a real session looks
             // like, and it gives the engine something worth evicting.
             engine
@@ -319,15 +318,9 @@ pub async fn run(cli_args: &Cli, repo: Option<std::path::PathBuf>) -> Result<()>
     )
     .with_cache(observation.cache_status.as_str(), observation.detail.clone())
     .with_cache_numbers(observation.reused_tokens, observation.prefilled_tokens)
-    .with_backend(engine.backend().name());
-    let receipt = match engine
-        .receipts()
-        .latest("demo")
-        .await?
-        .and_then(|_| None::<EvictionSummary>)
-    {
-        _ => receipt,
-    };
+    .with_backend(sakur4_core::llama::InferenceBackend::name(
+        engine.backend().as_ref(),
+    ));
     println!("\n{}", indent(&receipt.render(), 2));
     engine.receipts().record(&receipt).await?;
 

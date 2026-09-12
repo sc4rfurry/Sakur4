@@ -37,8 +37,10 @@ use crate::error::{Error, Result};
 /// Where the Cache-Coherence Layer should look for an inference backend.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case", untagged)]
+#[derive(Default)]
 pub enum BackendSpec {
     /// `auto` — probe, then fall back to the embedded backend.
+    #[default]
     Auto,
     /// Use the in-process embedded backend without probing anything.
     Embedded,
@@ -48,11 +50,6 @@ pub enum BackendSpec {
     Url(String),
 }
 
-impl Default for BackendSpec {
-    fn default() -> Self {
-        BackendSpec::Auto
-    }
-}
 
 impl BackendSpec {
     /// Parse the `--backend` / `SAKUR4_BACKEND` form.

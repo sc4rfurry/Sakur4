@@ -373,27 +373,20 @@ impl ReceiptLog {
     /// The most recent receipt for a session.
     pub async fn latest(&self, session_id: &str) -> Result<Option<Receipt>> {
         let session = session_id.to_string();
-        self.db
+        let row: Option<ReceiptRow> = self
+            .db
             .with(move |c| {
-                let raw: Option<(String, String, Option<String>, i64, i64, String, String, String, Option<i64>, Option<String>, String)> = c
-                    .query_row(
-                        "SELECT receipt_id, session_id, slot_id, turn, total_tokens, breakdown_json,
-                                cache_status, cache_detail, prompt_eval_ms, eviction_json, created_at
-                         FROM receipt WHERE session_id = ?1 ORDER BY turn DESC LIMIT 1",
-                        [session],
-                        |r| {
-                            Ok((
-                                r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?,
-                                r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?,
-                            ))
-                        },
-                    )
-                    .ok();
-                Ok(raw)
+                Ok(c.query_row(
+                    "SELECT receipt_id, session_id, slot_id, turn, total_tokens, breakdown_json,
+                            cache_status, cache_detail, prompt_eval_ms, eviction_json, created_at
+                     FROM receipt WHERE session_id = ?1 ORDER BY turn DESC LIMIT 1",
+                    [session],
+                    map_receipt_row,
+                )
+                .ok())
             })
-            .await?
-            .map(row_to_receipt)
-            .transpose()
+            .await?;
+        row.map(row_to_receipt).transpose()
     }
 
     /// Receipt history for a session, oldest first (FR/NFR-14).
@@ -408,21 +401,7 @@ impl ReceiptLog {
                             cache_status, cache_detail, prompt_eval_ms, eviction_json, created_at
                      FROM receipt WHERE session_id = ?1 ORDER BY turn ASC LIMIT ?2",
                 )?;
-                let rows = stmt.query_map(rusqlite::params![session, limit], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, Option<String>>(2)?,
-                        r.get::<_, i64>(3)?,
-                        r.get::<_, i64>(4)?,
-                        r.get::<_, String>(5)?,
-                        r.get::<_, String>(6)?,
-                        r.get::<_, String>(7)?,
-                        r.get::<_, Option<i64>>(8)?,
-                        r.get::<_, Option<String>>(9)?,
-                        r.get::<_, String>(10)?,
-                    ))
-                })?;
+                let rows = stmt.query_map(rusqlite::params![session, limit], map_receipt_row)?;
                 Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
             })
             .await?;
@@ -552,22 +531,44 @@ impl ReceiptStats {
     }
 }
 
+/// The columns every receipt read selects, in order.
+///
+/// Factored into a type alias and a mapper because three queries share the same
+/// eleven columns, and a column-order mismatch between hand-written tuple
+/// destructuring sites is exactly the bug that stays invisible until someone
+/// reads a `created_at` where a `cache_status` was expected.
+type ReceiptRow = (
+    String,
+    String,
+    Option<String>,
+    i64,
+    i64,
+    String,
+    String,
+    String,
+    Option<i64>,
+    Option<String>,
+    String,
+);
+
+fn map_receipt_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReceiptRow> {
+    Ok((
+        r.get(0)?,
+        r.get(1)?,
+        r.get(2)?,
+        r.get(3)?,
+        r.get(4)?,
+        r.get(5)?,
+        r.get(6)?,
+        r.get(7)?,
+        r.get(8)?,
+        r.get(9)?,
+        r.get(10)?,
+    ))
+}
+
 #[allow(clippy::type_complexity)]
-fn row_to_receipt(
-    row: (
-        String,
-        String,
-        Option<String>,
-        i64,
-        i64,
-        String,
-        String,
-        String,
-        Option<i64>,
-        Option<String>,
-        String,
-    ),
-) -> Result<Receipt> {
+fn row_to_receipt(row: ReceiptRow) -> Result<Receipt> {
     let breakdown: Breakdown = serde_json::from_str(&row.5)?;
     let eviction: Option<EvictionSummary> = match row.9 {
         Some(raw) => serde_json::from_str(&raw).ok(),

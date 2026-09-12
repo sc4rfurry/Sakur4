@@ -48,7 +48,6 @@ use crate::llama::{
     snap_to_checkpoint, CapabilitySet, CheckpointKind, CheckpointRef, InferenceBackend, SlotState,
     SnapReason,
 };
-use crate::memory::dependency::NodeRef;
 use crate::store::Db;
 use crate::tokens::TokenCounter;
 
@@ -398,8 +397,8 @@ impl Coherence {
             );
             return Ok(None);
         }
-        if let Some(free) = free_disk_bytes() {
-            if free < self.config.min_free_disk_bytes {
+        if let Some(free) = free_disk_bytes()
+            && free < self.config.min_free_disk_bytes {
                 tracing::warn!(
                     free_bytes = free,
                     required = self.config.min_free_disk_bytes,
@@ -407,7 +406,6 @@ impl Coherence {
                 );
                 return Ok(None);
             }
-        }
 
         let state = self.slot_state(slot_id).await.ok();
         // Prefer what Sakur4 knows survived the last plan over the server's raw
@@ -743,9 +741,9 @@ impl Coherence {
         }
 
         // Prefer a ring rewind: it costs no disk I/O and no re-prefill.
-        if let Ok(state) = self.slot_state(slot_id).await {
-            if let Some(cp) = state.nearest_checkpoint_at_or_before(target_tokens) {
-                if cp.token_position == target_tokens && !self.capabilities().partial_state_only {
+        if let Ok(state) = self.slot_state(slot_id).await
+            && let Some(cp) = state.nearest_checkpoint_at_or_before(target_tokens)
+                && cp.token_position == target_tokens && !self.capabilities().partial_state_only {
                     // The server owns the rewind: issuing a request whose prompt
                     // matches this prefix is what actually rewinds the slot.
                     self.log(
@@ -765,8 +763,6 @@ impl Coherence {
                         ),
                     });
                 }
-            }
-        }
 
         // Otherwise restore the durable save recorded for this session.
         if let Some(path) = self.durable_snapshot_path(slot_id, session_id).await? {
@@ -1005,12 +1001,11 @@ impl Coherence {
                     d.contains("sakur4")
                 })
                 .unwrap_or(false);
-            if in_snapshot_dir && p.exists() {
-                if let Err(e) = std::fs::remove_file(p) {
+            if in_snapshot_dir && p.exists()
+                && let Err(e) = std::fs::remove_file(p) {
                     tracing::warn!(path = %path, error = %e, "snapshot prune failed");
                     continue;
                 }
-            }
             self.db
                 .write({
                     let path = path.clone();
@@ -1286,8 +1281,10 @@ mod tests {
     #[tokio::test]
     async fn snapshots_are_pruned_to_the_retention_policy() {
         let backend = Arc::new(EmbeddedBackend::new().with_ring(256, 4));
-        let mut cfg = CoherenceConfig::default();
-        cfg.snapshot_retention_per_slot = 2;
+        let cfg = CoherenceConfig {
+            snapshot_retention_per_slot: 2,
+            ..Default::default()
+        };
         let rt_db = Db::open_in_memory().await.unwrap();
         let ccl = Coherence::new(rt_db.clone(), backend, cfg);
 

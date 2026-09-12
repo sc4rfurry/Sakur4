@@ -64,6 +64,9 @@ impl FixtureSpec {
 
 /// A materialised fixture repository.
 pub struct FixtureRepo {
+    /// Held so the temporary directory outlives the fixture: dropping it deletes
+    /// the tree. Nothing reads the field, which is the point.
+    #[allow(dead_code)]
     dir: tempfile::TempDir,
     root: PathBuf,
 }

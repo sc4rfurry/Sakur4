@@ -53,7 +53,19 @@ rayon = "1.12"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream", "http2"] }
 
 # --- MCP ---
-rmcp = { version = "3.3", features = ["server", "transport-streamable-http-server", "macros", "schemars"] }
+# The `transport-streamable-http-client-reqwest` and `client` features are for
+# Sakur4's own integration tests, which drive the gateway over a real HTTP
+# listener with the SDK's client. Testing the tool surface through the
+# production transport is the only way to catch JSON-RPC framing and
+# protocol-negotiation regressions that a handler-level unit test skips.
+rmcp = { version = "3.3", features = [
+    "server",
+    "client",
+    "transport-streamable-http-server",
+    "transport-streamable-http-client-reqwest",
+    "macros",
+    "schemars",
+] }
 
 # --- errors / logging / cli ---
 anyhow = "1"

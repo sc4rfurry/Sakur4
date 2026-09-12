@@ -83,11 +83,10 @@ impl Db {
             let mut out = Vec::new();
             for row in rows {
                 let (id, score, snip, sess, fold) = row?;
-                if let Some(want) = session.as_deref() {
-                    if sess.as_deref() != Some(want) {
+                if let Some(want) = session.as_deref()
+                    && sess.as_deref() != Some(want) {
                         continue;
                     }
-                }
                 if exclude_folded && fold.is_some() {
                     continue;
                 }
@@ -157,11 +156,10 @@ impl Db {
             let mut out = Vec::new();
             for row in rows {
                 let (id, score, snip, proj) = row?;
-                if let Some(want) = project.as_deref() {
-                    if proj.as_deref() != Some(want) {
+                if let Some(want) = project.as_deref()
+                    && proj.as_deref() != Some(want) {
                         continue;
                     }
-                }
                 out.push(LexicalHit {
                     source_table: "semantic_atlas".into(),
                     source_id: id,

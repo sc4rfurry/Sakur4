@@ -169,6 +169,11 @@ pub struct SemanticEntry {
 
 impl SemanticEntry {
     /// Build from stored columns plus the resolved current anchor hash.
+    ///
+    /// Ten arguments because it mirrors the row exactly: every field is required
+    /// to decide staleness, and bundling them into a struct would only move the
+    /// same eight values one layer up.
+    #[allow(clippy::too_many_arguments)]
     pub fn from_row(
         atlas_id: String,
         content: String,

@@ -17,7 +17,7 @@
 //! [`crate::store::schema`].
 
 use crate::error::{Error, Result};
-use crate::ids::{new_id, now_rfc3339, short_hash_str};
+use crate::ids::short_hash_str;
 use crate::tokens::{TokenCounter};
 
 /// Who produced an episode.

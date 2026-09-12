@@ -39,7 +39,7 @@ use crate::ids::new_id;
 use crate::memory::dependency::{EdgeKind, NodeRef};
 use crate::memory::episodic::{EpisodeRow, EpisodeTier};
 use crate::memory::fabric::MemoryFabric;
-use crate::prompt::{PromptParts, RenderedPart};
+use crate::prompt::PromptParts;
 use crate::tokens::TokenCounter;
 
 /// Eviction policy knobs.
@@ -80,6 +80,21 @@ pub struct EvictionPolicy {
     /// A prefix larger than this leaves nothing in the middle to evict, so the
     /// plan would announce "nothing to do" while the window overflowed.
     pub max_prefix_ratio: f64,
+    /// Absolute ceiling on the preserved prefix, in tokens.
+    ///
+    /// This is the knob that decides whether a compaction reuses the cache at all.
+    /// The reserve above is where Sakur4 would *like* the boundary to fall;
+    /// whether it can is decided by the server's checkpoint ring, because a ring
+    /// only spans `interval × depth` tokens. A ring holding 8,448 tokens of
+    /// history has no checkpoint near a 1,024-token boundary, so a boundary that
+    /// strict cannot be aligned and the compaction reports a full re-prefill.
+    ///
+    /// Raising the ceiling lets the boundary move forward to meet the oldest
+    /// checkpoint the ring still holds. The trade is explicit — more tokens kept
+    /// verbatim in exchange for reusing the entire cached prefix — and it is the
+    /// right side of the trade whenever the window has room, which is why the
+    /// ratio above still applies as an independent bound.
+    pub cache_prefix_max_tokens: usize,
     /// Permit the `Drop` tier. Off means the floor is `Archived`, which is the
     /// conservative default: dropping is only ever legitimate for output the
     /// producer itself declared droppable.
@@ -97,9 +112,20 @@ impl Default for EvictionPolicy {
             trigger_ratio: 0.75,
             target_ratio: 0.55,
             keep_prefix_tokens: 0,
-            cache_prefix_reserve_tokens: 1024,
+            // Where Sakur4 would like the compaction boundary to fall.
+            //
+            // The value is a trade, not a target: a larger prefix survives verbatim
+            // (costing window space, and costing it on every future turn) in
+            // exchange for a larger cached prefix the server can keep. Below roughly
+            // one checkpoint interval the boundary lands short of the first ring
+            // entry and the reuse is nominal; well above the ceiling in
+            // `cache_prefix_max_tokens` the plan stops being able to evict anything.
+            // 4096 sits between the two for the windows the PRD targets, and both
+            // bounds are enforced independently.
+            cache_prefix_reserve_tokens: 4096,
             keep_recent_tokens: 4096,
             max_prefix_ratio: 0.35,
+            cache_prefix_max_tokens: 8192,
             allow_drop: false,
             max_tier_step: 1,
             cache_align: true,
@@ -474,7 +500,12 @@ impl EvictionEngine {
 
         let mut coherence = coherence;
         if let Some(plan) = coherence.as_mut() {
-            if retained_prefix_tokens > 0 {
+            // A preserved prefix only counts as reuse where the server can actually
+            // match it. When no boundary was alignable — no backend, no checkpoints,
+            // or partial-state-only checkpoints — the prefix is still preserved and
+            // still a prefix of the next prompt, but reporting `partial-reuse` would
+            // put a number on G1's headline metric that nothing supports.
+            if retained_prefix_tokens > 0 && plan.pairs_with_cache {
                 if !plan.is_reuse() {
                     // The boundary landed between the proposal and the oldest
                     // checkpoint — normal, because a ring only spans
@@ -538,15 +569,14 @@ impl EvictionEngine {
             .map(|c| c.status)
             .unwrap_or(CacheStatus::Unknown);
 
-        if let Some(coherence) = &plan.coherence {
-            if coherence.wants_snapshot() {
+        if let Some(coherence) = &plan.coherence
+            && coherence.wants_snapshot() {
                 let cp = self
                     .coherence
                     .pre_rewrite_snapshot(&plan.session_id, &plan.slot_id, &coherence.reason)
                     .await?;
                 snapshot_taken = cp.is_some();
             }
-        }
 
         let updates: Vec<(String, EpisodeTier)> = plan
             .updates
@@ -558,7 +588,7 @@ impl EvictionEngine {
         // Tell the cache layer what the surviving prefix is, so the next turn's
         // reuse estimate is computed from the prompt that will actually be sent.
         if let Some(coherence) = &plan.coherence {
-            let retained = parts.retained_prefix_text(plan.retained_prefix_tokens);
+            let retained = parts.retained_prefix_text(plan.retained_prefix_tokens, &self.counter);
             self.coherence
                 .record_plan(&plan.session_id, &plan.slot_id, coherence, &retained, &self.counter)
                 .await?;
@@ -945,7 +975,7 @@ impl EvictionEngine {
     /// Build the scored candidate list.
     async fn score_candidates(
         &self,
-        session_id: &str,
+        _session_id: &str,
         episodes: &[EpisodeRow],
     ) -> Result<Vec<Candidate>> {
         // One graph load for the whole session, keyed by episode.
@@ -1060,11 +1090,10 @@ impl EvictionEngine {
         // A step may not overshoot the remaining need by a huge margin: evicting a
         // 50k-token tool result to reclaim 200 tokens is a bad trade even when the
         // tier is technically correct.
-        if c.tokens > 0 && still_needed > 0 && c.tokens > still_needed.saturating_mul(8).max(8192) {
-            if next != EpisodeTier::Masked {
+        if c.tokens > 0 && still_needed > 0 && c.tokens > still_needed.saturating_mul(8).max(8192)
+            && next != EpisodeTier::Masked {
                 return Ok(None);
             }
-        }
 
         let episode = self.fabric.episode(&c.episode_id).await?;
         let tokens_before = episode.live_tokens(&self.counter);
@@ -1096,28 +1125,6 @@ impl EvictionEngine {
                 }
             ),
         }))
-    }
-
-    /// The largest checkpoint the slot holds that is worth preserving as a prefix.
-    ///
-    /// Checkpoints in the last half of the live window are ignored: preserving them
-    /// would leave nothing in the middle to evict.
-    async fn checkpoint_floor(&self, slot_id: &str, live_tokens: usize) -> usize {
-        let ceiling = live_tokens / 2;
-        if ceiling == 0 {
-            return 0;
-        }
-        match self.coherence.slot_state(slot_id).await {
-            Ok(state) => state
-                .checkpoints
-                .iter()
-                .map(|c| c.token_position)
-                .filter(|p| *p > 0 && (*p as usize) <= ceiling)
-                .max()
-                .unwrap_or(0)
-                .max(0) as usize,
-            Err(_) => 0,
-        }
     }
 
     /// Where the next prefill should start, and how to evict around it.
@@ -1156,8 +1163,14 @@ impl EvictionEngine {
             .policy
             .keep_prefix_tokens
             .max(self.policy.cache_prefix_reserve_tokens);
-        // A boundary past this leaves nothing evictable in the middle.
-        let prefix_max = ((live_tokens as f64) * self.policy.max_prefix_ratio).max(1.0) as usize;
+        // Two independent bounds on the prefix: no more than a fraction of the live
+        // window (or there is no middle left to evict), and no more than the
+        // configured absolute ceiling (so a pathological ring cannot eat the whole
+        // session).
+        let prefix_max = ((live_tokens as f64) * self.policy.max_prefix_ratio)
+            .max(1.0)
+            .min(self.policy.cache_prefix_max_tokens.max(1) as f64)
+            as usize;
         let proposal = base_reserve.min(prefix_max) as i64;
         let tolerance = self.coherence.snap_tolerance_tokens();
 
@@ -1198,9 +1211,10 @@ impl EvictionEngine {
         // boundary the server can rewind to. Align forward onto it, provided it is
         // still early enough to leave a middle worth evicting.
         //
-        // Surrendering to a full re-prefill here would be wrong: the tokens before
-        // the oldest checkpoint are genuinely uncached, but everything from that
-        // checkpoint onward is reusable, and that is most of the prompt.
+        // Surrendering to a full re-prefill here would be the wrong call: the
+        // tokens before the oldest checkpoint are genuinely uncached, but
+        // everything from that checkpoint onward is reusable, and that is most of
+        // the prompt.
         if let Some(oldest) = checkpoints.first() {
             let cut = oldest.token_position;
             if cut > 0 && (cut as usize) <= prefix_max {
@@ -1223,9 +1237,10 @@ impl EvictionEngine {
                     Some(cut),
                     tolerance,
                     &format!(
-                        "the earliest checkpoint the server can rewind to is at {cut} tokens, which \
-                         is past the {prefix_max}-token limit on a preserved prefix; preserving it \
-                         would leave nothing to evict, so this compaction cannot reuse the cache"
+                        "the earliest checkpoint the server can rewind to is at {cut} tokens, past \
+                         the {prefix_max}-token limit on a preserved prefix; preserving it would \
+                         leave nothing to evict, so this compaction cannot reuse the cache. \
+                         Configure a deeper checkpoint ring (-ctxcp) to make alignment possible"
                     ),
                 )),
                 base_reserve.min(prefix_max),
@@ -1334,7 +1349,7 @@ mod tests {
     use super::*;
     use crate::cache::CoherenceConfig;
     use crate::llama::embedded::EmbeddedBackend;
-    use crate::memory::episodic::{NewEpisode, Role};
+    use crate::memory::episodic::NewEpisode;
     use crate::prompt::PromptParts;
     use crate::store::Db;
     use crate::tokens::CharTokenizer;

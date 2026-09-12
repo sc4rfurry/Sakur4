@@ -56,13 +56,18 @@ impl EmbeddedBackend {
     pub fn new() -> Self {
         Self {
             n_ctx: 32768,
-            // Matches a llama.cpp server configured for agentic use: `-cms 256`
-            // with a deep `-ctxcp` ring. A shallow ring is realistic for a default
-            // build but useless for demonstrating alignment, because it only ever
-            // holds the newest few thousand tokens — nothing near a boundary a
-            // compactor would choose.
-            checkpoint_interval: 256,
-            ring_capacity: 64,
+            // Modelled on a llama.cpp server configured for agentic use:
+            // `-cms` spaced so the ring spans the whole window, and `-ctxcp` deep
+            // enough that the oldest checkpoint is still early in the session.
+            //
+            // The span is what matters. A ring holding only the newest few thousand
+            // tokens has no checkpoint anywhere near a boundary a compactor would
+            // choose, so every compaction reports a full re-prefill and the
+            // cache-coherence path is never exercised — which is a realistic default
+            // configuration, and exactly why Sakur4 reports the verdict rather than
+            // assuming alignment is available.
+            checkpoint_interval: 1024,
+            ring_capacity: 32,
             n_past: AtomicI64::new(0),
             checkpoint_positions: RwLock::new(Vec::new()),
             save_dir: std::env::temp_dir().join("sakur4-embedded-snapshots"),
