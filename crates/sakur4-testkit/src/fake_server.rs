@@ -4,8 +4,8 @@
 //! # Why this exists in addition to the embedded backend
 //!
 //! `sakur4-core`'s embedded backend implements the same *trait*, which is the
-//! right level for unit tests of the coherence logic. But
-//! [`crate::llama::llama_cpp::LlamaCppBackend`] is a separate thing — it parses
+//! right level for unit tests of the coherence logic. But the production
+//! `LlamaCppBackend` is a separate thing — it parses
 //! JSON shapes, tolerates renamed fields, tries alternate payload keys, and maps
 //! HTTP failures onto capability misses. None of that is exercised by a trait
 //! mock, and all of it is exactly what the PRD's top-rated risk warns will break.
@@ -74,26 +74,17 @@ impl FakeServerConfig {
 
     /// A build that reports no checkpoint ring at all.
     pub fn no_ring() -> Self {
-        Self {
-            hide_checkpoints: true,
-            ..Default::default()
-        }
+        Self { hide_checkpoints: true, ..Default::default() }
     }
 
     /// A build with no slot-management endpoints.
     pub fn no_slots_at_all() -> Self {
-        Self {
-            no_slots: true,
-            ..Default::default()
-        }
+        Self { no_slots: true, ..Default::default() }
     }
 
     /// A sliding-window/hybrid model, where checkpoints carry partial state.
     pub fn sliding_window() -> Self {
-        Self {
-            swa_model: true,
-            ..Default::default()
-        }
+        Self { swa_model: true, ..Default::default() }
     }
 }
 
@@ -117,9 +108,7 @@ pub struct FakeLlamaServer {
 
 impl std::fmt::Debug for FakeLlamaServer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FakeLlamaServer")
-            .field("base_url", &self.base_url)
-            .finish()
+        f.debug_struct("FakeLlamaServer").field("base_url", &self.base_url).finish()
     }
 }
 
@@ -130,7 +119,8 @@ impl FakeLlamaServer {
         let addr = listener.local_addr()?;
         let base_url = format!("http://{addr}");
 
-        let saves_dir = std::env::temp_dir().join(format!("sakur4-fake-{}", crate::unique_suffix()));
+        let saves_dir =
+            std::env::temp_dir().join(format!("sakur4-fake-{}", crate::unique_suffix()));
         std::fs::create_dir_all(&saves_dir).ok();
 
         let shared = Arc::new(State_ {
@@ -152,12 +142,7 @@ impl FakeLlamaServer {
                 .await;
         });
 
-        Ok(Self {
-            base_url,
-            shared,
-            shutdown: Some(tx),
-            handle: Some(handle),
-        })
+        Ok(Self { base_url, shared, shutdown: Some(tx), handle: Some(handle) })
     }
 
     /// The base URL to hand to `LlamaCppBackend::connect`.
@@ -239,12 +224,16 @@ fn guard(shared: &State_) -> Result<(), (axum::http::StatusCode, String)> {
     Ok(())
 }
 
-async fn health(State(s): State<Arc<State_>>) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+async fn health(
+    State(s): State<Arc<State_>>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
     guard(&s)?;
     Ok(Json(json!({"status": "ok"})))
 }
 
-async fn props(State(s): State<Arc<State_>>) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+async fn props(
+    State(s): State<Arc<State_>>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
     guard(&s)?;
     let model = if s.config.swa_model {
         "/models/gemma-3-27b-it-Q4_K_M.gguf"
@@ -266,7 +255,9 @@ async fn metrics(State(s): State<Arc<State_>>) -> Result<String, (axum::http::St
     ))
 }
 
-async fn models(State(s): State<Arc<State_>>) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+async fn models(
+    State(s): State<Arc<State_>>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
     guard(&s)?;
     Ok(Json(json!({"data": [{"id": "fake-model"}]})))
 }
@@ -285,7 +276,9 @@ async fn tokenize(
     })))
 }
 
-async fn slots(State(s): State<Arc<State_>>) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+async fn slots(
+    State(s): State<Arc<State_>>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
     guard(&s)?;
     if s.config.no_slots {
         return Err((axum::http::StatusCode::NOT_FOUND, "no /slots on this build".into()));
@@ -304,11 +297,12 @@ async fn slots(State(s): State<Arc<State_>>) -> Result<Json<Value>, (axum::http:
     if !s.config.hide_checkpoints && !s.config.disk_checkpoints_only {
         // Two shapes are emitted in the wild; the client must handle both, and
         // this server emits the object form, which is the newer one.
-        slot["checkpoints"] = json!(ring
-            .iter()
-            .enumerate()
-            .map(|(i, p)| json!({"pos": p, "size": 1024 * (i as i64 + 1)}))
-            .collect::<Vec<_>>());
+        slot["checkpoints"] = json!(
+            ring.iter()
+                .enumerate()
+                .map(|(i, p)| json!({"pos": p, "size": 1024 * (i as i64 + 1)}))
+                .collect::<Vec<_>>()
+        );
     } else if s.config.disk_checkpoints_only {
         slot["checkpoints"] = json!([]);
     }
@@ -324,11 +318,8 @@ async fn save(
     if s.config.save_fails {
         return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, "save disabled".into()));
     }
-    let filename = body
-        .get("filename")
-        .or_else(|| body.get("path"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let filename =
+        body.get("filename").or_else(|| body.get("path")).and_then(|v| v.as_str()).unwrap_or("");
     if filename.is_empty() {
         return Err((axum::http::StatusCode::BAD_REQUEST, "no filename".into()));
     }
@@ -360,11 +351,8 @@ async fn restore(
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
     guard(&s)?;
-    let filename = body
-        .get("filename")
-        .or_else(|| body.get("path"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let filename =
+        body.get("filename").or_else(|| body.get("path")).and_then(|v| v.as_str()).unwrap_or("");
     let path = if std::path::Path::new(filename).is_absolute() {
         std::path::PathBuf::from(filename)
     } else {
@@ -395,5 +383,3 @@ async fn erase(
 fn internal<E: std::fmt::Display>(e: E) -> (axum::http::StatusCode, String) {
     (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
-
-

@@ -1,0 +1,61 @@
+name: Feature request
+description: Suggest a capability or a change
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before describing a feature, it is worth knowing where Sakur4 deliberately
+        stops. From the project's requirements document, it is **not**:
+
+        - a full agent harness or agent loop — it is a memory/context subsystem
+          consumed by existing harnesses;
+        - a model-training or fine-tuning tool;
+        - a multi-tenant or cloud-hosted service.
+
+        Requests that assume one of those are likely to be redirected rather than
+        accepted, so it saves us both time to say so up front.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: |
+        Describe the problem, not the solution. What are you unable to do today,
+        and what does that cost you?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: If you have a specific design in mind, describe it. If not, say so.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the project?
+      options:
+        - Memory Fabric (episodic, symbolic, semantic, anchors)
+        - Eviction / folding
+        - Cache coherence (llama.cpp slots, checkpoints)
+        - Provider cache accounting (cloud models)
+        - Repo Cortex (code intelligence)
+        - Retrieval / recall
+        - MCP tool surface
+        - Harness integration
+        - CLI / operations
+        - Documentation
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried instead?
+      description: Existing workarounds, or other tools that solve part of this.
+    validations:
+      required: false

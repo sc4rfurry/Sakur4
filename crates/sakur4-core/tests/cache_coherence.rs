@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use sakur4_core::cache::{CacheStatus, Coherence, CoherenceConfig};
 use sakur4_core::evict::{EvictionEngine, EvictionPolicy, Pressure};
-use sakur4_core::llama::embedded::EmbeddedBackend;
 use sakur4_core::llama::InferenceBackend;
+use sakur4_core::llama::embedded::EmbeddedBackend;
 use sakur4_core::memory::episodic::NewEpisode;
 use sakur4_core::memory::fabric::MemoryFabric;
 use sakur4_core::prompt::PromptParts;
@@ -56,13 +56,7 @@ async fn rig() -> Rig {
         EvictionPolicy::default(),
         counter.clone(),
     );
-    Rig {
-        fabric,
-        engine,
-        coherence,
-        backend,
-        counter,
-    }
+    Rig { fabric, engine, coherence, backend, counter }
 }
 
 impl Rig {
@@ -94,11 +88,7 @@ impl Rig {
                 .await
                 .expect("commit");
         }
-        let live = self
-            .fabric
-            .session_live_tokens("s1", &self.counter)
-            .await
-            .expect("live tokens");
+        let live = self.fabric.session_live_tokens("s1", &self.counter).await.expect("live tokens");
         // The server has now seen the whole conversation.
         self.backend.advance_to(live as i64);
         live
@@ -114,11 +104,8 @@ impl Rig {
             .map(|a| a.render())
             .collect::<Vec<_>>()
             .join("\n");
-        let timeline = self
-            .fabric
-            .timeline("s1", usize::MAX, &self.counter, false)
-            .await
-            .expect("timeline");
+        let timeline =
+            self.fabric.timeline("s1", usize::MAX, &self.counter, false).await.expect("timeline");
         PromptParts::new()
             .with_system("you are a local agent")
             .with_anchors(anchors)
@@ -138,11 +125,7 @@ async fn a_compaction_preserves_a_prefix_the_cache_can_reuse() {
     );
     let parts = r.parts().await;
 
-    let plan = r
-        .engine
-        .plan("s1", "0", WINDOW, &parts)
-        .await
-        .expect("plan");
+    let plan = r.engine.plan("s1", "0", WINDOW, &parts).await.expect("plan");
     assert_eq!(plan.pressure, Pressure::Compacting);
     assert!(!plan.is_empty(), "a full window must produce evictions");
 
@@ -200,11 +183,8 @@ async fn the_receipt_reports_reuse_only_after_the_plan_is_applied() {
 
     // Before any compaction the slot has no recorded state for this boundary, so
     // the honest answer is a cold slot — not a flattering guess.
-    let before = r
-        .coherence
-        .observe_prompt("s1", "0", &parts.render(), &r.counter)
-        .await
-        .expect("observe");
+    let before =
+        r.coherence.observe_prompt("s1", "0", &parts.render(), &r.counter).await.expect("observe");
     assert_eq!(before.cache_status, CacheStatus::Cold);
 
     let plan = r.engine.plan("s1", "0", WINDOW, &parts).await.expect("plan");
@@ -222,11 +202,7 @@ async fn the_receipt_reports_reuse_only_after_the_plan_is_applied() {
         "after an aligned compaction the next turn must report reuse; got {}",
         after.detail
     );
-    assert!(
-        after.reused_tokens > 0,
-        "reuse must be a real number, not a label: {}",
-        after.detail
-    );
+    assert!(after.reused_tokens > 0, "reuse must be a real number, not a label: {}", after.detail);
     assert_eq!(
         after.reused_tokens + after.prefilled_tokens,
         after.prompt_tokens,
@@ -248,10 +224,7 @@ async fn anchors_and_pinned_constraints_are_never_in_the_eviction_set() {
 
     let parts = r.parts().await;
     let plan = r.engine.plan("s1", "0", WINDOW, &parts).await.expect("plan");
-    assert!(
-        plan.anchor_tokens > 0,
-        "the pinned anchor must be accounted for in the budget"
-    );
+    assert!(plan.anchor_tokens > 0, "the pinned anchor must be accounted for in the budget");
 
     // G4: zero silent loss, under arbitrary compaction pressure.
     r.engine.apply(&plan, &parts).await.expect("apply");
@@ -290,19 +263,12 @@ async fn an_evicted_episode_recalls_byte_identically() {
             .find(|(id, _)| id == &update.episode_id)
             .map(|(_, c)| c.clone())
             .expect("the evicted episode existed");
-        let episode = r
-            .fabric
-            .episode(&update.episode_id)
-            .await
-            .expect("episode still exists");
+        let episode = r.fabric.episode(&update.episode_id).await.expect("episode still exists");
         assert_eq!(
             episode.content, original,
             "FR-5 round-trip integrity: eviction must not alter stored content"
         );
-        assert_eq!(
-            episode.eviction_tier, update.to,
-            "the tier must be what the plan said"
-        );
+        assert_eq!(episode.eviction_tier, update.to, "the tier must be what the plan said");
     }
 }
 
@@ -314,12 +280,8 @@ async fn a_backend_with_no_checkpoints_falls_back_and_says_so() {
     let counter = counter();
     let fabric = MemoryFabric::new(db.clone());
     let coherence = Coherence::new(db.clone(), backend, CoherenceConfig::default());
-    let engine = EvictionEngine::new(
-        fabric.clone(),
-        coherence,
-        EvictionPolicy::default(),
-        counter.clone(),
-    );
+    let engine =
+        EvictionEngine::new(fabric.clone(), coherence, EvictionPolicy::default(), counter.clone());
 
     for i in 0..120 {
         fabric
@@ -342,25 +304,13 @@ async fn a_backend_with_no_checkpoints_falls_back_and_says_so() {
     }
 
     let anchors = fabric.anchors(Some("s1")).await.expect("anchors");
-    let timeline = fabric
-        .timeline("s1", usize::MAX, &counter, false)
-        .await
-        .expect("timeline");
+    let timeline = fabric.timeline("s1", usize::MAX, &counter, false).await.expect("timeline");
     let parts = PromptParts::new()
         .with_system("system")
-        .with_anchors(
-            anchors
-                .iter()
-                .map(|a| a.render())
-                .collect::<Vec<_>>()
-                .join("\n"),
-        )
+        .with_anchors(anchors.iter().map(|a| a.render()).collect::<Vec<_>>().join("\n"))
         .with_timeline(timeline.rendered);
 
-    let plan = engine
-        .plan("s1", "0", WINDOW, &parts)
-        .await
-        .expect("plan");
+    let plan = engine.plan("s1", "0", WINDOW, &parts).await.expect("plan");
 
     // Guard the fixture: a session that never reaches the threshold would make the
     // fallback assertions below vacuous.
@@ -414,21 +364,14 @@ async fn repeated_compactions_do_not_oscillate_across_the_boundary() {
             .await
             .expect("commit");
     }
-    let live = r
-        .fabric
-        .session_live_tokens("s1", &r.counter)
-        .await
-        .expect("live");
+    let live = r.fabric.session_live_tokens("s1", &r.counter).await.expect("live");
     r.backend.advance_to(live as i64);
 
     let parts2 = r.parts().await;
     let second = r.engine.plan("s1", "0", WINDOW, &parts2).await.expect("plan 2");
 
     assert_eq!(second.pressure, Pressure::Compacting);
-    assert!(
-        second.retained_prefix_tokens > 0,
-        "the second compaction must also preserve a prefix"
-    );
+    assert!(second.retained_prefix_tokens > 0, "the second compaction must also preserve a prefix");
     // The second boundary must be at least as far in as the first: the prefix is
     // already cached, so cutting behind it would discard exactly the cached part.
     assert!(

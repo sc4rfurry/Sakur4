@@ -38,8 +38,7 @@ pub trait Embedder: Send + Sync + std::fmt::Debug {
     /// Embed one string.
     async fn embed_one(&self, text: &str) -> Result<Vec<f32>> {
         let mut v = self.embed(std::slice::from_ref(&text.to_string())).await?;
-        v.pop()
-            .ok_or_else(|| Error::Other("embedder returned no vector".into()))
+        v.pop().ok_or_else(|| Error::Other("embedder returned no vector".into()))
     }
 
     /// Stable identifier for the embedding space. Vectors from different models
@@ -142,8 +141,8 @@ impl HashingEmbedder {
         for feature in Self::features(text) {
             let h = blake3::hash(feature.as_bytes());
             let bytes = h.as_bytes();
-            let idx = (u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize)
-                % self.dim;
+            let idx =
+                (u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize) % self.dim;
             // Sign from a different byte so collisions do not systematically
             // reinforce: the expected inner product of unrelated texts is then
             // ~0 rather than positive.
@@ -166,7 +165,9 @@ impl HashingEmbedder {
 /// OpenAI-compatible server, without three separate integrations.
 #[derive(Debug)]
 pub struct OpenAiEmbedder {
-    client: reqwest::Client,
+    /// Built on first use, because construction can fail and a constructor that
+    /// returns `Self` has nowhere to report that.
+    client: std::sync::OnceLock<reqwest::Client>,
     base_url: String,
     model: String,
     dim: usize,
@@ -175,19 +176,42 @@ pub struct OpenAiEmbedder {
 
 impl OpenAiEmbedder {
     /// Build without probing; `dim` is confirmed on the first call.
+    ///
+    /// # Why the client is built lazily rather than here
+    ///
+    /// `reqwest::Client::build` fails when the TLS backend cannot be initialised,
+    /// and an earlier version called `.expect()` on it — a panic in a library, on a
+    /// path a harness reaches by configuring an embedding endpoint. A misconfigured
+    /// TLS backend is a condition to report, not to abort on, so the client is
+    /// built inside the async call where a failure becomes an ordinary error.
     pub fn new(base_url: &str, model: &str, dim: usize) -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .expect("reqwest client"),
+            client: std::sync::OnceLock::new(),
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
             dim,
-            api_key: std::env::var("SAKUR4_EMBED_API_KEY")
-                .ok()
-                .filter(|s| !s.trim().is_empty()),
+            api_key: std::env::var("SAKUR4_EMBED_API_KEY").ok().filter(|s| !s.trim().is_empty()),
         }
+    }
+
+    /// The HTTP client, built on first use and cached.
+    fn http(&self) -> Result<&reqwest::Client> {
+        if let Some(client) = self.client.get() {
+            return Ok(client);
+        }
+        let built = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| {
+                Error::BackendUnavailable(format!(
+                    "could not build an HTTP client for the embedding endpoint: {e}"
+                ))
+            })?;
+        // A race here at worst builds two clients and keeps one; it cannot fail.
+        let _ = self.client.set(built);
+        self.client
+            .get()
+            .ok_or_else(|| Error::BackendUnavailable("embedding client unavailable".into()))
     }
 
     /// Confirm the endpoint answers and report the real vector width.
@@ -205,7 +229,7 @@ impl Embedder for OpenAiEmbedder {
             return Ok(Vec::new());
         }
         let mut rb = self
-            .client
+            .http()?
             .post(format!("{}/v1/embeddings", self.base_url))
             .json(&serde_json::json!({ "model": self.model, "input": texts }));
         if let Some(key) = &self.api_key {
@@ -219,10 +243,9 @@ impl Embedder for OpenAiEmbedder {
             )));
         }
         let doc: serde_json::Value = resp.json().await?;
-        let data = doc
-            .get("data")
-            .and_then(|d| d.as_array())
-            .ok_or_else(|| Error::BackendUnavailable("embedding response had no data array".into()))?;
+        let data = doc.get("data").and_then(|d| d.as_array()).ok_or_else(|| {
+            Error::BackendUnavailable("embedding response had no data array".into())
+        })?;
 
         let mut out = Vec::with_capacity(data.len());
         for item in data {
@@ -230,11 +253,7 @@ impl Embedder for OpenAiEmbedder {
                 .get("embedding")
                 .and_then(|e| e.as_array())
                 .ok_or_else(|| Error::BackendUnavailable("embedding item had no vector".into()))?;
-            out.push(
-                vec.iter()
-                    .map(|v| v.as_f64().unwrap_or(0.0) as f32)
-                    .collect::<Vec<f32>>(),
-            );
+            out.push(vec.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect::<Vec<f32>>());
         }
         Ok(out)
     }
@@ -265,11 +284,7 @@ pub struct FallbackEmbedder {
 
 impl FallbackEmbedder {
     pub fn new(primary: Arc<dyn Embedder>, secondary: Arc<dyn Embedder>) -> Self {
-        Self {
-            primary,
-            secondary,
-            degraded: parking_lot::RwLock::new(false),
-        }
+        Self { primary, secondary, degraded: parking_lot::RwLock::new(false) }
     }
 
     /// True when the primary embedder has failed at least once and the fallback
@@ -310,11 +325,7 @@ impl Embedder for FallbackEmbedder {
         // The id must reflect what actually produced stored vectors. Because a
         // degraded fallback writes *different* vectors, Sakur4 reports the
         // primary's id only while it is healthy; see `describe`.
-        if *self.degraded.read() {
-            self.secondary.model_id()
-        } else {
-            self.primary.model_id()
-        }
+        if *self.degraded.read() { self.secondary.model_id() } else { self.primary.model_id() }
     }
 
     fn dim(&self) -> usize {
@@ -406,10 +417,7 @@ mod tests {
         let close = e.embed_one("memory recall and staleness detection").await.unwrap();
         let far = e.embed_one("banana bread recipe with walnuts").await.unwrap();
         let dot = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
-        assert!(
-            dot(&q, &close) > dot(&q, &far),
-            "lexical overlap must beat unrelated text"
-        );
+        assert!(dot(&q, &close) > dot(&q, &far), "lexical overlap must beat unrelated text");
     }
 
     #[tokio::test]
@@ -440,10 +448,7 @@ mod tests {
             }
         }
 
-        let f = FallbackEmbedder::new(
-            Arc::new(Broken),
-            Arc::new(HashingEmbedder::default()),
-        );
+        let f = FallbackEmbedder::new(Arc::new(Broken), Arc::new(HashingEmbedder::default()));
         assert!(!f.is_degraded());
         assert_eq!(f.model_id(), "broken-model");
 

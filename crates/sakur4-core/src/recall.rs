@@ -205,10 +205,7 @@ pub struct RecallFilters {
 
 impl RecallFilters {
     pub fn wants(&self, kind: HitKind) -> bool {
-        self.kinds
-            .as_ref()
-            .map(|k| k.contains(&kind))
-            .unwrap_or(true)
+        self.kinds.as_ref().map(|k| k.contains(&kind)).unwrap_or(true)
     }
 }
 
@@ -230,13 +227,7 @@ impl RecallEngine {
         policy: RecallPolicy,
         counter: TokenCounter,
     ) -> Self {
-        Self {
-            db,
-            fabric,
-            embedder,
-            policy,
-            counter,
-        }
+        Self { db, fabric, embedder, policy, counter }
     }
 
     pub fn policy(&self) -> &RecallPolicy {
@@ -253,11 +244,7 @@ impl RecallEngine {
         v.push(format!(
             "vector({}{})",
             self.embedder.model_id(),
-            if self.embedder.is_semantic() {
-                ""
-            } else {
-                ", deterministic"
-            }
+            if self.embedder.is_semantic() { "" } else { ", deterministic" }
         ));
         v.push("graph".to_string());
         v
@@ -289,9 +276,11 @@ impl RecallEngine {
             )
             .await?;
         for (rank, hit) in lexical.iter().enumerate() {
-            acc.entry((HitKind::Episode, hit.source_id.clone()))
-                .or_default()
-                .add(Retriever::Bm25, rank, self.policy.bm25_weight);
+            acc.entry((HitKind::Episode, hit.source_id.clone())).or_default().add(
+                Retriever::Bm25,
+                rank,
+                self.policy.bm25_weight,
+            );
         }
 
         // --- retriever 2: BM25 over the Semantic Atlas ----------------------
@@ -299,19 +288,14 @@ impl RecallEngine {
         // stream or the vector index. Those two miss it structurally: an entry is
         // derived *from* an episode (so graph traversal from a stream hit never
         // reaches it), and dense retrieval only finds entries that were embedded.
-        let semantic = self
-            .fabric
-            .db()
-            .search_semantic(
-                query,
-                per,
-                filters.project_id.as_deref(),
-            )
-            .await?;
+        let semantic =
+            self.fabric.db().search_semantic(query, per, filters.project_id.as_deref()).await?;
         for (rank, hit) in semantic.iter().enumerate() {
-            acc.entry((HitKind::SemanticEntry, hit.source_id.clone()))
-                .or_default()
-                .add(Retriever::Bm25, rank, self.policy.bm25_weight);
+            acc.entry((HitKind::SemanticEntry, hit.source_id.clone())).or_default().add(
+                Retriever::Bm25,
+                rank,
+                self.policy.bm25_weight,
+            );
         }
 
         // --- retriever 3: cosine over embeddings ----------------------------
@@ -327,14 +311,16 @@ impl RecallEngine {
                         "symbolic_fact" => HitKind::SymbolicFact,
                         _ => continue,
                     };
-                    acc.entry((kind, hit.source_id.clone()))
-                        .or_default()
-                        .add(Retriever::Vector, rank, self.policy.vector_weight);
+                    acc.entry((kind, hit.source_id.clone())).or_default().add(
+                        Retriever::Vector,
+                        rank,
+                        self.policy.vector_weight,
+                    );
                 }
             }
-            Err(e) => notes.push(format!(
-                "dense retrieval unavailable ({e}); results are lexical-only"
-            )),
+            Err(e) => {
+                notes.push(format!("dense retrieval unavailable ({e}); results are lexical-only"))
+            }
         }
 
         // --- retriever 4: graph adjacency -----------------------------------
@@ -360,9 +346,11 @@ impl RecallEngine {
                 )
                 .await?;
             for (rank, atlas_id) in anchored.iter().enumerate() {
-                acc.entry((HitKind::SemanticEntry, atlas_id.clone()))
-                    .or_default()
-                    .add(Retriever::Graph, rank, self.policy.graph_weight);
+                acc.entry((HitKind::SemanticEntry, atlas_id.clone())).or_default().add(
+                    Retriever::Graph,
+                    rank,
+                    self.policy.graph_weight,
+                );
             }
         }
         for (kind, id) in seeds {
@@ -380,9 +368,11 @@ impl RecallEngine {
                     crate::memory::dependency::NodeKind::SemanticEntry => HitKind::SemanticEntry,
                     _ => continue,
                 };
-                acc.entry((nkind, n.id.clone()))
-                    .or_default()
-                    .add(Retriever::Graph, rank, self.policy.graph_weight);
+                acc.entry((nkind, n.id.clone())).or_default().add(
+                    Retriever::Graph,
+                    rank,
+                    self.policy.graph_weight,
+                );
             }
         }
 
@@ -423,11 +413,8 @@ impl RecallEngine {
         });
         hits.truncate(k);
 
-        let stale_superseded: Vec<String> = hits
-            .iter()
-            .filter(|h| h.stale)
-            .map(|h| h.id.clone())
-            .collect();
+        let stale_superseded: Vec<String> =
+            hits.iter().filter(|h| h.stale).map(|h| h.id.clone()).collect();
         if !stale_superseded.is_empty() {
             notes.push(format!(
                 "{} hit(s) were stale and are presented with their anchor's current content \
@@ -491,31 +478,27 @@ impl RecallEngine {
                     Err(_) => return Ok(None),
                 };
                 if let Some(session) = &filters.session_id
-                    && &ep.session_id != session {
-                        return Ok(None);
-                    }
+                    && &ep.session_id != session
+                {
+                    return Ok(None);
+                }
                 if ep.fold_id.is_some() && !filters.include_folded.unwrap_or(false) {
                     return Ok(None);
                 }
-                let include_archived = filters
-                    .include_archived
-                    .unwrap_or(self.policy.include_archived);
+                let include_archived =
+                    filters.include_archived.unwrap_or(self.policy.include_archived);
                 if ep.eviction_tier.is_out_of_window() && !include_archived {
                     return Ok(None);
                 }
 
                 let mut rendered = ep.content.clone();
                 if rendered.chars().count() > self.policy.max_item_tokens * 4 {
-                    rendered = rendered
-                        .chars()
-                        .take(self.policy.max_item_tokens * 4)
-                        .collect::<String>();
+                    rendered =
+                        rendered.chars().take(self.policy.max_item_tokens * 4).collect::<String>();
                     rendered.push_str("\n… [truncated; recall by id for the full episode]");
                 }
-                let mut reasons = vec![format!(
-                    "verbatim episode (tier {})",
-                    ep.eviction_tier.as_str()
-                )];
+                let mut reasons =
+                    vec![format!("verbatim episode (tier {})", ep.eviction_tier.as_str())];
                 if ep.eviction_tier.is_out_of_window() {
                     reasons.push("was evicted from the live window; restored verbatim".into());
                 }
@@ -539,9 +522,10 @@ impl RecallEngine {
                     return Ok(None);
                 };
                 if let Some(path) = &filters.file_path
-                    && fact.file_path.as_deref() != Some(path.as_str()) {
-                        return Ok(None);
-                    }
+                    && fact.file_path.as_deref() != Some(path.as_str())
+                {
+                    return Ok(None);
+                }
                 let rendered = match &fact.signature {
                     Some(sig) => format!("{} — {}", fact.qualified_name, sig),
                     None => fact.qualified_name.clone(),
@@ -571,9 +555,10 @@ impl RecallEngine {
                     Err(_) => return Ok(None),
                 };
                 if let Some(p) = &filters.project_id
-                    && entry.project_id.as_deref() != Some(p.as_str()) {
-                        return Ok(None);
-                    }
+                    && entry.project_id.as_deref() != Some(p.as_str())
+                {
+                    return Ok(None);
+                }
                 Ok(Some(self.hit_from_semantic(entry).await?))
             }
         }
@@ -649,18 +634,12 @@ impl RecallEngine {
         if hit.retrievers.len() > 1 {
             let bonus = 0.25 * (hit.retrievers.len() - 1) as f64;
             score += bonus;
-            reasons.push(format!(
-                "{} retrievers agree (+{bonus:.2})",
-                hit.retrievers.len()
-            ));
+            reasons.push(format!("{} retrievers agree (+{bonus:.2})", hit.retrievers.len()));
         }
 
         // Lexical overlap with the query, measured on the rendered text.
         let body = hit.rendered.to_lowercase();
-        let overlap = query_terms
-            .iter()
-            .filter(|t| body.contains(t.as_str()))
-            .count();
+        let overlap = query_terms.iter().filter(|t| body.contains(t.as_str())).count();
         if overlap > 0 {
             let bonus = (overlap as f64 / query_terms.len().max(1) as f64) * 0.5;
             score += bonus;
@@ -724,12 +703,8 @@ fn terms(query: &str) -> Vec<String> {
 }
 
 /// Convenience: the graph edge kinds the recall engine follows.
-pub const RECALL_EDGE_KINDS: &[EdgeKind] = &[
-    EdgeKind::DerivedFrom,
-    EdgeKind::DependsOn,
-    EdgeKind::Calls,
-    EdgeKind::Imports,
-];
+pub const RECALL_EDGE_KINDS: &[EdgeKind] =
+    &[EdgeKind::DerivedFrom, EdgeKind::DependsOn, EdgeKind::Calls, EdgeKind::Imports];
 
 #[cfg(test)]
 mod tests {
@@ -831,10 +806,7 @@ mod tests {
 
         // 3. Query for it. The summary must be flagged stale and the *current*
         //    signature must be attached.
-        let res = engine
-            .recall("checkUser", None, Some(RecallFilters::default()))
-            .await
-            .unwrap();
+        let res = engine.recall("checkUser", None, Some(RecallFilters::default())).await.unwrap();
 
         let summary_hit = res
             .hits
@@ -873,10 +845,7 @@ mod tests {
             .await
             .unwrap();
 
-        fabric
-            .forget_files(vec!["src/lib.rs".into()])
-            .await
-            .unwrap();
+        fabric.forget_files(vec!["src/lib.rs".into()]).await.unwrap();
         // `forget_files` keys on file_path, so wipe by name instead to simulate a
         // symbol disappearing.
         fabric
@@ -905,19 +874,12 @@ mod tests {
             .into_fact(crate::memory::symbolic::FactSource::TreeSitter, None);
         fabric.upsert_facts(vec![fact.clone()]).await.unwrap();
         fabric
-            .put_semantic(SemanticWrite::on_fact(
-                "stable returns a constant",
-                fact.fact_id.clone(),
-            ))
+            .put_semantic(SemanticWrite::on_fact("stable returns a constant", fact.fact_id.clone()))
             .await
             .unwrap();
 
         let res = engine.recall("stable", None, None).await.unwrap();
-        let hit = res
-            .hits
-            .iter()
-            .find(|h| h.kind == HitKind::SemanticEntry)
-            .unwrap();
+        let hit = res.hits.iter().find(|h| h.kind == HitKind::SemanticEntry).unwrap();
         assert!(!hit.stale);
         assert!(hit.stale_replacement.is_none());
         assert!(!hit.reasons.iter().any(|r| r.contains("penalised")));
@@ -949,10 +911,8 @@ mod tests {
         let (fabric, engine) = rig().await;
         let c = TokenCounter::new(CharTokenizer::default());
         let body = "the exact bytes of a tool result that must survive";
-        let out = fabric
-            .commit_episode(NewEpisode::user("s1", body), &c, false, false)
-            .await
-            .unwrap();
+        let out =
+            fabric.commit_episode(NewEpisode::user("s1", body), &c, false, false).await.unwrap();
         fabric
             .set_tier(&out.episode_id, crate::memory::episodic::EpisodeTier::Archived)
             .await
@@ -979,10 +939,7 @@ mod tests {
             .recall(
                 "alpha content",
                 None,
-                Some(RecallFilters {
-                    session_id: Some("s2".into()),
-                    ..Default::default()
-                }),
+                Some(RecallFilters { session_id: Some("s2".into()), ..Default::default() }),
             )
             .await
             .unwrap();
@@ -1022,20 +979,14 @@ mod tests {
         assert!(
             res.hits.iter().any(|h| h.kind == HitKind::SemanticEntry && h.stale),
             "the stale summary must be retrieved and flagged; hits were {:?}",
-            res.hits
-                .iter()
-                .map(|h| (h.kind, h.id.as_str(), h.stale))
-                .collect::<Vec<_>>()
+            res.hits.iter().map(|h| (h.kind, h.id.as_str(), h.stale)).collect::<Vec<_>>()
         );
 
         let rendered = res.render();
         assert!(rendered.contains("RECALLED MEMORY"), "got:\n{rendered}");
         assert!(rendered.contains("STALE"), "got:\n{rendered}");
         assert!(rendered.contains("CURRENT VALUE"), "got:\n{rendered}");
-        assert!(
-            rendered.contains("u64"),
-            "the current signature must be shown:\n{rendered}"
-        );
+        assert!(rendered.contains("u64"), "the current signature must be shown:\n{rendered}");
     }
 
     #[tokio::test]

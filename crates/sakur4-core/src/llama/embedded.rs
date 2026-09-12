@@ -190,8 +190,7 @@ impl InferenceBackend for EmbeddedBackend {
             Some(p) => p.to_path_buf(),
             None => {
                 std::fs::create_dir_all(&self.save_dir)?;
-                self.save_dir
-                    .join(format!("slot{slot_id}-{}.json", crate::ids::uuid_v7()))
+                self.save_dir.join(format!("slot{slot_id}-{}.json", crate::ids::uuid_v7()))
             }
         };
         if let Some(parent) = file.parent() {
@@ -332,7 +331,7 @@ impl InferenceBackend for NullBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llama::{snap_to_checkpoint, InferenceBackend};
+    use crate::llama::{InferenceBackend, snap_to_checkpoint};
 
     #[tokio::test]
     async fn ring_is_regenerated_and_capped() {
@@ -341,10 +340,7 @@ mod tests {
         let st = b.slot_state("0").await.unwrap();
         assert_eq!(st.n_past, 1000);
         assert_eq!(
-            st.checkpoints
-                .iter()
-                .map(|c| c.token_position)
-                .collect::<Vec<_>>(),
+            st.checkpoints.iter().map(|c| c.token_position).collect::<Vec<_>>(),
             vec![800, 900, 1000],
             "only the most recent ring entries survive"
         );
@@ -367,19 +363,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let b = EmbeddedBackend::new().with_ring(100, 8);
         b.advance_to(700);
-        let out = b
-            .save_slot("0", Some(&dir.path().join("s0.json")))
-            .await
-            .unwrap();
+        let out = b.save_slot("0", Some(&dir.path().join("s0.json"))).await.unwrap();
         assert!(out.size_bytes.unwrap() > 0);
 
         b.erase_slot("0").await.unwrap();
         assert_eq!(b.slot_state("0").await.unwrap().n_past, 0);
 
-        let restored = b
-            .restore_slot("0", Path::new(out.file_path.as_ref().unwrap()))
-            .await
-            .unwrap();
+        let restored =
+            b.restore_slot("0", Path::new(out.file_path.as_ref().unwrap())).await.unwrap();
         assert!(restored.restored);
         assert_eq!(b.slot_state("0").await.unwrap().n_past, 700);
     }

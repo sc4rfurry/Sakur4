@@ -63,12 +63,7 @@ impl StdioClient {
 
         let stdin = child.stdin.take().expect("child stdin");
         let stdout = child.stdout.take().expect("child stdout");
-        let mut client = Self {
-            child,
-            stdin,
-            lines: BufReader::new(stdout).lines(),
-            next_id: 1,
-        };
+        let mut client = Self { child, stdin, lines: BufReader::new(stdout).lines(), next_id: 1 };
 
         // Legacy handshake: still the path a plain stdio client takes.
         let init = client
@@ -82,10 +77,7 @@ impl StdioClient {
             )
             .await
             .expect("initialize must succeed");
-        assert_eq!(
-            init["serverInfo"]["name"], "sakur4",
-            "unexpected server identity: {init}"
-        );
+        assert_eq!(init["serverInfo"]["name"], "sakur4", "unexpected server identity: {init}");
 
         client
             .notify("notifications/initialized", json!({}))
@@ -110,7 +102,7 @@ impl StdioClient {
             let line = match tokio::time::timeout(remaining, self.lines.next_line()).await {
                 Ok(Ok(Some(l))) => l,
                 Ok(Ok(None)) => {
-                    return Err(format!("server closed stdout while awaiting {method}"))
+                    return Err(format!("server closed stdout while awaiting {method}"));
                 }
                 Ok(Err(e)) => return Err(format!("read error: {e}")),
                 Err(_) => return Err(format!("timed out waiting for a reply to {method}")),
@@ -142,25 +134,17 @@ impl StdioClient {
     async fn send(&mut self, frame: &Value) -> Result<(), String> {
         let mut line = serde_json::to_string(frame).map_err(|e| e.to_string())?;
         line.push('\n');
-        self.stdin
-            .write_all(line.as_bytes())
-            .await
-            .map_err(|e| format!("write failed: {e}"))?;
+        self.stdin.write_all(line.as_bytes()).await.map_err(|e| format!("write failed: {e}"))?;
         self.stdin.flush().await.map_err(|e| format!("flush failed: {e}"))
     }
 
     /// Call a tool and return its `structuredContent`.
     async fn call_tool(&mut self, name: &str, args: Value) -> Result<Value, String> {
-        let result = self
-            .request("tools/call", json!({"name": name, "arguments": args}))
-            .await?;
+        let result = self.request("tools/call", json!({"name": name, "arguments": args})).await?;
         if result.get("isError").and_then(|v| v.as_bool()) == Some(true) {
             return Err(format!("{name} reported an error: {result}"));
         }
-        Ok(result
-            .get("structuredContent")
-            .cloned()
-            .unwrap_or(Value::Null))
+        Ok(result.get("structuredContent").cloned().unwrap_or(Value::Null))
     }
 }
 
@@ -192,10 +176,7 @@ fn sakur4d_binary() -> PathBuf {
 async fn stdio_handshake_and_tool_catalog() {
     let mut client = StdioClient::spawn().await;
 
-    let tools = client
-        .request("tools/list", json!({}))
-        .await
-        .expect("tools/list");
+    let tools = client.request("tools/list", json!({})).await.expect("tools/list");
     let names: Vec<String> = tools["tools"]
         .as_array()
         .expect("tools array")
@@ -229,16 +210,10 @@ async fn stdio_handshake_and_tool_catalog() {
     // stdio is the transport that has no port and no restarts: if a tool whose
     // whole purpose is statelessness works here, the server is genuinely usable
     // as a child process.
-    let resources = client
-        .request("resources/list", json!({}))
-        .await
-        .expect("resources/list");
+    let resources = client.request("resources/list", json!({})).await.expect("resources/list");
     assert!(!resources["resources"].as_array().unwrap().is_empty());
 
-    let prompts = client
-        .request("prompts/list", json!({}))
-        .await
-        .expect("prompts/list");
+    let prompts = client.request("prompts/list", json!({})).await.expect("prompts/list");
     assert!(
         prompts["prompts"]
             .as_array()
@@ -297,10 +272,7 @@ async fn every_tool_is_callable_over_stdio() {
 
     // Recall finds it.
     let recalled = client
-        .call_tool(
-            "memory.recall",
-            json!({"query": "force-push", "k": 5, "session_id": "stdio"}),
-        )
+        .call_tool("memory.recall", json!({"query": "force-push", "k": 5, "session_id": "stdio"}))
         .await
         .expect("recall");
     assert!(
@@ -339,10 +311,7 @@ async fn every_tool_is_callable_over_stdio() {
 
     // Planning is inspect-only by default.
     let plan = client
-        .call_tool(
-            "context.plan_eviction",
-            json!({"session_id": "stdio", "slot_id": "0"}),
-        )
+        .call_tool("context.plan_eviction", json!({"session_id": "stdio", "slot_id": "0"}))
         .await
         .expect("plan_eviction");
     assert_eq!(plan["applied"], false, "planning must not apply: {plan}");
@@ -350,31 +319,17 @@ async fn every_tool_is_callable_over_stdio() {
 
     // The receipt accounts for the anchors and the history.
     let receipt = client
-        .call_tool(
-            "context.receipt",
-            json!({"session_id": "stdio", "assemble": true}),
-        )
+        .call_tool("context.receipt", json!({"session_id": "stdio", "assemble": true}))
         .await
         .expect("receipt");
     assert!(receipt["breakdown"]["pinned_anchors"].as_u64().unwrap() > 0);
-    assert!(
-        receipt["rendered"]
-            .as_str()
-            .unwrap()
-            .contains("Context Ledger Receipt")
-    );
+    assert!(receipt["rendered"].as_str().unwrap().contains("Context Ledger Receipt"));
 
     // Staleness, status, and the dream cycle are all reachable and non-fatal.
-    let stale = client
-        .call_tool("memory.staleness", json!({}))
-        .await
-        .expect("staleness");
+    let stale = client.call_tool("memory.staleness", json!({})).await.expect("staleness");
     assert!(stale["total"].is_number());
 
-    let status = client
-        .call_tool("sakur4.status", json!({}))
-        .await
-        .expect("status");
+    let status = client.call_tool("sakur4.status", json!({})).await.expect("status");
     assert_eq!(status["protocol_version"], "2026-07-28");
     // Two committed turns plus the summary episode that `unfold` contributed.
     assert!(
@@ -382,10 +337,7 @@ async fn every_tool_is_callable_over_stdio() {
         "expected the two turns and the fold summary, got {status}"
     );
 
-    let dream = client
-        .call_tool("sakur4.dream", json!({"force": true}))
-        .await
-        .expect("dream");
+    let dream = client.call_tool("sakur4.dream", json!({"force": true})).await.expect("dream");
     assert!(dream["ran"].is_boolean(), "got {dream}");
 
     // The code tools answer cleanly even with nothing indexed.
@@ -497,10 +449,7 @@ async fn provider_cache_accounting_detects_a_prefix_break_over_stdio() {
     // The receipt carries the accounting, so a slow or expensive turn is
     // explainable from the same place as a locally re-prefilled one.
     let receipt = client
-        .call_tool(
-            "context.receipt",
-            json!({"session_id": "cloud", "assemble": true}),
-        )
+        .call_tool("context.receipt", json!({"session_id": "cloud", "assemble": true}))
         .await
         .expect("receipt");
     let provider = receipt["provider_cache"]
@@ -527,10 +476,7 @@ async fn a_provider_that_reports_no_cache_fields_is_not_blamed() {
     assert_eq!(out["regression"], false);
     assert_eq!(out["cached_tokens"], Value::Null);
     assert_eq!(out["uncached_tokens"], Value::Null);
-    assert!(
-        out["session_stats"].as_str().unwrap().contains("not reported"),
-        "got {out}"
-    );
+    assert!(out["session_stats"].as_str().unwrap().contains("not reported"), "got {out}");
 }
 
 #[tokio::test]
@@ -559,29 +505,17 @@ async fn malformed_arguments_are_rejected_without_killing_the_session() {
     // rather than skipping it — which is how the bug was found.
     let mut client = StdioClient::spawn().await;
 
-    async fn raw_call(
-        client: &mut StdioClient,
-        name: &str,
-        args: Value,
-    ) -> Result<Value, String> {
-        client
-            .request("tools/call", json!({"name": name, "arguments": args}))
-            .await
+    async fn raw_call(client: &mut StdioClient, name: &str, args: Value) -> Result<Value, String> {
+        client.request("tools/call", json!({"name": name, "arguments": args})).await
     }
 
     // Shape one: a schema failure is an `isError` result, naming the field.
     let r = raw_call(&mut client, "memory.commit_episode", json!({"role": "user"}))
         .await
         .expect("a schema failure is still a successful JSON-RPC response");
-    assert_eq!(
-        r["isError"], true,
-        "a missing required field must set isError: {r}"
-    );
+    assert_eq!(r["isError"], true, "a missing required field must set isError: {r}");
     let text = serde_json::to_string(&r).unwrap();
-    assert!(
-        text.contains("content"),
-        "the rejection must name the missing field: {r}"
-    );
+    assert!(text.contains("content"), "the rejection must name the missing field: {r}");
 
     // Shape two: schema-valid but semantically rejected is a JSON-RPC error that
     // names the offending value, so an adapter author can see what was wrong.
@@ -592,10 +526,7 @@ async fn malformed_arguments_are_rejected_without_killing_the_session() {
     )
     .await
     .expect_err("an invalid role must be rejected");
-    assert!(
-        err.contains("unknown role"),
-        "the rejection must say what was wrong: {err}"
-    );
+    assert!(err.contains("unknown role"), "the rejection must say what was wrong: {err}");
 
     // An unknown tool is a JSON-RPC error, because the tool does not exist.
     let err = raw_call(&mut client, "no.such_tool", json!({}))
@@ -650,10 +581,7 @@ async fn a_large_payload_round_trips_intact() {
     );
 
     let recalled = client
-        .call_tool(
-            "memory.recall",
-            json!({"query": "item_1999", "k": 3, "session_id": "big"}),
-        )
+        .call_tool("memory.recall", json!({"query": "item_1999", "k": 3, "session_id": "big"}))
         .await
         .expect("recall the large payload");
     assert!(
@@ -690,20 +618,14 @@ async fn a_restart_preserves_the_store_and_resumes() {
     assert!(db.exists(), "the store file must persist across a restart");
 
     let mut client = StdioClient::spawn_at(&exe, &db_arg).await;
-    let status = client
-        .call_tool("sakur4.status", json!({}))
-        .await
-        .expect("status after restart");
+    let status = client.call_tool("sakur4.status", json!({})).await.expect("status after restart");
     assert_eq!(
         status["episodes"], 2,
         "episodes committed before the restart must survive it: {status}"
     );
 
     let recalled = client
-        .call_tool(
-            "memory.recall",
-            json!({"query": "survives", "k": 5, "session_id": "restart"}),
-        )
+        .call_tool("memory.recall", json!({"query": "survives", "k": 5, "session_id": "restart"}))
         .await
         .expect("recall after restart");
     assert_eq!(

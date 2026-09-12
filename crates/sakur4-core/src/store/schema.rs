@@ -39,11 +39,8 @@ pub struct Migration {
 }
 
 /// The ordered migration list. Never edit a shipped migration; append instead.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "initial_memory_fabric",
-    sql: V1,
-}];
+pub const MIGRATIONS: &[Migration] =
+    &[Migration { version: 1, name: "initial_memory_fabric", sql: V1 }];
 
 const V1: &str = r#"
 -- ---------------------------------------------------------------------------
@@ -492,11 +489,9 @@ pub fn migrate(conn: &mut rusqlite::Connection) -> Result<(i64, Vec<&'static str
     conn.execute_batch(CONNECTION_PRAGMAS)?;
 
     let has_meta: bool = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'",
-            [],
-            |_| Ok(true),
-        )
+        .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'", [], |_| {
+            Ok(true)
+        })
         .unwrap_or(false);
 
     let current: i64 = if has_meta {

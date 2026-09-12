@@ -253,11 +253,7 @@ impl Receipt {
             self.context_window,
             self.fill_ratio() * 100.0,
             self.tokenizer,
-            if self.backend.is_empty() {
-                "n/a"
-            } else {
-                &self.backend
-            }
+            if self.backend.is_empty() { "n/a" } else { &self.backend }
         ));
 
         out.push_str("  where the budget went:\n");
@@ -288,7 +284,8 @@ impl Receipt {
         if !self.cache_detail.is_empty() {
             out.push_str(&format!("    {}\n", self.cache_detail));
         }
-        if let (Some(reused), Some(prefilled)) = (self.prompt_tokens_reused, self.prompt_tokens_prefilled)
+        if let (Some(reused), Some(prefilled)) =
+            (self.prompt_tokens_reused, self.prompt_tokens_prefilled)
         {
             let ratio = if self.total_tokens == 0 {
                 0.0
@@ -432,11 +429,7 @@ impl ReceiptLog {
                      FROM receipt WHERE (?1 IS NULL OR session_id = ?1)",
                 )?;
                 let rows = stmt.query_map(rusqlite::params![session], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, Option<i64>>(1)?,
-                        r.get::<_, i64>(2)?,
-                    ))
+                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, i64>(2)?))
                 })?;
 
                 let mut s = ReceiptStats::default();
@@ -462,7 +455,8 @@ impl ReceiptLog {
                     s.prompt_eval_ms_avg =
                         latencies.iter().sum::<i64>() as f64 / latencies.len() as f64;
                     let idx = ((latencies.len() as f64) * 0.95).ceil() as usize;
-                    s.prompt_eval_ms_p95 = latencies[idx.saturating_sub(1).min(latencies.len() - 1)];
+                    s.prompt_eval_ms_p95 =
+                        latencies[idx.saturating_sub(1).min(latencies.len() - 1)];
                 }
                 Ok(s)
             })
@@ -499,11 +493,7 @@ impl ReceiptStats {
     /// Whether G1's 80% target is currently being met, over a meaningful sample.
     pub fn meets_g1(&self) -> Option<bool> {
         let considered = self.partial_reuse + self.warm_restored + self.full_re_prefill;
-        if considered < 5 {
-            None
-        } else {
-            Some(self.reuse_ratio() >= 0.80)
-        }
+        if considered < 5 { None } else { Some(self.reuse_ratio() >= 0.80) }
     }
 
     pub fn render(&self) -> String {
@@ -608,12 +598,16 @@ impl ReceiptBuilder {
         counter: &TokenCounter,
         context_window: usize,
     ) -> Self {
-        Self {
-            receipt: Receipt::build(session_id, slot_id, turn, parts, counter, context_window),
-        }
+        Self { receipt: Receipt::build(session_id, slot_id, turn, parts, counter, context_window) }
     }
 
-    pub fn cache(mut self, status: &str, detail: impl Into<String>, reused: usize, prefilled: usize) -> Self {
+    pub fn cache(
+        mut self,
+        status: &str,
+        detail: impl Into<String>,
+        reused: usize,
+        prefilled: usize,
+    ) -> Self {
         self.receipt.cache_status = status.to_string();
         self.receipt.cache_detail = detail.into();
         self.receipt.prompt_tokens_reused = Some(reused);

@@ -17,5 +17,5 @@ pub mod vector;
 
 pub use db::{Db, DbStats, WriteTxn};
 pub use fts::LexicalBackend;
-pub use schema::{migrate, MIGRATIONS};
+pub use schema::{MIGRATIONS, migrate};
 pub use vector::{VectorBackend, VectorHit};

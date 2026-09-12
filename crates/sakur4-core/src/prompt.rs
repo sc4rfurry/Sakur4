@@ -11,7 +11,7 @@
 //! partial reuse.
 //!
 //! So there is exactly one assembler. [`PromptParts`] holds each category as a
-//! separate string; [`PromptParts::positions`] resolves any category offset into
+//! separate string; [`PromptParts::part_offsets`] resolves any category offset into
 //! a whole-prompt token position; and the receipt's per-category breakdown is
 //! computed from the same structure that produced the prompt, which is what makes
 //! FR-15's "sum of category token counts matches the actual prompt token count
@@ -163,28 +163,12 @@ impl PromptParts {
         let mut out: Vec<(RenderedPart, &str, &str)> = Vec::new();
         let pairs: [(RenderedPart, &'static str, &str); 7] = [
             (RenderedPart::System, "", &self.system),
-            (
-                RenderedPart::Anchors,
-                "--- pinned anchors ---",
-                &self.anchors,
-            ),
+            (RenderedPart::Anchors, "--- pinned anchors ---", &self.anchors),
             (RenderedPart::Folds, "--- folded subtasks ---", &self.folds),
-            (
-                RenderedPart::Recall,
-                "--- retrieved memory ---",
-                &self.recall,
-            ),
+            (RenderedPart::Recall, "--- retrieved memory ---", &self.recall),
             (RenderedPart::RepoMap, "--- repository map ---", &self.repo_map),
-            (
-                RenderedPart::Timeline,
-                "--- recent history ---",
-                &self.timeline,
-            ),
-            (
-                RenderedPart::ToolSchemas,
-                "--- tool schemas ---",
-                &self.tool_schemas,
-            ),
+            (RenderedPart::Timeline, "--- recent history ---", &self.timeline),
+            (RenderedPart::ToolSchemas, "--- tool schemas ---", &self.tool_schemas),
         ];
         for (part, header, text) in pairs {
             if !text.trim().is_empty() {
@@ -261,11 +245,7 @@ impl PromptParts {
 
     /// Tokens held by parts the eviction engine cannot touch.
     pub fn fixed_tokens(&self, counter: &TokenCounter) -> usize {
-        self.breakdown(counter)
-            .into_iter()
-            .filter(|(p, _)| !p.is_evictable())
-            .map(|(_, t)| t)
-            .sum()
+        self.breakdown(counter).into_iter().filter(|(p, _)| !p.is_evictable()).map(|(_, t)| t).sum()
     }
 
     /// Tokens in the evictable timeline, measured.
@@ -503,8 +483,7 @@ mod tests {
     #[test]
     fn extra_sections_are_accounted_and_rendered() {
         let mut p = PromptParts::new().with_system("s");
-        p.extra
-            .push(("harness preamble".into(), "always answer briefly".into()));
+        p.extra.push(("harness preamble".into(), "always answer briefly".into()));
         let rendered = p.render();
         assert!(rendered.contains("harness preamble"));
         let breakdown = p.breakdown(&counter());

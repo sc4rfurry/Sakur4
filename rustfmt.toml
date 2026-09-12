@@ -1,0 +1,28 @@
+# Workspace-level rustfmt configuration.
+#
+# Only options available on the *stable* channel appear here. Several that would
+# be nice — `wrap_comments`, `comment_width`, `imports_granularity` — are
+# nightly-only, and a config file that makes every `cargo fmt` invocation print
+# warnings is worse than not having those options. If they stabilise, they are
+# worth revisiting; `wrap_comments` in particular, given how much prose is in
+# these comments.
+#
+# `use_small_heuristics = "Max"` is here because the default breaks short, fully
+# specified calls across three lines:
+#
+#     assert!(
+#         hits.len() == 1,
+#         "expected exactly one hit"
+#     );
+#
+# Test bodies are a large fraction of this repository, and that shape makes them
+# much harder to scan. `Max` keeps them on one line while still wrapping anything
+# genuinely long at `max_width`.
+#
+# `newline_style = "Unix"` matches `.gitattributes`, which normalises the working
+# tree to LF. The stdio transport is a newline-delimited protocol, so a stray CR
+# is not merely untidy here — it is visible in a protocol trace.
+
+edition = "2024"
+use_small_heuristics = "Max"
+newline_style = "Unix"

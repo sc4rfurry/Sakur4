@@ -7,12 +7,32 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.94"
 license = "Apache-2.0"
-repository = "https://github.com/local/sakur4"
-description = "Sakur4 — a cache-coherent memory and context operating system for local coding/research agents."
+license-file = "LICENSE"
+repository = "https://github.com/sakur4/sakur4"
+homepage = "https://github.com/sakur4/sakur4"
+documentation = "https://docs.rs/sakur4-core"
+readme = "README.md"
+keywords = ["mcp", "llm", "agent", "memory", "llama-cpp"]
+categories = ["development-tools", "command-line-utilities"]
+description = "Sakur4 — a cache-coherent memory and context operating system for local coding/research agents. Ships as an MCP server plus companion backends."
+authors = ["Sakur4 contributors"]
+
+[workspace.metadata.release]
+# `cargo-release` is optional, but the intent is recorded here so a maintainer
+# does not have to guess the policy: bump versions, regenerate the changelog, and
+# let CI publish the GitHub release on the tag.
+pre-release-replacements = [
+    { file = "CHANGELOG.md", search = "## \\[Unreleased\\]", replace = "## [Unreleased]\n\nNothing yet.\n\n## [{{version}}] - {{date}}" },
+]
+tag-prefix = "v"
+push-remote = "origin"
+consolidate-commits = false
 
 [workspace.dependencies]
-sakur4-core = { path = "crates/sakur4-core" }
-sakur4-testkit = { path = "crates/sakur4-testkit" }
+# Path *and* version: `cargo package` resolves the version when building the
+# published archive, so a bare path dependency makes the crate unpublishable.
+sakur4-core = { version = "0.1.0", path = "crates/sakur4-core" }
+sakur4-testkit = { version = "0.1.0", path = "crates/sakur4-testkit" }
 
 # --- core runtime ---
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "net", "fs", "io-util", "process"] }

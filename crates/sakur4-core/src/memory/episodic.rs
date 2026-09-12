@@ -18,10 +18,12 @@
 
 use crate::error::{Error, Result};
 use crate::ids::short_hash_str;
-use crate::tokens::{TokenCounter};
+use crate::tokens::TokenCounter;
 
 /// Who produced an episode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     System,
@@ -59,7 +61,18 @@ impl Role {
 ///
 /// Ordering is meaningful: [`EpisodeTier::severity`] is what the eviction engine
 /// compares to decide whether a lower tier still has room to absorb pressure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum EpisodeTier {
     /// Rendered in full.
@@ -123,10 +136,7 @@ impl EpisodeTier {
 
     /// True when the episode contributes no tokens to the live window.
     pub fn is_out_of_window(self) -> bool {
-        matches!(
-            self,
-            EpisodeTier::Referenced | EpisodeTier::Archived | EpisodeTier::Dropped
-        )
+        matches!(self, EpisodeTier::Referenced | EpisodeTier::Archived | EpisodeTier::Dropped)
     }
 }
 
@@ -238,11 +248,7 @@ impl EpisodeRow {
             EpisodeTier::Live => self.content.clone(),
             EpisodeTier::Masked => {
                 let preview: String = self.content.chars().take(160).collect();
-                let suffix = if self.content.chars().count() > 160 {
-                    " …"
-                } else {
-                    ""
-                };
+                let suffix = if self.content.chars().count() > 160 { " …" } else { "" };
                 format!(
                     "[masked {} result: {} tokens, recall with memory.recall episode={}]\n{preview}{suffix}",
                     self.tool_name.as_deref().unwrap_or("tool"),

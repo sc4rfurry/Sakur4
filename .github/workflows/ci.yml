@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref: a push to a branch with an in-flight
+# run makes that run's result irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fail on warnings in CI even where a developer's local build would not, so a
+  # warning cannot be merged and then discovered during a release.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Formatting and lints: fast, and the cheapest place to catch a mistake.
+  # ---------------------------------------------------------------------------
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --all-features
+
+  # ---------------------------------------------------------------------------
+  # Tests on every supported platform.
+  #
+  # The PRD's NFR-8 names Linux and macOS as v1 targets with Windows via WSL2,
+  # but Windows is *also* where this project is developed and where the stdio
+  # transport's newline and path handling is most likely to differ. Testing all
+  # three is cheaper than finding out later.
+  # ---------------------------------------------------------------------------
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # The stdio integration tests spawn the real `sakur4d` binary, so it has to
+      # exist before `cargo test` runs. `cargo test` would normally build it as a
+      # dependency of the integration test, but building it explicitly makes a
+      # compile failure here unmistakable rather than surfacing as a test panic.
+      - name: Build binaries
+        run: cargo build --workspace --bins
+
+      - name: Test
+        run: cargo test --workspace --all-targets
+
+      # The crate must build with no default features removed and with the
+      # documented minimum toolchain; `rust-version` in Cargo.toml is a promise.
+      - name: Verify the declared minimum toolchain
+        if: matrix.os == 'ubuntu-latest'
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94"
+      - name: Build on MSRV
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo build --workspace
+
+  # ---------------------------------------------------------------------------
+  # Documentation: warn-free rustdoc, and doctests actually executed.
+  # ---------------------------------------------------------------------------
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo doc
+        run: cargo doc --workspace --no-deps
+      - name: doctests
+        run: cargo test --workspace --doc
+
+  # ---------------------------------------------------------------------------
+  # Release build, as a smoke test that the optimised profile links.
+  #
+  # `lto = "thin"` and `codegen-units = 1` are release-only settings, so a
+  # release-only link error would otherwise be discovered at tag time.
+  # ---------------------------------------------------------------------------
+  release-build:
+    name: release build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --workspace
+      - name: Smoke-test the binary
+        run: |
+          ./target/release/sakur4d --version
+          ./target/release/sakur4d --db :memory: doctor
+
+  # ---------------------------------------------------------------------------
+  # The crates must be publishable.
+  #
+  # This is not `cargo package --workspace`. `sakur4d` depends on `sakur4-core`
+  # by version *and* path, so it cannot be packaged until `sakur4-core` exists on
+  # crates.io — a real ordering constraint that a naive check would report as a
+  # mysterious failure. So this job verifies the two things that are actually
+  # verifiable before a first publish:
+  #
+  #   * `sakur4-core` fully: `cargo publish --dry-run` extracts the archive,
+  #     builds it in isolation, and stops just short of uploading.
+  #   * every member's manifest and file list, via `cargo package --list`.
+  # ---------------------------------------------------------------------------
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: sakur4-core is publishable
+        run: cargo publish -p sakur4-core --dry-run --allow-dirty
+
+      - name: every manifest packages a sane file list
+        run: |
+          for p in sakur4-core sakur4d sakur4-testkit; do
+            echo "--- $p ---"
+            cargo package -p "$p" --list --allow-dirty >/dev/null
+          done

@@ -5,6 +5,14 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "Sakur4 core: Memory Fabric, Graduated Eviction Engine, Cache-Coherence Layer, Repo Cortex."
+# Inherited explicitly rather than assumed. A published manifest that has lost its
+# repository URL is a crate nobody can find the source of, and crates.io pages
+# read better with a README.
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
 
 [dependencies]
 tokio.workspace = true

@@ -167,9 +167,9 @@ impl BoundaryPlan {
                      the {tolerance}-token tolerance; the pre-rewrite state will be saved so the \
                      prefill is never paid twice"
                 ),
-                (Some(n), _) => format!(
-                    "the checkpoint ring is ahead of the requested cut (at {n}); {why}"
-                ),
+                (Some(n), _) => {
+                    format!("the checkpoint ring is ahead of the requested cut (at {n}); {why}")
+                }
                 _ => format!("{why}; the pre-rewrite state will be saved before the rewrite"),
             },
             snap: None,
@@ -274,12 +274,9 @@ impl BoundaryPlan {
                 self.delta(),
                 self.reason
             ),
-            None => format!(
-                "{} (cut {}): {}",
-                self.status.headline(),
-                self.requested_cut,
-                self.reason
-            ),
+            None => {
+                format!("{} (cut {}): {}", self.status.headline(), self.requested_cut, self.reason)
+            }
         }
     }
 }
@@ -305,7 +302,13 @@ mod tests {
 
     #[test]
     fn aligned_plan_reports_reuse_and_a_zero_or_positive_delta() {
-        let p = BoundaryPlan::aligned(5000, 4608, SnapReason::InternalCheckpoint { delta: 392 }, 8, false);
+        let p = BoundaryPlan::aligned(
+            5000,
+            4608,
+            SnapReason::InternalCheckpoint { delta: 392 },
+            8,
+            false,
+        );
         assert_eq!(p.status, CacheStatus::PartialReuse);
         assert!(p.is_reuse());
         assert_eq!(p.delta(), 392);
@@ -315,7 +318,13 @@ mod tests {
 
     #[test]
     fn exact_hit_has_zero_delta() {
-        let p = BoundaryPlan::aligned(4608, 4608, SnapReason::InternalCheckpoint { delta: 0 }, 3, false);
+        let p = BoundaryPlan::aligned(
+            4608,
+            4608,
+            SnapReason::InternalCheckpoint { delta: 0 },
+            3,
+            false,
+        );
         assert_eq!(p.delta(), 0);
         assert_eq!(p.action, CoherenceAction::EvictAtAlignedBoundary);
     }

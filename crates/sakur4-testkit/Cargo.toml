@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 description = "Test utilities for Sakur4: synthetic repos, fake llama.cpp server, deterministic embeddings."
 
+# Not published: this crate exists so the other two can be tested, and nothing
+# outside this workspace has a reason to depend on it.
+publish = false
+
 [dependencies]
 sakur4-core.workspace = true
 

@@ -57,9 +57,10 @@ impl Db {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
 
         let p = path.clone();
         let (vector_backend, fts5, schema_version) = tokio::task::spawn_blocking(move || {
@@ -245,19 +246,18 @@ impl Db {
             let journal_mode: String = c
                 .query_row("PRAGMA journal_mode", [], |r| r.get(0))
                 .unwrap_or_else(|_| "unknown".into());
-            let page_size: i64 = c
-                .query_row("PRAGMA page_size", [], |r| r.get(0))
-                .unwrap_or(0);
+            let page_size: i64 = c.query_row("PRAGMA page_size", [], |r| r.get(0)).unwrap_or(0);
             let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             // Counts are best-effort: a store mid-migration reports zero rather
             // than failing `doctor`, which is the command an operator reaches for
             // precisely when something is wrong.
-            let scalar = |sql: &str| -> i64 {
-                c.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0)
-            };
+            let scalar =
+                |sql: &str| -> i64 { c.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0) };
             Ok(DbStats {
                 path: path.display().to_string(),
-                schema_version: scalar("SELECT CAST(value AS INTEGER) FROM meta WHERE key='schema_version'"),
+                schema_version: scalar(
+                    "SELECT CAST(value AS INTEGER) FROM meta WHERE key='schema_version'",
+                ),
                 vector_backend: vector_backend.as_str().to_string(),
                 fts5: fts5_available,
                 journal_mode,
@@ -340,21 +340,17 @@ fn is_busy(e: &rusqlite::Error) -> bool {
 pub(crate) fn try_load_sqlite_vec(conn: &Connection) -> VectorBackend {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(explicit) = std::env::var("SAKUR4_SQLITE_VEC_PATH")
-        && !explicit.trim().is_empty() {
-            candidates.push(PathBuf::from(explicit));
-        }
+        && !explicit.trim().is_empty()
+    {
+        candidates.push(PathBuf::from(explicit));
+    }
     if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent() {
-            for name in [
-                "vec0.dll",
-                "libvec0.so",
-                "vec0.so",
-                "libvec0.dylib",
-                "vec0.dylib",
-            ] {
-                candidates.push(dir.join(name));
-            }
+        && let Some(dir) = exe.parent()
+    {
+        for name in ["vec0.dll", "libvec0.so", "vec0.so", "libvec0.dylib", "vec0.dylib"] {
+            candidates.push(dir.join(name));
         }
+    }
 
     for candidate in candidates {
         if !candidate.exists() {
@@ -374,9 +370,8 @@ pub(crate) fn try_load_sqlite_vec(conn: &Connection) -> VectorBackend {
             }
         };
         if loaded {
-            let works = conn
-                .query_row("SELECT vec_version()", [], |r| r.get::<_, String>(0))
-                .is_ok();
+            let works =
+                conn.query_row("SELECT vec_version()", [], |r| r.get::<_, String>(0)).is_ok();
             if works {
                 tracing::info!(path = %candidate.display(), "sqlite-vec loaded");
                 return VectorBackend::SqliteVec;

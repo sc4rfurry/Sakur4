@@ -6,7 +6,7 @@
 //! cover the individual extractors; these cover the walk that assembles
 //! qualified names across nesting.
 
-use sakur4_core::repo::{parse_config, parse_structured, Language};
+use sakur4_core::repo::{Language, parse_config, parse_structured};
 
 /// Every qualified name produced for a snippet.
 ///
@@ -17,11 +17,7 @@ fn names(src: &str, language: Language, path: &str) -> Vec<String> {
         Language::Config => parse_config(src, language, path),
         _ => parse_structured(src, language, path),
     };
-    parsed
-        .extracts
-        .into_iter()
-        .map(|e| e.write.qualified_name)
-        .collect()
+    parsed.extracts.into_iter().map(|e| e.write.qualified_name).collect()
 }
 
 #[test]

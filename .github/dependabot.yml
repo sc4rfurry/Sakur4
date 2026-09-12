@@ -1,0 +1,36 @@
+version: 2
+
+updates:
+  # --- Rust dependencies -----------------------------------------------------
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps"
+    # Grouped by kind, so a week of patch bumps is one reviewable pull request
+    # rather than fifteen.
+    groups:
+      patch-and-minor:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      # Major bumps stay separate: they are the ones that need reading.
+      major:
+        patterns: ["*"]
+        update-types: ["major"]
+    # `tree-sitter` grammars move in lockstep with the runtime, and a mismatch is
+    # a compile error rather than a subtle bug — so let the grammar bumps come
+    # through even when the runtime does not.
+    ignore:
+      - dependency-name: "tree-sitter"
+        update-types: ["version-update:semver-major"]
+
+  # --- GitHub Actions --------------------------------------------------------
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci"

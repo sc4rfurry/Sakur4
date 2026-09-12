@@ -4,12 +4,12 @@
 //! token count is measured the same way, so all accounting flows through
 //! [`TokenCounter`]. Three strategies exist, in descending order of fidelity:
 //!
-//! 1. [`TokenCounter::Backend`] — ask the llama.cpp server's `/tokenize`
+//! 1. [`TokenizerKind::Backend`] — ask the llama.cpp server's `/tokenize`
 //!    endpoint. Exact for the loaded model, including its chat template.
-//! 2. [`TokenCounter::Bpe`] — a local `tokenizer.json` (rust-tokenizers is not
-//!    a dependency by default, so this is engaged only when a caller supplies a
-//!    counter).
-//! 3. [`TokenCounter::Heuristic`] — a character-class model calibrated against
+//! 2. [`TokenizerKind::LocalBpe`] — a local `tokenizer.json` (rust-tokenizers is
+//!    not a dependency by default, so this is engaged only when a caller supplies
+//!    a counter).
+//! 3. [`TokenizerKind::Heuristic`] — a character-class model calibrated against
 //!    BPE behaviour on mixed source code and prose.
 //!
 //! The heuristic is deliberately conservative (it rounds up) because every
@@ -103,9 +103,7 @@ impl Default for TokenCounter {
 
 impl TokenCounter {
     pub fn new(estimator: impl TokenEstimator + 'static) -> Self {
-        Self {
-            inner: Arc::new(estimator),
-        }
+        Self { inner: Arc::new(estimator) }
     }
 
     /// The default, dependency-free estimator.
@@ -162,10 +160,7 @@ pub struct HeuristicTokenizer {
 
 impl Default for HeuristicTokenizer {
     fn default() -> Self {
-        Self {
-            per_message_overhead: 4,
-            chars_per_token: 4.2,
-        }
+        Self { per_message_overhead: 4, chars_per_token: 4.2 }
     }
 }
 
@@ -271,10 +266,7 @@ impl TokenEstimator for CharTokenizer {
         if text.is_empty() {
             return 0;
         }
-        text.chars()
-            .count()
-            .div_ceil(self.chars_per_token.max(1))
-            .max(1)
+        text.chars().count().div_ceil(self.chars_per_token.max(1)).max(1)
     }
 
     fn model_name(&self) -> Option<&str> {
@@ -315,9 +307,7 @@ impl BackendTokenizer {
         let key = blake3::hash(text.as_bytes());
         let mut key_bytes = [0u8; 8];
         key_bytes.copy_from_slice(&key.as_bytes()[..8]);
-        self.counts
-            .lock()
-            .insert(u64::from_le_bytes(key_bytes), tokens);
+        self.counts.lock().insert(u64::from_le_bytes(key_bytes), tokens);
     }
 
     /// Fall back to the heuristic for text the backend has not seen.

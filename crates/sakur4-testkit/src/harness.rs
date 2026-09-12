@@ -109,7 +109,10 @@ impl ScriptedSession {
                 let body = if text.is_empty() {
                     "x".repeat(tokens * 4)
                 } else {
-                    format!("{text} {}", "y".repeat(tokens.saturating_mul(4).saturating_sub(text.len())))
+                    format!(
+                        "{text} {}",
+                        "y".repeat(tokens.saturating_mul(4).saturating_sub(text.len()))
+                    )
                 };
                 self.fabric
                     .commit_episode(
@@ -136,7 +139,8 @@ impl ScriptedSession {
             Step::AssistantTurn { text } => {
                 self.fabric
                     .commit_episode(
-                        NewEpisode::assistant(&self.session_id, text.clone()).with_slot(&self.slot_id),
+                        NewEpisode::assistant(&self.session_id, text.clone())
+                            .with_slot(&self.slot_id),
                         &self.counter,
                         false,
                         false,
@@ -160,10 +164,8 @@ impl ScriptedSession {
     /// Assemble, plan, apply, and record a receipt for the current state.
     pub async fn emit_receipt(&mut self) -> sakur4_core::error::Result<Receipt> {
         let parts = self.assemble_parts(None).await?;
-        let plan = self
-            .engine
-            .plan(&self.session_id, &self.slot_id, self.context_window, &parts)
-            .await?;
+        let plan =
+            self.engine.plan(&self.session_id, &self.slot_id, self.context_window, &parts).await?;
 
         let mut eviction_summary = None;
         if plan.pressure == sakur4_core::evict::Pressure::Compacting && !plan.is_empty() {
@@ -189,9 +191,7 @@ impl ScriptedSession {
         )
         .with_cache(cache.cache_status.as_str(), cache.detail.clone())
         .with_cache_numbers(cache.reused_tokens, cache.prefilled_tokens)
-        .with_backend(sakur4_core::llama::InferenceBackend::name(
-            self.backend.as_ref(),
-        ));
+        .with_backend(sakur4_core::llama::InferenceBackend::name(self.backend.as_ref()));
         if let Some(ms) = cache.prompt_eval_ms {
             receipt = receipt.with_prompt_eval_ms(ms);
         }
@@ -208,15 +208,9 @@ impl ScriptedSession {
         extras: Option<(String, String, String)>,
     ) -> sakur4_core::error::Result<PromptParts> {
         let anchors = self.fabric.anchors(Some(&self.session_id)).await?;
-        let anchor_block = anchors
-            .iter()
-            .map(|a| a.render())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let timeline = self
-            .fabric
-            .timeline(&self.session_id, 10_000_000, &self.counter, false)
-            .await?;
+        let anchor_block = anchors.iter().map(|a| a.render()).collect::<Vec<_>>().join("\n");
+        let timeline =
+            self.fabric.timeline(&self.session_id, 10_000_000, &self.counter, false).await?;
         let mut parts = PromptParts::new()
             .with_system("You are a local coding agent using Sakur4 memory.")
             .with_anchors(anchor_block)
@@ -281,7 +275,8 @@ pub fn endurance_script(tasks: usize, turn_tokens: usize, tool_tokens: usize) ->
         },
         Step::Pin {
             kind: AnchorKind::TaskContract,
-            text: "Every change must keep the public API of src/auth.rs backward compatible.".into(),
+            text: "Every change must keep the public API of src/auth.rs backward compatible."
+                .into(),
         },
     ];
     for i in 0..tasks {
@@ -291,10 +286,7 @@ pub fn endurance_script(tasks: usize, turn_tokens: usize, tool_tokens: usize) ->
             ),
             tokens: turn_tokens,
         });
-        steps.push(Step::ToolResult {
-            tool: "read_file".into(),
-            tokens: tool_tokens,
-        });
+        steps.push(Step::ToolResult { tool: "read_file".into(), tokens: tool_tokens });
         steps.push(Step::AssistantTurn {
             text: format!("Applied task {i}: edited src/auth.rs and left the API unchanged."),
         });
@@ -318,10 +310,7 @@ pub fn single_compaction_script(turn_tokens: usize) -> Vec<Step> {
             text: format!("Turn {i} of the working session."),
             tokens: turn_tokens,
         });
-        steps.push(Step::ToolResult {
-            tool: "grep".into(),
-            tokens: turn_tokens * 2,
-        });
+        steps.push(Step::ToolResult { tool: "grep".into(), tokens: turn_tokens * 2 });
     }
     steps.push(Step::Receipt);
     steps

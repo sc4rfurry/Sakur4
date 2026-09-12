@@ -84,9 +84,10 @@ impl Db {
             for row in rows {
                 let (id, score, snip, sess, fold) = row?;
                 if let Some(want) = session.as_deref()
-                    && sess.as_deref() != Some(want) {
-                        continue;
-                    }
+                    && sess.as_deref() != Some(want)
+                {
+                    continue;
+                }
                 if exclude_folded && fold.is_some() {
                     continue;
                 }
@@ -157,9 +158,10 @@ impl Db {
             for row in rows {
                 let (id, score, snip, proj) = row?;
                 if let Some(want) = project.as_deref()
-                    && proj.as_deref() != Some(want) {
-                        continue;
-                    }
+                    && proj.as_deref() != Some(want)
+                {
+                    continue;
+                }
                 out.push(LexicalHit {
                     source_table: "semantic_atlas".into(),
                     source_id: id,
@@ -196,9 +198,8 @@ impl Db {
                  LIMIT ?3",
             )?;
             for (kind, id) in &anchors {
-                let rows = stmt.query_map(rusqlite::params![kind, id, limit], |r| {
-                    r.get::<_, String>(0)
-                })?;
+                let rows =
+                    stmt.query_map(rusqlite::params![kind, id, limit], |r| r.get::<_, String>(0))?;
                 for row in rows {
                     out.push(row?);
                 }
@@ -241,17 +242,14 @@ fn like_scan_semantic(
         l = tokens.len() + 2
     );
     let mut stmt = c.prepare(&sql)?;
-    let mut params: Vec<Box<dyn rusqlite::ToSql>> = tokens
-        .iter()
-        .map(|t| Box::new(t.clone()) as Box<dyn rusqlite::ToSql>)
-        .collect();
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> =
+        tokens.iter().map(|t| Box::new(t.clone()) as Box<dyn rusqlite::ToSql>).collect();
     params.push(Box::new(project.map(|s| s.to_string())));
     params.push(Box::new(limit.max(1)));
     let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
 
-    let rows = stmt.query_map(refs.as_slice(), |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-    })?;
+    let rows =
+        stmt.query_map(refs.as_slice(), |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
     let mut out = Vec::new();
     for row in rows {
         let (id, content) = row?;
@@ -336,10 +334,8 @@ fn like_scan_episodes(
         lim = tokens.len() + 2
     );
     let mut stmt = c.prepare(&sql)?;
-    let mut params: Vec<Box<dyn rusqlite::ToSql>> = tokens
-        .iter()
-        .map(|t| Box::new(t.clone()) as Box<dyn rusqlite::ToSql>)
-        .collect();
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> =
+        tokens.iter().map(|t| Box::new(t.clone()) as Box<dyn rusqlite::ToSql>).collect();
     params.push(Box::new(session.map(|s| s.to_string())));
     params.push(Box::new(limit.max(1)));
     let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
@@ -381,10 +377,7 @@ mod tests {
 
     #[test]
     fn sanitize_caps_term_count() {
-        let q = (0..40)
-            .map(|i| format!("tok{i}"))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let q = (0..40).map(|i| format!("tok{i}")).collect::<Vec<_>>().join(" ");
         assert_eq!(sanitize_match(&q).matches(" AND ").count(), 11);
     }
 

@@ -93,11 +93,7 @@ pub enum SummaryPolicy {
     Extractive,
     /// Ask an OpenAI-compatible local endpoint to write an interpretation, still
     /// mandatorily anchored.
-    AuxiliaryModel {
-        base_url: String,
-        model: String,
-        max_tokens: usize,
-    },
+    AuxiliaryModel { base_url: String, model: String, max_tokens: usize },
 }
 
 /// What one pass did.
@@ -256,9 +252,7 @@ impl Consolidator {
             for entry in stale.entries.iter().take(self.config.max_regenerations_per_pass) {
                 if !self.is_idle().await {
                     report.interrupted = true;
-                    report
-                        .notes
-                        .push("interrupted by new activity while regenerating".into());
+                    report.notes.push("interrupted by new activity while regenerating".into());
                     break;
                 }
                 let fresh = match self.summarise_anchor(entry.anchor_type, &entry.anchor_id).await {
@@ -276,13 +270,14 @@ impl Consolidator {
                     Ok(updated) => {
                         report.regenerated += 1;
                         if self.config.reembed
-                            && let Err(e) = self.embed_atlas(&updated.atlas_id).await {
-                                report.notes.push(format!("re-embed failed: {e}"));
-                            }
+                            && let Err(e) = self.embed_atlas(&updated.atlas_id).await
+                        {
+                            report.notes.push(format!("re-embed failed: {e}"));
+                        }
                     }
-                    Err(e) => report
-                        .notes
-                        .push(format!("regeneration of {} failed: {e}", entry.atlas_id)),
+                    Err(e) => {
+                        report.notes.push(format!("regeneration of {} failed: {e}", entry.atlas_id))
+                    }
                 }
             }
         }
@@ -300,9 +295,10 @@ impl Consolidator {
 
         // --- 4. archive long-cold, undepended episodes --------------------
         if let Some(days) = self.config.archive_after_days
-            && !report.interrupted {
-                report.archived = self.archive_cold(days).await?;
-            }
+            && !report.interrupted
+        {
+            report.archived = self.archive_cold(days).await?;
+        }
 
         // --- 5. housekeeping ----------------------------------------------
         report.pruned_vectors = self.fabric.db().prune_orphan_vectors().await?;
@@ -353,9 +349,7 @@ impl Consolidator {
             }
             if !self.is_idle().await {
                 report.interrupted = true;
-                report
-                    .notes
-                    .push("interrupted by new activity while promoting".into());
+                report.notes.push("interrupted by new activity while promoting".into());
                 break;
             }
 
@@ -428,9 +422,9 @@ impl Consolidator {
                             let _ = self.embed_atlas(&entry.atlas_id).await;
                         }
                     }
-                    Err(e) => report
-                        .notes
-                        .push(format!("promotion of {} failed: {e}", ep.episode_id)),
+                    Err(e) => {
+                        report.notes.push(format!("promotion of {} failed: {e}", ep.episode_id))
+                    }
                 }
             }
         }
@@ -455,10 +449,7 @@ impl Consolidator {
                     Some(sig) => format!(
                         "{} is declared as `{sig}`{}",
                         fact.qualified_name,
-                        fact.file_path
-                            .as_ref()
-                            .map(|f| format!(" in {f}"))
-                            .unwrap_or_default()
+                        fact.file_path.as_ref().map(|f| format!(" in {f}")).unwrap_or_default()
                     ),
                     None => format!("{} is defined in the project", fact.qualified_name),
                 }))
@@ -476,15 +467,8 @@ impl Consolidator {
     async fn summarise_text(&self, text: &str) -> Result<String> {
         match &self.config.summary_policy {
             SummaryPolicy::Extractive => Ok(extractive_summary(text, 3, 400)),
-            SummaryPolicy::AuxiliaryModel {
-                base_url,
-                model,
-                max_tokens,
-            } => {
-                match self
-                    .call_auxiliary(base_url, model, text, *max_tokens)
-                    .await
-                {
+            SummaryPolicy::AuxiliaryModel { base_url, model, max_tokens } => {
+                match self.call_auxiliary(base_url, model, text, *max_tokens).await {
                     Ok(s) if !s.trim().is_empty() => Ok(s),
                     Ok(_) => Ok(extractive_summary(text, 3, 400)),
                     Err(e) => {
@@ -506,9 +490,8 @@ impl Consolidator {
         text: &str,
         max_tokens: usize,
     ) -> Result<String> {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .build()?;
+        let client =
+            reqwest::Client::builder().timeout(std::time::Duration::from_secs(120)).build()?;
         let body = serde_json::json!({
             "model": model,
             "messages": [
@@ -551,18 +534,10 @@ impl Consolidator {
 
     async fn embed_atlas(&self, atlas_id: &str) -> Result<()> {
         let entry = self.fabric.semantic_entry(atlas_id).await?;
-        let vectors = self
-            .embedder
-            .embed(std::slice::from_ref(&entry.content))
-            .await?;
+        let vectors = self.embedder.embed(std::slice::from_ref(&entry.content)).await?;
         if let Some(v) = vectors.first() {
             self.db
-                .put_vector(
-                    "semantic_atlas",
-                    &entry.atlas_id,
-                    self.embedder.model_id(),
-                    v,
-                )
+                .put_vector("semantic_atlas", &entry.atlas_id, self.embedder.model_id(), v)
                 .await?;
         }
         Ok(())
@@ -599,9 +574,7 @@ impl Consolidator {
             }
             let vectors = self.embedder.embed(std::slice::from_ref(&content)).await?;
             if let Some(v) = vectors.first() {
-                self.db
-                    .put_vector("semantic_atlas", &id, self.embedder.model_id(), v)
-                    .await?;
+                self.db.put_vector("semantic_atlas", &id, self.embedder.model_id(), v).await?;
                 done += 1;
             }
         }
@@ -638,9 +611,9 @@ impl Consolidator {
                 let node = crate::memory::dependency::NodeRef::episode(&ep.episode_id);
                 let graph = self.fabric.graph_around(&node, 128).await?;
                 let dependents = graph.dependents_on(&node, 2, None);
-                let has_atlas = dependents.iter().any(|d| {
-                    d.kind == crate::memory::dependency::NodeKind::SemanticEntry
-                });
+                let has_atlas = dependents
+                    .iter()
+                    .any(|d| d.kind == crate::memory::dependency::NodeKind::SemanticEntry);
                 if !has_atlas && self.config.promote_episodes {
                     // Promote first so archiving does not lose the only summary of
                     // this content.
@@ -656,10 +629,7 @@ impl Consolidator {
                     }
                 }
                 self.fabric
-                    .set_tier(
-                        &ep.episode_id,
-                        crate::memory::episodic::EpisodeTier::Archived,
-                    )
+                    .set_tier(&ep.episode_id, crate::memory::episodic::EpisodeTier::Archived)
                     .await?;
                 archived += 1;
             }
@@ -708,19 +678,16 @@ pub fn extractive_summary(text: &str, sentences: usize, max_chars: usize) -> Str
         .iter()
         .map(|u| {
             u.split(|c: char| !c.is_alphanumeric() && c != '_')
-                .filter(|t| t.len() >= 5 && (t.contains('_') || t.chars().any(|c| c.is_uppercase())))
+                .filter(|t| {
+                    t.len() >= 5 && (t.contains('_') || t.chars().any(|c| c.is_uppercase()))
+                })
                 .map(|t| t.to_lowercase())
                 .collect()
         })
         .collect();
 
     let mut order: Vec<usize> = (0..units.len()).collect();
-    order.sort_by(|a, b| {
-        distinctive[*b]
-            .len()
-            .cmp(&distinctive[*a].len())
-            .then_with(|| a.cmp(b))
-    });
+    order.sort_by(|a, b| distinctive[*b].len().cmp(&distinctive[*a].len()).then_with(|| a.cmp(b)));
     let mut chosen: Vec<usize> = order.into_iter().take(sentences.max(1)).collect();
     chosen.sort_unstable();
 
@@ -804,10 +771,7 @@ mod tests {
     }
 
     fn idle_config() -> ConsolidatorConfig {
-        ConsolidatorConfig {
-            quiet_period_secs: 0,
-            ..Default::default()
-        }
+        ConsolidatorConfig { quiet_period_secs: 0, ..Default::default() }
     }
 
     #[tokio::test]
@@ -817,10 +781,7 @@ mod tests {
         // Simulate an active generation by making the slot unreadable.
         // EmbeddedBackend never reports is_processing, so instead assert the
         // quiet-period gate, which is the part that depends on tracked activity.
-        let cfg = ConsolidatorConfig {
-            quiet_period_secs: 3_600,
-            ..Default::default()
-        };
+        let cfg = ConsolidatorConfig { quiet_period_secs: 3_600, ..Default::default() };
         c.note_activity();
         let (_, c2, _) = rig(cfg).await;
         let report = c2.maybe_run().await.unwrap();
@@ -946,10 +907,7 @@ mod tests {
     async fn short_episodes_are_not_promoted() {
         let (fabric, c, _b) = rig(idle_config()).await;
         let counter = counter();
-        fabric
-            .commit_episode(NewEpisode::user("s1", "ok"), &counter, false, false)
-            .await
-            .unwrap();
+        fabric.commit_episode(NewEpisode::user("s1", "ok"), &counter, false, false).await.unwrap();
         let report = c.maybe_run().await.unwrap();
         assert_eq!(report.promoted, 0);
     }
@@ -1024,11 +982,9 @@ mod tests {
         let all = fabric
             .db()
             .with(|db| {
-                Ok(db.query_row(
-                    "SELECT content FROM semantic_atlas LIMIT 1",
-                    [],
-                    |r| r.get::<_, String>(0),
-                )?)
+                Ok(db.query_row("SELECT content FROM semantic_atlas LIMIT 1", [], |r| {
+                    r.get::<_, String>(0)
+                })?)
             })
             .await
             .unwrap();
@@ -1099,7 +1055,8 @@ mod tests {
         let summary = extractive_summary(text, 2, 400);
         // Every identifier in the summary must appear verbatim in the source.
         for token in summary.split(|c: char| !c.is_alphanumeric() && c != '_') {
-            if token.len() >= 5 && (token.contains('_') || token.chars().any(|c| c.is_uppercase())) {
+            if token.len() >= 5 && (token.contains('_') || token.chars().any(|c| c.is_uppercase()))
+            {
                 assert!(
                     text.contains(token),
                     "summary invented the identifier {token:?}: {summary}"
@@ -1129,10 +1086,7 @@ mod tests {
     fn extractive_summary_is_deterministic() {
         let text = "First the AlphaService starts. Then the BetaWorker consumes a queue. \
                     Finally the GammaReporter writes metrics.";
-        assert_eq!(
-            extractive_summary(text, 2, 300),
-            extractive_summary(text, 2, 300)
-        );
+        assert_eq!(extractive_summary(text, 2, 300), extractive_summary(text, 2, 300));
     }
 
     #[tokio::test]

@@ -21,7 +21,17 @@ use crate::ids::now_rfc3339;
 /// What kind of node an id refers to. Kept as a plain string on the row so the
 /// table does not need a schema change when a new memory type appears, but
 /// parsed into this enum at the API boundary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeKind {
     Episode,
@@ -69,10 +79,7 @@ pub struct NodeRef {
 
 impl NodeRef {
     pub fn new(kind: NodeKind, id: impl Into<String>) -> Self {
-        Self {
-            kind,
-            id: id.into(),
-        }
+        Self { kind, id: id.into() }
     }
 
     pub fn episode(id: impl Into<String>) -> Self {
@@ -97,7 +104,17 @@ impl NodeRef {
 }
 
 /// The edge vocabulary, unified across code and memory.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeKind {
     /// A symbols-level call.
@@ -237,39 +254,37 @@ impl DependencyGraph {
             let dst_kind = NodeKind::parse(&e.dst_type).unwrap_or(NodeKind::Episode);
             let src = NodeRef::new(src_kind, e.src_id.clone());
             let dst = NodeRef::new(dst_kind, e.dst_id.clone());
-            g.out
-                .entry(src.key())
-                .or_default()
-                .push((dst.key(), e.edge_kind, dst.clone()));
-            g.inc
-                .entry(dst.key())
-                .or_default()
-                .push((src.key(), e.edge_kind, src.clone()));
+            g.out.entry(src.key()).or_default().push((dst.key(), e.edge_kind, dst.clone()));
+            g.inc.entry(dst.key()).or_default().push((src.key(), e.edge_kind, src.clone()));
         }
         g
     }
 
     pub fn add_edge(&mut self, src: &NodeRef, dst: &NodeRef, kind: EdgeKind) {
-        self.out
-            .entry(src.key())
-            .or_default()
-            .push((dst.key(), kind, dst.clone()));
-        self.inc
-            .entry(dst.key())
-            .or_default()
-            .push((src.key(), kind, src.clone()));
+        self.out.entry(src.key()).or_default().push((dst.key(), kind, dst.clone()));
+        self.inc.entry(dst.key()).or_default().push((src.key(), kind, src.clone()));
     }
 
     /// Nodes this node depends on (outgoing), transitively.
     ///
     /// `kinds` filters which edge kinds are followed; `None` follows all.
-    pub fn dependents_of(&self, start: &NodeRef, max_depth: usize, kinds: Option<&[EdgeKind]>) -> Vec<ReachedNode> {
+    pub fn dependents_of(
+        &self,
+        start: &NodeRef,
+        max_depth: usize,
+        kinds: Option<&[EdgeKind]>,
+    ) -> Vec<ReachedNode> {
         self.walk(start, max_depth, kinds, Direction::Out)
     }
 
     /// Nodes that depend on this node (incoming), transitively — the
     /// blast-radius direction for `code.impact_of_change` (FR-11).
-    pub fn dependents_on(&self, start: &NodeRef, max_depth: usize, kinds: Option<&[EdgeKind]>) -> Vec<ReachedNode> {
+    pub fn dependents_on(
+        &self,
+        start: &NodeRef,
+        max_depth: usize,
+        kinds: Option<&[EdgeKind]>,
+    ) -> Vec<ReachedNode> {
         self.walk(start, max_depth, kinds, Direction::In)
     }
 
@@ -278,10 +293,7 @@ impl DependencyGraph {
     /// The eviction engine calls this before permitting a `Drop` tier: FR-5
     /// forbids dropping "anything with unresolved dependents".
     pub fn has_dependents(&self, node: &NodeRef) -> bool {
-        self.inc
-            .get(&node.key())
-            .map(|v| !v.is_empty())
-            .unwrap_or(false)
+        self.inc.get(&node.key()).map(|v| !v.is_empty()).unwrap_or(false)
     }
 
     /// Edges leaving `node`, for display.
@@ -326,12 +338,7 @@ impl DependencyGraph {
         }
 
         while let Some((node, depth, via)) = queue.pop_front() {
-            out.push(ReachedNode {
-                kind: node.kind,
-                id: node.id.clone(),
-                depth,
-                via,
-            });
+            out.push(ReachedNode { kind: node.kind, id: node.id.clone(), depth, via });
             if depth >= max_depth {
                 continue;
             }

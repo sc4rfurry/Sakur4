@@ -22,7 +22,9 @@ use crate::error::{Error, Result};
 use crate::ids::{new_id, now_rfc3339, short_hash_str};
 
 /// Which store an entry is anchored to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum AnchorType {
     SymbolicFact,
@@ -78,7 +80,11 @@ pub struct SemanticWrite {
 }
 
 impl SemanticWrite {
-    pub fn new(content: impl Into<String>, anchor_type: AnchorType, anchor_id: impl Into<String>) -> Self {
+    pub fn new(
+        content: impl Into<String>,
+        anchor_type: AnchorType,
+        anchor_id: impl Into<String>,
+    ) -> Self {
         Self {
             content: content.into(),
             anchor_type,
@@ -116,7 +122,11 @@ impl SemanticWrite {
         self
     }
 
-    pub fn also_anchored_to(mut self, anchor_type: AnchorType, anchor_id: impl Into<String>) -> Self {
+    pub fn also_anchored_to(
+        mut self,
+        anchor_type: AnchorType,
+        anchor_id: impl Into<String>,
+    ) -> Self {
         self.extra_anchors.push((anchor_type, anchor_id.into()));
         self
     }
@@ -233,11 +243,7 @@ impl SemanticEntry {
 
     /// Short marker used in recall result lists.
     pub fn staleness_marker(&self) -> &'static str {
-        if self.is_stale {
-            "[STALE]"
-        } else {
-            ""
-        }
+        if self.is_stale { "[STALE]" } else { "" }
     }
 
     /// Deterministic hash of the entry's own content.
@@ -281,11 +287,7 @@ impl StalenessReport {
     /// Staleness rate in `[0,1]`; the leading indicator the PRD wants trending
     /// toward zero once the Idle Consolidator is running.
     pub fn rate(&self) -> f64 {
-        if self.total == 0 {
-            0.0
-        } else {
-            self.stale as f64 / self.total as f64
-        }
+        if self.total == 0 { 0.0 } else { self.stale as f64 / self.total as f64 }
     }
 
     pub fn is_clean(&self) -> bool {
@@ -366,12 +368,7 @@ mod tests {
 
     #[test]
     fn staleness_rate_is_defined_for_an_empty_atlas() {
-        let r = StalenessReport {
-            total: 0,
-            stale: 0,
-            deleted_anchors: 0,
-            entries: Vec::new(),
-        };
+        let r = StalenessReport { total: 0, stale: 0, deleted_anchors: 0, entries: Vec::new() };
         assert_eq!(r.rate(), 0.0);
         assert!(r.is_clean());
     }

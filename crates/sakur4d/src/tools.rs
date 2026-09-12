@@ -29,11 +29,11 @@ use std::sync::Arc;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{
-    CacheScope, CallToolRequestParams, CallToolResponse, GetPromptRequestParams,
-    GetPromptResponse, GetPromptResult, Implementation, ListPromptsResult, ListResourcesResult,
-    ListToolsResult, PaginatedRequestParams, Prompt, PromptMessage, ProtocolVersion,
-    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
-    ResourceContents, ServerCapabilities, ServerInfo,
+    CacheScope, CallToolRequestParams, CallToolResponse, GetPromptRequestParams, GetPromptResponse,
+    GetPromptResult, Implementation, ListPromptsResult, ListResourcesResult, ListToolsResult,
+    PaginatedRequestParams, Prompt, PromptMessage, ProtocolVersion, ReadResourceRequestParams,
+    ReadResourceResponse, ReadResourceResult, Resource, ResourceContents, ServerCapabilities,
+    ServerInfo,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler};
@@ -46,8 +46,8 @@ use sakur4_core::memory::anchor::{AnchorKind, PinRequest};
 use sakur4_core::memory::episodic::{NewEpisode, Role};
 use sakur4_core::prompt::PromptParts;
 use sakur4_core::provider_cache::ProviderUsage;
-use sakur4_core::receipt::Receipt;
 use sakur4_core::recall::RecallFilters;
+use sakur4_core::receipt::Receipt;
 use sakur4_core::{Engine, MCP_PROTOCOL_VERSION};
 
 /// How long a client may cache the tool catalog.
@@ -572,17 +572,13 @@ fn to_error(e: impl std::fmt::Display) -> ErrorData {
 }
 
 /// Assemble the prompt for a session from the Fabric, the way a harness would.
-async fn assemble_parts(engine: &Engine, session: &str, extra_recall: Option<&str>) -> Result<PromptParts, ErrorData> {
-    let anchors = engine
-        .memory()
-        .anchors(Some(session))
-        .await
-        .map_err(to_error)?;
-    let anchor_block = anchors
-        .iter()
-        .map(|a| a.render())
-        .collect::<Vec<_>>()
-        .join("\n");
+async fn assemble_parts(
+    engine: &Engine,
+    session: &str,
+    extra_recall: Option<&str>,
+) -> Result<PromptParts, ErrorData> {
+    let anchors = engine.memory().anchors(Some(session)).await.map_err(to_error)?;
+    let anchor_block = anchors.iter().map(|a| a.render()).collect::<Vec<_>>().join("\n");
     let timeline = engine
         .memory()
         .timeline(session, 1_000_000, engine.tokens(), false)
@@ -608,10 +604,7 @@ pub struct Sakur4Server {
 impl Sakur4Server {
     /// Build the server over an engine.
     pub fn new(engine: Engine) -> Self {
-        Self {
-            engine: Arc::new(engine),
-            tool_router: Self::tool_router(),
-        }
+        Self { engine: Arc::new(engine), tool_router: Self::tool_router() }
     }
 
     pub fn engine(&self) -> &Engine {
@@ -841,12 +834,7 @@ impl Sakur4Server {
         &self,
         Parameters(input): Parameters<RecallFoldInput>,
     ) -> Result<Json<FoldTraceOutput>, ErrorData> {
-        let trace = self
-            .engine
-            .eviction()
-            .recall_fold(&input.fold_id)
-            .await
-            .map_err(to_error)?;
+        let trace = self.engine.eviction().recall_fold(&input.fold_id).await.map_err(to_error)?;
         Ok(Json(FoldTraceOutput {
             fold_id: trace.fold_id,
             description: trace.description,
@@ -891,11 +879,7 @@ impl Sakur4Server {
             .repo_map(input.token_budget, focus, self.engine.tokens())
             .await
             .map_err(to_error)?;
-        Ok(Json(RepoMapOutput {
-            map,
-            tokens_used: used,
-            token_budget: input.token_budget,
-        }))
+        Ok(Json(RepoMapOutput { map, tokens_used: used, token_budget: input.token_budget }))
     }
 
     /// Look up a symbol's current deterministic signature.
@@ -910,12 +894,8 @@ impl Sakur4Server {
         &self,
         Parameters(input): Parameters<QuerySymbolInput>,
     ) -> Result<Json<QuerySymbolOutput>, ErrorData> {
-        let found = self
-            .engine
-            .recall()
-            .query_symbol(&input.qualified_name)
-            .await
-            .map_err(to_error)?;
+        let found =
+            self.engine.recall().query_symbol(&input.qualified_name).await.map_err(to_error)?;
         Ok(Json(match found {
             Some(fact) => QuerySymbolOutput {
                 found: true,
@@ -994,12 +974,7 @@ impl Sakur4Server {
     ) -> Result<Json<SnapshotOutput>, ErrorData> {
         let session = session_or_default(input.session_id);
         let slot = slot_or_default(input.slot_id);
-        let out = self
-            .engine
-            .coherence()
-            .snapshot(&session, &slot)
-            .await
-            .map_err(to_error)?;
+        let out = self.engine.coherence().snapshot(&session, &slot).await.map_err(to_error)?;
         Ok(Json(SnapshotOutput {
             snapshot_id: out.snapshot_id,
             file_path: out.file_path,
@@ -1060,11 +1035,7 @@ impl Sakur4Server {
             let mut r = Receipt::build(
                 &session,
                 Some("0"),
-                self.engine
-                    .receipts()
-                    .next_turn(&session)
-                    .await
-                    .map_err(to_error)?,
+                self.engine.receipts().next_turn(&session).await.map_err(to_error)?,
                 &parts,
                 self.engine.tokens(),
                 window,
@@ -1077,13 +1048,7 @@ impl Sakur4Server {
             }
             r
         } else {
-            match self
-                .engine
-                .receipts()
-                .latest(&session)
-                .await
-                .map_err(to_error)?
-            {
+            match self.engine.receipts().latest(&session).await.map_err(to_error)? {
                 Some(r) => r,
                 None => {
                     let parts = assemble_parts(&self.engine, &session, None).await?;
@@ -1092,12 +1057,7 @@ impl Sakur4Server {
             }
         };
 
-        let stats = self
-            .engine
-            .receipts()
-            .stats(Some(&session))
-            .await
-            .map_err(to_error)?;
+        let stats = self.engine.receipts().stats(Some(&session)).await.map_err(to_error)?;
 
         // Provider-cache accounting, when the harness has been reporting usage
         // through `context.record_usage`. Absent means absent — not zero.
@@ -1154,12 +1114,9 @@ impl Sakur4Server {
     ) -> Result<Json<PlanEvictionOutput>, ErrorData> {
         let slot = slot_or_default(input.slot_id);
         let window = self.engine.context_window().await;
-        let parts = assemble_parts(
-            &self.engine,
-            &input.session_id,
-            input.pending_recall.as_deref(),
-        )
-        .await?;
+        let parts =
+            assemble_parts(&self.engine, &input.session_id, input.pending_recall.as_deref())
+                .await?;
 
         let plan = self
             .engine
@@ -1170,11 +1127,7 @@ impl Sakur4Server {
 
         let mut applied = false;
         if input.apply && !plan.is_empty() && plan.pressure == Pressure::Compacting {
-            self.engine
-                .eviction()
-                .apply(&plan, &parts)
-                .await
-                .map_err(to_error)?;
+            self.engine.eviction().apply(&plan, &parts).await.map_err(to_error)?;
             applied = true;
         }
 
@@ -1243,12 +1196,8 @@ impl Sakur4Server {
             .record_provider_usage(&session, slot.as_deref(), usage)
             .await
             .map_err(to_error)?;
-        let stats = self
-            .engine
-            .db()
-            .provider_cache_stats(Some(&session))
-            .await
-            .map_err(to_error)?;
+        let stats =
+            self.engine.db().provider_cache_stats(Some(&session)).await.map_err(to_error)?;
 
         Ok(Json(RecordUsageOutput {
             turn: record.turn,
@@ -1310,10 +1259,7 @@ impl Sakur4Server {
     async fn status(&self) -> Result<Json<StatusOutput>, ErrorData> {
         let s = self.engine.status().await.map_err(to_error)?;
         let coherence = if s.capabilities.can_align_boundaries() {
-            format!(
-                "checkpoint-aligned compaction available ({})",
-                s.cache_summary
-            )
+            format!("checkpoint-aligned compaction available ({})", s.cache_summary)
         } else if s.capabilities.reachable {
             format!(
                 "no usable checkpoint source ({}) — compaction will report full re-prefill",
@@ -1398,7 +1344,7 @@ impl ServerHandler for Sakur4Server {
         info.protocol_version = ProtocolVersion::V_2026_07_28;
         info.server_info = Implementation::new("sakur4", env!("CARGO_PKG_VERSION"));
         info.instructions = Some(
-                "Sakur4 is a memory and context layer for long local agent sessions.\n\
+            "Sakur4 is a memory and context layer for long local agent sessions.\n\
                  \n\
                  How to work with it:\n\
                  * Commit each turn and tool result with memory.commit_episode. That is the \
@@ -1490,31 +1436,16 @@ impl ServerHandler for Sakur4Server {
                 .map_err(to_error)?;
             format!("{map}\n({used} tokens)")
         } else if uri == "sakur4://receipt/latest" {
-            match self
-                .engine
-                .receipts()
-                .latest("default")
-                .await
-                .map_err(to_error)?
-            {
+            match self.engine.receipts().latest("default").await.map_err(to_error)? {
                 Some(r) => r.render(),
                 None => "no receipt recorded yet; call context.receipt to assemble one".into(),
             }
         } else if uri.starts_with("sakur4://anchors/") {
-            let anchors = self
-                .engine
-                .memory()
-                .anchors(None)
-                .await
-                .map_err(to_error)?;
+            let anchors = self.engine.memory().anchors(None).await.map_err(to_error)?;
             if anchors.is_empty() {
                 "the Anchor Set is empty".to_string()
             } else {
-                anchors
-                    .iter()
-                    .map(|a| a.render())
-                    .collect::<Vec<_>>()
-                    .join("\n")
+                anchors.iter().map(|a| a.render()).collect::<Vec<_>>().join("\n")
             }
         } else if uri.starts_with("sakur4://status/") {
             let s = self.engine.status().await.map_err(to_error)?;
@@ -1535,15 +1466,12 @@ impl ServerHandler for Sakur4Server {
                 s.repo_files
             )
         } else {
-            return Err(ErrorData::resource_not_found(
-                format!("unknown resource {uri}"),
-                None,
-            ));
+            return Err(ErrorData::resource_not_found(format!("unknown resource {uri}"), None));
         };
 
-        Ok(ReadResourceResponse::Complete(
-            ReadResourceResult::new(vec![ResourceContents::text(text, uri)]),
-        ))
+        Ok(ReadResourceResponse::Complete(ReadResourceResult::new(vec![ResourceContents::text(
+            text, uri,
+        )])))
     }
 
     async fn list_prompts(
@@ -1576,11 +1504,8 @@ impl ServerHandler for Sakur4Server {
             ));
         }
         Ok(GetPromptResponse::Complete(
-            GetPromptResult::new(vec![PromptMessage::new_text(
-                rmcp::model::Role::User,
-                PREAMBLE,
-            )])
-            .with_description("Sakur4 working preamble"),
+            GetPromptResult::new(vec![PromptMessage::new_text(rmcp::model::Role::User, PREAMBLE)])
+                .with_description("Sakur4 working preamble"),
         ))
     }
 }

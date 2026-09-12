@@ -21,7 +21,8 @@
 //! HTTP headers, git diffs and exit codes all have structure, and structure can
 //! be extracted deterministically. Free-form prose has no symbolic anchor — and
 //! the PRD is explicit that Sakur4 must *say so* rather than pretend otherwise,
-//! which is why [`ToolOutputParser::parse`] returns `None` instead of guessing.
+//! which is why [`ToolOutputParser::parse_any`] reports that it found no structure
+//! instead of guessing.
 
 use serde_json::Value;
 
@@ -30,7 +31,9 @@ use crate::ids::{normalize_rel_path, short_hash_str};
 use crate::tokens::TokenCounter;
 
 /// What kind of thing a fact describes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum FactKind {
     Function,
@@ -121,12 +124,14 @@ impl FactKind {
 }
 
 /// The closed set of deterministic extractors permitted to write the Ledger.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum FactSource {
     /// tree-sitter parse of a source file.
     TreeSitter,
-    /// A structured-output parser in [`crate::memory::symbolic::parser`].
+    /// A structured-output parser in [`ToolOutputParser`].
     ToolOutputParser,
     /// A top-level command name parsed from a POSIX command string.
     CommandName,
@@ -320,11 +325,7 @@ impl ToolOutputFacts {
 
     /// Attach token counts so the Ledger knows what each fact would cost.
     pub fn total_body_tokens(&self, counter: &TokenCounter) -> usize {
-        self.facts
-            .iter()
-            .filter_map(|f| f.body.as_deref())
-            .map(|b| counter.count(b).get())
-            .sum()
+        self.facts.iter().filter_map(|f| f.body.as_deref()).map(|b| counter.count(b).get()).sum()
     }
 }
 
@@ -345,9 +346,10 @@ impl ToolOutputParser {
         if let Some(name) = tool_name {
             let n = name.to_ascii_lowercase();
             if (n.contains("diff") || n.contains("patch"))
-                && let Some(f) = Self::parse_diff(content) {
-                    return f;
-                }
+                && let Some(f) = Self::parse_diff(content)
+            {
+                return f;
+            }
         }
         if let Some(f) = Self::parse_json(content) {
             return f;
@@ -416,9 +418,7 @@ impl ToolOutputParser {
             };
             if name.is_empty()
                 || name.len() > 64
-                || !name
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
             {
                 if facts.is_empty() {
                     return None;
@@ -441,22 +441,15 @@ impl ToolOutputParser {
         if let Some(s) = status {
             summary.push_str(&format!(" from {s}"));
         }
-        Some(ToolOutputFacts {
-            summary,
-            facts,
-            parser: Some("http_headers"),
-        })
+        Some(ToolOutputFacts { summary, facts, parser: Some("http_headers") })
     }
 
     /// Comma- or tab-separated tabular data with a header row.
     pub fn parse_csv(content: &str) -> Option<ToolOutputFacts> {
         let mut lines = content.lines().filter(|l| !l.trim().is_empty());
         let header = lines.next()?;
-        let delimiter = if header.matches('\t').count() > header.matches(',').count() {
-            '\t'
-        } else {
-            ','
-        };
+        let delimiter =
+            if header.matches('\t').count() > header.matches(',').count() { '\t' } else { ',' };
         if header.matches(delimiter).count() < 1 {
             return None;
         }
@@ -552,11 +545,7 @@ fn flatten_json(value: &Value, prefix: String, out: &mut Vec<SymbolicWrite>, dep
     match value {
         Value::Object(map) => {
             for (k, v) in map {
-                let path = if prefix.is_empty() {
-                    k.clone()
-                } else {
-                    format!("{prefix}.{k}")
-                };
+                let path = if prefix.is_empty() { k.clone() } else { format!("{prefix}.{k}") };
                 match v {
                     Value::Object(_) | Value::Array(_) => flatten_json(v, path, out, depth + 1),
                     _ => out.push(json_leaf(&path, v)),
@@ -613,11 +602,8 @@ mod tests {
 
     #[test]
     fn ast_hash_is_stable_for_identical_input() {
-        let make = || {
-            SymbolicWrite::new(FactKind::Function, "m::f")
-                .signature("fn f()")
-                .body("fn f() {}")
-        };
+        let make =
+            || SymbolicWrite::new(FactKind::Function, "m::f").signature("fn f()").body("fn f() {}");
         assert_eq!(make().ast_hash(), make().ast_hash());
     }
 
@@ -631,7 +617,8 @@ mod tests {
 
     #[test]
     fn json_parser_flattens_leaf_paths() {
-        let out = ToolOutputParser::parse_json(r#"{"user":{"id":1,"name":"a"},"ok":true}"#).unwrap();
+        let out =
+            ToolOutputParser::parse_json(r#"{"user":{"id":1,"name":"a"},"ok":true}"#).unwrap();
         let names: Vec<&str> = out.facts.iter().map(|f| f.qualified_name.as_str()).collect();
         assert!(names.contains(&"user.id"));
         assert!(names.contains(&"user.name"));

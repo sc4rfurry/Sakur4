@@ -55,10 +55,7 @@ impl FixtureSpec {
 
     /// A larger repository, for incremental-index timing checks.
     pub fn large(files: usize) -> Self {
-        Self {
-            filler_files: files,
-            ..Default::default()
-        }
+        Self { filler_files: files, ..Default::default() }
     }
 }
 
@@ -288,25 +285,16 @@ func route(path string) string {
             "config/app.json",
             "{\n  \"name\": \"fixture\",\n  \"port\": 8080,\n  \"nested\": {\n    \"deep\": true\n  }\n}\n",
         )?;
-        w(
-            "config/app.toml",
-            "[server]\nport = 8080\nhost = \"localhost\"\n",
-        )?;
+        w("config/app.toml", "[server]\nport = 8080\nhost = \"localhost\"\n")?;
         w(
             "schema.sql",
             "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);\nCREATE VIEW active AS SELECT * FROM users;\n",
         )?;
-        w(
-            "scripts/deploy.sh",
-            "#!/bin/bash\nfunction deploy() {\n  echo deploying\n}\n",
-        )?;
+        w("scripts/deploy.sh", "#!/bin/bash\nfunction deploy() {\n  echo deploying\n}\n")?;
     }
 
     if spec.broken {
-        w(
-            "src/broken.rs",
-            "pub fn ok() -> u8 { 1 }\npub fn nope( {{{ \n",
-        )?;
+        w("src/broken.rs", "pub fn ok() -> u8 { 1 }\npub fn nope( {{{ \n")?;
     }
 
     for i in 0..spec.filler_files {

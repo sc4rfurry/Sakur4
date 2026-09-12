@@ -43,9 +43,8 @@ async fn start_gateway() -> (String, Arc<Engine>, tokio::task::JoinHandle<()>) {
     let engine = Arc::new(Engine::open(cfg).await.expect("engine opens"));
     let server = sakur4d::tools::Sakur4Server::new((*engine).clone());
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind an ephemeral port");
+    let listener =
+        tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind an ephemeral port");
     let addr = listener.local_addr().expect("local addr");
 
     let service: rmcp::transport::streamable_http_server::StreamableHttpService<
@@ -75,10 +74,7 @@ async fn connect(
     base_url: &str,
 ) -> rmcp::service::RunningService<rmcp::service::RoleClient, SilentClient> {
     let transport = StreamableHttpClientTransport::from_uri(base_url.to_string());
-    SilentClient
-        .serve(transport)
-        .await
-        .expect("client connects and negotiates")
+    SilentClient.serve(transport).await.expect("client connects and negotiates")
 }
 
 /// Extract the JSON body of a tool result.
@@ -103,10 +99,8 @@ async fn call(
         serde_json::Value::Null => {}
         other => panic!("tool arguments must be an object or null, got {other}"),
     }
-    let result = client
-        .call_tool(params)
-        .await
-        .unwrap_or_else(|e| panic!("calling {name} failed: {e}"));
+    let result =
+        client.call_tool(params).await.unwrap_or_else(|e| panic!("calling {name} failed: {e}"));
     tool_json(&result)
 }
 
@@ -119,10 +113,7 @@ async fn the_tool_catalog_is_stable_cacheable_and_complete() {
     let second = client.list_tools(None).await.expect("tools/list again");
 
     // FR-14: the catalog is cacheable and byte-identical when nothing changed.
-    assert!(
-        first.ttl_ms.is_some(),
-        "list responses must carry ttlMs for the 2026-07-28 revision"
-    );
+    assert!(first.ttl_ms.is_some(), "list responses must carry ttlMs for the 2026-07-28 revision");
     assert!(first.cache_scope.is_some(), "cacheScope must be present");
     assert_eq!(
         serde_json::to_string(&first.tools).unwrap(),
@@ -164,37 +155,23 @@ async fn resources_and_prompts_are_listed_with_the_prd_uris() {
 
     let resources = client.list_resources(None).await.expect("resources/list");
     let uris: Vec<&str> = resources.resources.iter().map(|r| r.uri.as_str()).collect();
-    assert!(
-        uris.iter().any(|u| u.starts_with("sakur4://repo-map/")),
-        "got {uris:?}"
-    );
+    assert!(uris.iter().any(|u| u.starts_with("sakur4://repo-map/")), "got {uris:?}");
     assert!(uris.contains(&"sakur4://receipt/latest"), "got {uris:?}");
-    assert!(
-        uris.iter().any(|u| u.starts_with("sakur4://anchors/")),
-        "got {uris:?}"
-    );
+    assert!(uris.iter().any(|u| u.starts_with("sakur4://anchors/")), "got {uris:?}");
 
     // The receipt resource is uncached by design: it describes one turn.
     let prompts = client.list_prompts(None).await.expect("prompts/list");
     assert!(
-        prompts
-            .prompts
-            .iter()
-            .any(|p| p.name == "sakur4_system_preamble"),
+        prompts.prompts.iter().any(|p| p.name == "sakur4_system_preamble"),
         "the preamble prompt must be discoverable"
     );
 
     let got = client
-        .get_prompt(rmcp::model::GetPromptRequestParams::new(
-            "sakur4_system_preamble",
-        ))
+        .get_prompt(rmcp::model::GetPromptRequestParams::new("sakur4_system_preamble"))
         .await
         .expect("prompts/get");
     let text = format!("{got:?}");
-    assert!(
-        text.contains("memory.fold"),
-        "the preamble must tell the model how to fold"
-    );
+    assert!(text.contains("memory.fold"), "the preamble must tell the model how to fold");
     client.cancel().await.ok();
 }
 
@@ -208,10 +185,7 @@ async fn a_full_session_round_trips_through_the_gateway() {
     assert_eq!(status["protocol_version"], "2026-07-28");
     assert_eq!(status["backend"], "sakur4://embedded");
     assert!(
-        status["cache_coherence"]
-            .as_str()
-            .unwrap()
-            .contains("checkpoint-aligned"),
+        status["cache_coherence"].as_str().unwrap().contains("checkpoint-aligned"),
         "the embedded backend supports alignment; got {}",
         status["cache_coherence"]
     );
@@ -280,16 +254,8 @@ async fn a_full_session_round_trips_through_the_gateway() {
         receipt["breakdown"]["pinned_anchors"].as_u64().unwrap() > 0,
         "pinned anchors must appear in the breakdown; got {receipt}"
     );
-    assert!(
-        receipt["breakdown"]["raw_recent_history"].as_u64().unwrap() > 0,
-        "got {receipt}"
-    );
-    assert!(
-        receipt["rendered"]
-            .as_str()
-            .unwrap()
-            .contains("Context Ledger Receipt")
-    );
+    assert!(receipt["breakdown"]["raw_recent_history"].as_u64().unwrap() > 0, "got {receipt}");
+    assert!(receipt["rendered"].as_str().unwrap().contains("Context Ledger Receipt"));
     // Sum of categories must match the measured total, within tolerance.
     let b = &receipt["breakdown"];
     let sum: u64 = [
@@ -320,10 +286,11 @@ async fn a_full_session_round_trips_through_the_gateway() {
     )
     .await;
     assert!(
-        recalled["results"].as_array().unwrap().iter().any(|r| r["text"]
-            .as_str()
+        recalled["results"]
+            .as_array()
             .unwrap()
-            .contains("force-push")),
+            .iter()
+            .any(|r| r["text"].as_str().unwrap().contains("force-push")),
         "recall must find the committed turn; got {recalled}"
     );
 
@@ -372,12 +339,9 @@ async fn a_full_session_round_trips_through_the_gateway() {
         "the folded trace must remain retrievable; got {unfolded}"
     );
 
-    let trace = call(
-        &client,
-        "memory.recall_fold",
-        serde_json::json!({"fold_id": folded["fold_id"]}),
-    )
-    .await;
+    let trace =
+        call(&client, "memory.recall_fold", serde_json::json!({"fold_id": folded["fold_id"]}))
+            .await;
     assert_eq!(trace["status"], "closed");
     assert_eq!(trace["result_summary"], "validate() is called from login() only");
 
@@ -388,14 +352,8 @@ async fn a_full_session_round_trips_through_the_gateway() {
         serde_json::json!({"session_id": "mcp-test", "slot_id": "0"}),
     )
     .await;
-    assert!(
-        plan["pressure"].is_string(),
-        "the plan must report pressure; got {plan}"
-    );
-    assert_eq!(
-        plan["applied"], false,
-        "planning must not apply anything unless asked"
-    );
+    assert!(plan["pressure"].is_string(), "the plan must report pressure; got {plan}");
+    assert_eq!(plan["applied"], false, "planning must not apply anything unless asked");
 
     // 10 · staleness reporting is available even with an empty Atlas.
     let stale = call(&client, "memory.staleness", serde_json::json!({})).await;
@@ -420,11 +378,7 @@ async fn symbol_and_impact_tools_answer_over_the_wire() {
     // Index a small real repository so the Ledger has content.
     let repo = sakur4_testkit::FixtureRepo::create(sakur4_testkit::FixtureSpec::minimal())
         .expect("fixture repo");
-    engine
-        .repo()
-        .index(repo.root())
-        .await
-        .expect("index the fixture");
+    engine.repo().index(repo.root()).await.expect("index the fixture");
 
     // The fixture's call chain is bootstrap -> login_handler -> login -> validate,
     // so the blast radius of `validate` is known in advance.
@@ -465,27 +419,13 @@ async fn symbol_and_impact_tools_answer_over_the_wire() {
     .await;
     assert_eq!(missing["found"], false);
     assert!(
-        missing["note"]
-            .as_str()
-            .unwrap()
-            .to_lowercase()
-            .contains("symbolic ledger"),
+        missing["note"].as_str().unwrap().to_lowercase().contains("symbolic ledger"),
         "an unknown symbol must be a clean negative that names the reason: {missing}"
     );
 
     // The repo map respects its budget and reports what it used.
-    let small = call(
-        &client,
-        "code.get_repo_map",
-        serde_json::json!({"token_budget": 150}),
-    )
-    .await;
-    let large = call(
-        &client,
-        "code.get_repo_map",
-        serde_json::json!({"token_budget": 4000}),
-    )
-    .await;
+    let small = call(&client, "code.get_repo_map", serde_json::json!({"token_budget": 150})).await;
+    let large = call(&client, "code.get_repo_map", serde_json::json!({"token_budget": 4000})).await;
     let small_used = small["tokens_used"].as_u64().unwrap();
     let large_used = large["tokens_used"].as_u64().unwrap();
     assert!(

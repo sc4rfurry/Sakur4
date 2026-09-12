@@ -37,12 +37,14 @@ use crate::error::{Error, Result};
 use crate::ids::{content_hash, normalize_rel_path, now_rfc3339, short_hash_str};
 use crate::memory::dependency::{EdgeKind, EdgeRow, NodeRef};
 use crate::memory::fabric::MemoryFabric;
-use crate::memory::symbolic::{FactSource, FactKind, SymbolicFact, SymbolicWrite};
+use crate::memory::symbolic::{FactKind, FactSource, SymbolicFact, SymbolicWrite};
 use crate::store::Db;
 use crate::tokens::TokenCounter;
 
 /// A language Sakur4 can parse.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Language {
     Python,
@@ -79,11 +81,7 @@ impl Language {
 
     /// Detect from a path.
     pub fn from_path(path: &Path) -> Self {
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
         match ext.as_str() {
             "py" | "pyi" => Language::Python,
             "ts" | "mts" | "cts" => Language::TypeScript,
@@ -151,9 +149,7 @@ impl IndexReport {
             let mut v: Vec<(String, usize)> =
                 self.languages.iter().map(|(k, v)| (k.clone(), *v)).collect();
             v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            v.into_iter()
-                .map(|(k, n)| format!("{k}×{n}"))
-                .collect()
+            v.into_iter().map(|(k, n)| format!("{k}×{n}")).collect()
         };
         format!(
             "{} scanned, {} parsed, {} unchanged, {} removed, {} unsupported · \
@@ -203,12 +199,7 @@ pub struct RepoCortex {
 
 impl RepoCortex {
     pub fn new(db: Db, fabric: MemoryFabric, project_id: String) -> Self {
-        Self {
-            db,
-            fabric,
-            project_id,
-            config: RepoCortexConfig::default(),
-        }
+        Self { db, fabric, project_id, config: RepoCortexConfig::default() }
     }
 
     pub fn with_config(mut self, config: RepoCortexConfig) -> Self {
@@ -256,10 +247,7 @@ impl RepoCortex {
 
         let known = self.known_files().await?;
         let files = discover_files(&root, &self.config);
-        let mut report = IndexReport {
-            files_scanned: files.len(),
-            ..Default::default()
-        };
+        let mut report = IndexReport { files_scanned: files.len(), ..Default::default() };
 
         let mut seen: HashSet<String> = HashSet::new();
         let mut all_facts: Vec<SymbolicFact> = Vec::new();
@@ -276,9 +264,7 @@ impl RepoCortex {
             let bytes = match std::fs::read(abs) {
                 Ok(b) => b,
                 Err(e) => {
-                    report
-                        .warnings
-                        .push(format!("could not read {rel}: {e}"));
+                    report.warnings.push(format!("could not read {rel}: {e}"));
                     continue;
                 }
             };
@@ -292,32 +278,33 @@ impl RepoCortex {
 
             if incremental
                 && let Some((old_hash, _)) = known.get(&rel)
-                    && old_hash == &hash {
-                        report.files_skipped_unchanged += 1;
-                        let symbols = self
-                            .db
-                            .with({
-                                let p = self.project_id.clone();
-                                let r = rel.clone();
-                                move |c| {
-                                    Ok(c.query_row(
-                                        "SELECT symbols FROM repo_file WHERE project_id=?1 AND rel_path=?2",
-                                        rusqlite::params![p, r],
-                                        |row| row.get::<_, i64>(0),
-                                    )
-                                    .unwrap_or(0))
-                                }
-                            })
-                            .await?;
-                        file_rows.push((
-                            rel,
-                            language.as_str().to_string(),
-                            hash,
-                            bytes.len() as i64,
-                            symbols,
-                        ));
-                        continue;
-                    }
+                && old_hash == &hash
+            {
+                report.files_skipped_unchanged += 1;
+                let symbols = self
+                    .db
+                    .with({
+                        let p = self.project_id.clone();
+                        let r = rel.clone();
+                        move |c| {
+                            Ok(c.query_row(
+                                "SELECT symbols FROM repo_file WHERE project_id=?1 AND rel_path=?2",
+                                rusqlite::params![p, r],
+                                |row| row.get::<_, i64>(0),
+                            )
+                            .unwrap_or(0))
+                        }
+                    })
+                    .await?;
+                file_rows.push((
+                    rel,
+                    language.as_str().to_string(),
+                    hash,
+                    bytes.len() as i64,
+                    symbols,
+                ));
+                continue;
+            }
 
             let source = String::from_utf8_lossy(&bytes).to_string();
             if language == Language::Unsupported {
@@ -333,10 +320,7 @@ impl RepoCortex {
             };
 
             report.files_parsed += 1;
-            *report
-                .languages
-                .entry(language.as_str().to_string())
-                .or_insert(0) += 1;
+            *report.languages.entry(language.as_str().to_string()).or_insert(0) += 1;
 
             let mut name_to_fact: HashMap<String, String> = HashMap::new();
             for ex in &parsed.extracts {
@@ -364,10 +348,7 @@ impl RepoCortex {
                 }
                 file_extracts.push(ExtractRef {
                     fact_id,
-                    qualified_name: ex
-                        .write
-                        .qualified_name
-                        .clone(),
+                    qualified_name: ex.write.qualified_name.clone(),
                     references: ex.references.clone(),
                     is_import: ex.is_import,
                 });
@@ -383,11 +364,7 @@ impl RepoCortex {
         }
 
         // Files that disappeared since the last index.
-        let removed: Vec<String> = known
-            .keys()
-            .filter(|k| !seen.contains(*k))
-            .cloned()
-            .collect();
+        let removed: Vec<String> = known.keys().filter(|k| !seen.contains(*k)).cloned().collect();
         report.files_removed = removed.len();
 
         // Second pass: resolve references across files now that every file's
@@ -425,11 +402,7 @@ impl RepoCortex {
                 all_edges.push(EdgeRow::new(
                     &NodeRef::fact(src_id),
                     &NodeRef::fact(dst_id),
-                    if ex.is_import {
-                        EdgeKind::Imports
-                    } else {
-                        EdgeKind::Calls
-                    },
+                    if ex.is_import { EdgeKind::Imports } else { EdgeKind::Calls },
                 ));
             }
         }
@@ -517,10 +490,7 @@ impl RepoCortex {
     pub async fn reindex_file(&self, root: &Path, rel_path: &str) -> Result<IndexReport> {
         let started = std::time::Instant::now();
         let abs = root.join(rel_path);
-        let mut report = IndexReport {
-            files_scanned: 1,
-            ..Default::default()
-        };
+        let mut report = IndexReport { files_scanned: 1, ..Default::default() };
         if !abs.exists() {
             self.fabric.forget_files(vec![rel_path.to_string()]).await?;
             let project = self.project_id.clone();
@@ -564,10 +534,7 @@ impl RepoCortex {
             .collect();
         report.symbols_extracted = facts.len();
         report.files_parsed = 1;
-        *report
-            .languages
-            .entry(language.as_str().to_string())
-            .or_insert(0) += 1;
+        *report.languages.entry(language.as_str().to_string()).or_insert(0) += 1;
 
         // Replace this file's facts wholesale so deleted symbols actually go away.
         self.fabric.forget_files(vec![rel_path.to_string()]).await?;
@@ -607,10 +574,7 @@ impl RepoCortex {
                     "SELECT rel_path, content_hash, symbols FROM repo_file WHERE project_id = ?1",
                 )?;
                 let rows = stmt.query_map([project], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        (r.get::<_, String>(1)?, r.get::<_, i64>(2)?),
-                    ))
+                    Ok((r.get::<_, String>(0)?, (r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))
                 })?;
                 let mut out = HashMap::new();
                 for row in rows {
@@ -686,11 +650,7 @@ impl RepoCortex {
                     .iter()
                     .map(|s| {
                         let base = importance.get(&s.fact_id).copied().unwrap_or(1.0);
-                        let focus = if boosted.contains(&s.fact_id) {
-                            3.0
-                        } else {
-                            1.0
-                        };
+                        let focus = if boosted.contains(&s.fact_id) { 3.0 } else { 1.0 };
                         base * focus
                     })
                     .fold(0.0f64, f64::max);
@@ -698,9 +658,7 @@ impl RepoCortex {
             })
             .collect();
         files.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0.cmp(&b.0))
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.0.cmp(&b.0))
         });
 
         // --- render with a monotonic budget ----------------------------------
@@ -823,10 +781,8 @@ impl RepoCortex {
             .await?;
 
         let n = facts.len().max(1);
-        let mut rank: HashMap<String, f64> = facts
-            .iter()
-            .map(|f| (f.fact_id.clone(), 1.0 / n as f64))
-            .collect();
+        let mut rank: HashMap<String, f64> =
+            facts.iter().map(|f| (f.fact_id.clone(), 1.0 / n as f64)).collect();
         let mut out_degree: HashMap<String, usize> = HashMap::new();
         for (src, _) in &edges {
             *out_degree.entry(src.clone()).or_insert(0) += 1;
@@ -834,10 +790,8 @@ impl RepoCortex {
 
         let d = self.config.damping.clamp(0.0, 1.0);
         for _ in 0..20 {
-            let mut next: HashMap<String, f64> = facts
-                .iter()
-                .map(|f| (f.fact_id.clone(), (1.0 - d) / n as f64))
-                .collect();
+            let mut next: HashMap<String, f64> =
+                facts.iter().map(|f| (f.fact_id.clone(), (1.0 - d) / n as f64)).collect();
             for (src, dst) in &edges {
                 let deg = *out_degree.get(src).unwrap_or(&1) as f64;
                 if deg == 0.0 {
@@ -913,15 +867,13 @@ impl RepoCortex {
                 stale: false,
                 note: caller
                     .as_ref()
-                    .map(|f| {
-                        f.signature
-                            .clone()
-                            .unwrap_or_else(|| f.qualified_name.clone())
-                    })
+                    .map(|f| f.signature.clone().unwrap_or_else(|| f.qualified_name.clone()))
                     .unwrap_or_default(),
             });
         }
-        entries.sort_by(|a, b| a.depth.cmp(&b.depth).then_with(|| a.qualified_name.cmp(&b.qualified_name)));
+        entries.sort_by(|a, b| {
+            a.depth.cmp(&b.depth).then_with(|| a.qualified_name.cmp(&b.qualified_name))
+        });
 
         Ok(ImpactReport {
             symbol: fact.qualified_name.clone(),
@@ -943,9 +895,8 @@ impl RepoCortex {
                     "SELECT rel_path, language, symbols, size_bytes FROM repo_file
                      WHERE project_id = ?1 ORDER BY rel_path",
                 )?;
-                let rows = stmt.query_map([project], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-                })?;
+                let rows = stmt
+                    .query_map([project], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
                 Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
             })
             .await
@@ -1046,10 +997,9 @@ fn discover_files(root: &Path, config: &RepoCortexConfig) -> Vec<PathBuf> {
             added_any = true;
         }
     }
-    if added_any
-        && let Ok(overrides) = override_builder.build() {
-            let _ = builder.overrides(overrides);
-        }
+    if added_any && let Ok(overrides) = override_builder.build() {
+        let _ = builder.overrides(overrides);
+    }
 
     for entry in builder.build().flatten() {
         let path = entry.path();
@@ -1085,25 +1035,16 @@ pub fn parse_structured(source: &str, language: Language, rel_path: &str) -> Par
         Language::Rust => tree_sitter_rust::LANGUAGE.into(),
         Language::Go => tree_sitter_go::LANGUAGE.into(),
         _ => {
-            return ParsedFile {
-                language,
-                ..Default::default()
-            };
+            return ParsedFile { language, ..Default::default() };
         }
     };
 
     let mut parser = Parser::new();
     if parser.set_language(&ts_language).is_err() {
-        return ParsedFile {
-            language,
-            ..Default::default()
-        };
+        return ParsedFile { language, ..Default::default() };
     }
     let Some(tree) = parser.parse(source, None) else {
-        return ParsedFile {
-            language,
-            ..Default::default()
-        };
+        return ParsedFile { language, ..Default::default() };
     };
 
     let bytes = source.as_bytes();
@@ -1125,12 +1066,7 @@ pub fn parse_structured(source: &str, language: Language, rel_path: &str) -> Par
         0,
     );
 
-    ParsedFile {
-        language,
-        extracts,
-        imports,
-        outline,
-    }
+    ParsedFile { language, extracts, imports, outline }
 }
 
 /// A stable module prefix for a file's qualified names.
@@ -1139,11 +1075,8 @@ pub fn parse_structured(source: &str, language: Language, rel_path: &str) -> Par
 /// files in one repository may declare the same package and the natural key must
 /// stay unique (it is a database constraint).
 fn file_module_name(rel_path: &str, language: Language) -> String {
-    let stem = rel_path
-        .rsplit_once('.')
-        .map(|(a, _)| a)
-        .unwrap_or(rel_path)
-        .replace(['/', '\\'], "::");
+    let stem =
+        rel_path.rsplit_once('.').map(|(a, _)| a).unwrap_or(rel_path).replace(['/', '\\'], "::");
     let _ = language;
     stem
 }
@@ -1196,22 +1129,24 @@ fn walk(
         if let Some(sig) = &signature {
             write = write.signature(sig.clone());
         }
-        extracts.push(Extract {
-            write,
-            references,
-            is_import,
-        });
-        outline.push(format!(
-            "{start_line}: {}",
-            signature.as_deref().unwrap_or(qualified.as_str())
-        ));
+        extracts.push(Extract { write, references, is_import });
+        outline
+            .push(format!("{start_line}: {}", signature.as_deref().unwrap_or(qualified.as_str())));
     }
 
     let mut i: u32 = 0;
     while let Some(child) = node.child(i) {
         i += 1;
         walk(
-            child, bytes, source, language, rel_path, stack, extracts, imports, outline,
+            child,
+            bytes,
+            source,
+            language,
+            rel_path,
+            stack,
+            extracts,
+            imports,
+            outline,
             depth + 1,
         );
     }
@@ -1227,8 +1162,14 @@ fn scope_of(node: tree_sitter::Node<'_>, source: &str) -> Vec<String> {
     while let Some(parent) = current {
         match parent.kind() {
             // Name-carrying containers.
-            "struct_item" | "enum_item" | "union_item" | "class_definition" | "class_declaration"
-            | "interface_declaration" | "mod_item" | "trait_item" => {
+            "struct_item"
+            | "enum_item"
+            | "union_item"
+            | "class_definition"
+            | "class_declaration"
+            | "interface_declaration"
+            | "mod_item"
+            | "trait_item" => {
                 if let Some(name) = child_text(parent, "type_identifier", source)
                     .or_else(|| child_text(parent, "identifier", source))
                 {
@@ -1296,7 +1237,12 @@ fn classify(
         // Two levels, not one: several grammars nest a declaration one node
         // deeper than the name (Go's `type_declaration` → `type_spec` → name),
         // and a single-level lookup silently produces no fact at all for those.
-        fn find(node: tree_sitter::Node<'_>, kinds: &[&str], depth: usize, source: &str) -> Option<String> {
+        fn find(
+            node: tree_sitter::Node<'_>,
+            kinds: &[&str],
+            depth: usize,
+            source: &str,
+        ) -> Option<String> {
             if depth > 2 {
                 return None;
             }
@@ -1324,7 +1270,8 @@ fn classify(
     let references = identifiers_in(text);
 
     match (language, kind) {
-        (Language::Python, "function_definition") | (Language::Python, "async_function_definition") => {
+        (Language::Python, "function_definition")
+        | (Language::Python, "async_function_definition") => {
             let name = name_of(&["identifier"])?;
             let is_method = has_ancestor_kind(node, "class_definition");
             Some((
@@ -1335,13 +1282,9 @@ fn classify(
                 references,
             ))
         }
-        (Language::Python, "class_definition") => Some((
-            FactKind::Class,
-            name_of(&["identifier"])?,
-            signature,
-            false,
-            references,
-        )),
+        (Language::Python, "class_definition") => {
+            Some((FactKind::Class, name_of(&["identifier"])?, signature, false, references))
+        }
         (Language::Python, "import_statement") | (Language::Python, "import_from_statement") => {
             let module = text
                 .trim_start_matches("from ")
@@ -1358,7 +1301,8 @@ fn classify(
             }
         }
         (Language::Rust, "function_item") => {
-            let is_method = has_ancestor_kind(node, "impl_item") || has_ancestor_kind(node, "trait_item");
+            let is_method =
+                has_ancestor_kind(node, "impl_item") || has_ancestor_kind(node, "trait_item");
             Some((
                 if is_method { FactKind::Method } else { FactKind::Function },
                 name_of(&["identifier"])?,
@@ -1371,13 +1315,9 @@ fn classify(
         // (`function_signature_item` vs `function_item`). Missing it means a
         // trait's contract never reaches the Ledger, which is exactly the
         // structure callers need to check against.
-        (Language::Rust, "function_signature_item") => Some((
-            FactKind::Method,
-            name_of(&["identifier"])?,
-            signature,
-            false,
-            references,
-        )),
+        (Language::Rust, "function_signature_item") => {
+            Some((FactKind::Method, name_of(&["identifier"])?, signature, false, references))
+        }
         (Language::Rust, "struct_item") => Some((
             FactKind::Struct,
             name_of(&["type_identifier", "identifier"])?,
@@ -1406,59 +1346,43 @@ fn classify(
             false,
             references,
         )),
-        (Language::Rust, "const_item") | (Language::Rust, "static_item") => Some((
-            FactKind::Constant,
-            name_of(&["identifier"])?,
-            signature,
-            false,
-            references,
-        )),
-        (Language::Rust, "mod_item") => Some((
-            FactKind::Module,
-            name_of(&["identifier"])?,
-            signature,
-            false,
-            references,
-        )),
+        (Language::Rust, "const_item") | (Language::Rust, "static_item") => {
+            Some((FactKind::Constant, name_of(&["identifier"])?, signature, false, references))
+        }
+        (Language::Rust, "mod_item") => {
+            Some((FactKind::Module, name_of(&["identifier"])?, signature, false, references))
+        }
         (Language::Rust, "use_declaration") => {
-            let path = text
-                .trim_start_matches("use ")
-                .trim_end_matches(';')
-                .trim()
-                .to_string();
+            let path = text.trim_start_matches("use ").trim_end_matches(';').trim().to_string();
             if path.is_empty() {
                 None
             } else {
                 Some((FactKind::Import, path, signature, true, references))
             }
         }
-        (
+        (Language::TypeScript | Language::Tsx | Language::JavaScript, "function_declaration")
+        | (
             Language::TypeScript | Language::Tsx | Language::JavaScript,
-            "function_declaration",
-        )
-        | (Language::TypeScript | Language::Tsx | Language::JavaScript, "generator_function_declaration") => {
+            "generator_function_declaration",
+        ) => Some((FactKind::Function, name_of(&["identifier"])?, signature, false, references)),
+        (Language::TypeScript | Language::Tsx | Language::JavaScript, "class_declaration") => {
             Some((
-                FactKind::Function,
-                name_of(&["identifier"])?,
+                FactKind::Class,
+                name_of(&["identifier", "type_identifier"])?,
                 signature,
                 false,
                 references,
             ))
         }
-        (Language::TypeScript | Language::Tsx | Language::JavaScript, "class_declaration") => Some((
-            FactKind::Class,
-            name_of(&["identifier", "type_identifier"])?,
-            signature,
-            false,
-            references,
-        )),
-        (Language::TypeScript | Language::Tsx | Language::JavaScript, "method_definition") => Some((
-            FactKind::Method,
-            name_of(&["property_identifier", "identifier"])?,
-            signature,
-            false,
-            references,
-        )),
+        (Language::TypeScript | Language::Tsx | Language::JavaScript, "method_definition") => {
+            Some((
+                FactKind::Method,
+                name_of(&["property_identifier", "identifier"])?,
+                signature,
+                false,
+                references,
+            ))
+        }
         (Language::TypeScript | Language::Tsx, "interface_declaration") => Some((
             FactKind::Interface,
             name_of(&["type_identifier", "identifier"])?,
@@ -1473,17 +1397,10 @@ fn classify(
             false,
             references,
         )),
-        (Language::TypeScript | Language::Tsx, "enum_declaration") => Some((
-            FactKind::Enum,
-            name_of(&["identifier"])?,
-            signature,
-            false,
-            references,
-        )),
-        (
-            Language::TypeScript | Language::Tsx | Language::JavaScript,
-            "import_statement",
-        ) => {
+        (Language::TypeScript | Language::Tsx, "enum_declaration") => {
+            Some((FactKind::Enum, name_of(&["identifier"])?, signature, false, references))
+        }
+        (Language::TypeScript | Language::Tsx | Language::JavaScript, "import_statement") => {
             let fallback: &str = text;
             let module = match text.split("from ").nth(1) {
                 Some(after_from) => after_from,
@@ -1517,13 +1434,9 @@ fn classify(
                 Some((FactKind::Function, name, signature, false, references))
             }
         }
-        (Language::Go, "function_declaration") => Some((
-            FactKind::Function,
-            name_of(&["identifier"])?,
-            signature,
-            false,
-            references,
-        )),
+        (Language::Go, "function_declaration") => {
+            Some((FactKind::Function, name_of(&["identifier"])?, signature, false, references))
+        }
         (Language::Go, "method_declaration") => {
             // Skip the receiver: `func (s *Server) Listen()` puts the receiver
             // variable first, and a naive name lookup would record `s` rather
@@ -1573,11 +1486,7 @@ fn classify(
         }
         (Language::Go, "const_declaration") => Some((
             FactKind::Constant,
-            text.split_whitespace()
-                .nth(1)
-                .unwrap_or("const")
-                .trim_end_matches('=')
-                .to_string(),
+            text.split_whitespace().nth(1).unwrap_or("const").trim_end_matches('=').to_string(),
             signature,
             false,
             references,
@@ -1628,10 +1537,49 @@ fn identifiers_in(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut current = String::new();
     let reserved: HashSet<&'static str> = [
-        "if", "else", "for", "while", "return", "let", "const", "var", "fn", "def", "class",
-        "struct", "impl", "use", "import", "from", "pub", "self", "this", "new", "match", "func",
-        "package", "type", "interface", "async", "await", "try", "catch", "throw", "true", "false",
-        "null", "none", "nil", "not", "and", "or", "in", "is", "the", "a", "an",
+        "if",
+        "else",
+        "for",
+        "while",
+        "return",
+        "let",
+        "const",
+        "var",
+        "fn",
+        "def",
+        "class",
+        "struct",
+        "impl",
+        "use",
+        "import",
+        "from",
+        "pub",
+        "self",
+        "this",
+        "new",
+        "match",
+        "func",
+        "package",
+        "type",
+        "interface",
+        "async",
+        "await",
+        "try",
+        "catch",
+        "throw",
+        "true",
+        "false",
+        "null",
+        "none",
+        "nil",
+        "not",
+        "and",
+        "or",
+        "in",
+        "is",
+        "the",
+        "a",
+        "an",
     ]
     .into_iter()
     .collect();
@@ -1859,22 +1807,24 @@ pub fn parse_config(source: &str, language: Language, rel_path: &str) -> ParsedF
             }
             "yaml" | "yml" => {
                 // Top-level `key:` entries only.
-                if !line.starts_with(' ') && !line.starts_with('-')
-                    && let Some((key, _)) = trimmed.split_once(':') {
-                        let key = key.trim();
-                        if !key.is_empty() && !key.contains(' ') {
-                            push(
-                                &mut extracts,
-                                &mut outline,
-                                FactKind::Constant,
-                                key.to_string(),
-                                line_no,
-                                trimmed.to_string(),
-                                trimmed.to_string(),
-                                false,
-                            );
-                        }
+                if !line.starts_with(' ')
+                    && !line.starts_with('-')
+                    && let Some((key, _)) = trimmed.split_once(':')
+                {
+                    let key = key.trim();
+                    if !key.is_empty() && !key.contains(' ') {
+                        push(
+                            &mut extracts,
+                            &mut outline,
+                            FactKind::Constant,
+                            key.to_string(),
+                            line_no,
+                            trimmed.to_string(),
+                            trimmed.to_string(),
+                            false,
+                        );
                     }
+                }
             }
             "md" => {
                 if let Some(rest) = trimmed.strip_prefix("# ") {
@@ -1900,12 +1850,7 @@ pub fn parse_config(source: &str, language: Language, rel_path: &str) -> ParsedF
         }
     }
 
-    ParsedFile {
-        language,
-        extracts,
-        imports: Vec::new(),
-        outline,
-    }
+    ParsedFile { language, extracts, imports: Vec::new(), outline }
 }
 
 /// Top-level entries of a JSON document, as `(key, type)` pairs.
@@ -1923,10 +1868,7 @@ fn top_level_json_entries(value: &serde_json::Value) -> Vec<(String, String)> {
         }
         serde_json::Value::Array(items) => out.push((
             "[]".to_string(),
-            format!(
-                "array of {}",
-                items.first().map(type_name_of).unwrap_or("unknown")
-            ),
+            format!("array of {}", items.first().map(type_name_of).unwrap_or("unknown")),
         )),
         _ => {}
     }
@@ -2007,17 +1949,11 @@ pub enum Mode { Fast, Slow }
 pub const LIMIT: usize = 8;
 "#;
         let parsed = parse_structured(src, Language::Rust, "src/engine.rs");
-        let names: Vec<String> = parsed
-            .extracts
-            .iter()
-            .map(|e| e.write.qualified_name.clone())
-            .collect();
+        let names: Vec<String> =
+            parsed.extracts.iter().map(|e| e.write.qualified_name.clone()).collect();
         assert!(names.iter().any(|n| n.ends_with("::Engine")), "{names:?}");
         assert!(names.iter().any(|n| n.ends_with("Engine::new")), "{names:?}");
-        assert!(
-            names.iter().any(|n| n.ends_with("Engine::private_helper")),
-            "{names:?}"
-        );
+        assert!(names.iter().any(|n| n.ends_with("Engine::private_helper")), "{names:?}");
         assert!(names.iter().any(|n| n.ends_with("::Doer")), "{names:?}");
         assert!(names.iter().any(|n| n.ends_with("::Mode")), "{names:?}");
         assert!(
@@ -2073,11 +2009,8 @@ export function start(c: Config) { return c; }
 export const stop = (s: Server) => s;
 "#;
         let parsed = parse_structured(src, Language::TypeScript, "src/server.ts");
-        let names: Vec<String> = parsed
-            .extracts
-            .iter()
-            .map(|e| e.write.qualified_name.clone())
-            .collect();
+        let names: Vec<String> =
+            parsed.extracts.iter().map(|e| e.write.qualified_name.clone()).collect();
         assert!(names.iter().any(|n| n.ends_with("::Config")), "{names:?}");
         assert!(names.iter().any(|n| n.ends_with("::Mode")), "{names:?}");
         assert!(names.iter().any(|n| n.ends_with("::Server")), "{names:?}");
@@ -2100,11 +2033,8 @@ func New() *Server { return &Server{} }
 func (s *Server) Listen() { fmt.Println(s.Port) }
 "#;
         let parsed = parse_structured(src, Language::Go, "main.go");
-        let names: Vec<String> = parsed
-            .extracts
-            .iter()
-            .map(|e| e.write.qualified_name.clone())
-            .collect();
+        let names: Vec<String> =
+            parsed.extracts.iter().map(|e| e.write.qualified_name.clone()).collect();
         assert!(names.iter().any(|n| n.ends_with("::Server")), "{names:?}");
         assert!(names.iter().any(|n| n.ends_with("::Handler")), "{names:?}");
         assert!(names.iter().any(|n| n.ends_with("::New")), "{names:?}");
@@ -2143,11 +2073,8 @@ func (s *Server) Listen() { fmt.Println(s.Port) }
     fn references_are_collected_for_call_graph_edges() {
         let src = "fn caller() { helper_one(); helper_two(3); }\nfn helper_one() {}\nfn helper_two(x: u8) {}";
         let parsed = parse_structured(src, Language::Rust, "r.rs");
-        let caller = parsed
-            .extracts
-            .iter()
-            .find(|e| e.write.qualified_name.ends_with("::caller"))
-            .unwrap();
+        let caller =
+            parsed.extracts.iter().find(|e| e.write.qualified_name.ends_with("::caller")).unwrap();
         assert!(caller.references.contains(&"helper_one".to_string()));
         assert!(caller.references.contains(&"helper_two".to_string()));
     }
@@ -2156,11 +2083,8 @@ func (s *Server) Listen() { fmt.Println(s.Port) }
     fn config_extraction_is_conservative() {
         let json = "{\n  \"name\": \"sakur4\",\n  \"nested\": {\n    \"deep\": 1\n  }\n}";
         let parsed = parse_config(json, Language::Config, "package.json");
-        let names: Vec<&str> = parsed
-            .extracts
-            .iter()
-            .map(|e| e.write.qualified_name.as_str())
-            .collect();
+        let names: Vec<&str> =
+            parsed.extracts.iter().map(|e| e.write.qualified_name.as_str()).collect();
         assert!(names.iter().any(|n| n.ends_with("::name")));
         assert!(names.iter().any(|n| n.ends_with("::nested")));
         assert!(
@@ -2177,11 +2101,8 @@ func (s *Server) Listen() { fmt.Println(s.Port) }
 
         let sql = "CREATE TABLE users (id INT);\nCREATE VIEW active AS SELECT 1;\n";
         let parsed = parse_config(sql, Language::Config, "schema.sql");
-        let names: Vec<&str> = parsed
-            .extracts
-            .iter()
-            .map(|e| e.write.qualified_name.as_str())
-            .collect();
+        let names: Vec<&str> =
+            parsed.extracts.iter().map(|e| e.write.qualified_name.as_str()).collect();
         assert!(names.iter().any(|n| n.ends_with("::users")));
         assert!(names.iter().any(|n| n.ends_with("::active")));
     }

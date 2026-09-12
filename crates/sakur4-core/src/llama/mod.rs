@@ -14,12 +14,12 @@
 //!
 //! | Configured target | Resolution | Cache coherence |
 //! |---|---|---|
-//! | `auto` + a llama.cpp server on localhost | [`LlamaCppBackend`] | full |
-//! | `auto` + nothing listening | [`EmbeddedBackend`] (in-process mock) | full, simulated |
-//! | explicit `sakur4://embedded` | [`EmbeddedBackend`] | full, simulated |
-//! | explicit `none` | [`NullBackend`] | disabled; full re-prefill fallback |
-//! | a remote host on the LAN | [`LlamaCppBackend`] | full |
-//! | an older build with no `/slots` | [`LlamaCppBackend`] with fewer capabilities | degraded, never failed |
+//! | `auto` + a llama.cpp server on localhost | [`llama_cpp::LlamaCppBackend`] | full |
+//! | `auto` + nothing listening | [`embedded::EmbeddedBackend`] (in-process mock) | full, simulated |
+//! | explicit `sakur4://embedded` | [`embedded::EmbeddedBackend`] | full, simulated |
+//! | explicit `none` | [`embedded::NullBackend`] | disabled; full re-prefill fallback |
+//! | a remote host on the LAN | [`llama_cpp::LlamaCppBackend`] | full |
+//! | an older build with no `/slots` | [`llama_cpp::LlamaCppBackend`] with fewer capabilities | degraded, never failed |
 //!
 //! The last two rows are NFR-7 ("degrades gracefully ... never a hard failure")
 //! expressed as a type rather than as a hope.
@@ -49,7 +49,6 @@ pub enum BackendSpec {
     /// An explicit HTTP base URL, e.g. `http://127.0.0.1:8080`.
     Url(String),
 }
-
 
 impl BackendSpec {
     /// Parse the `--backend` / `SAKUR4_BACKEND` form.
@@ -137,11 +136,7 @@ impl CapabilitySet {
         if self.partial_state_only {
             bits.push("PARTIAL-STATE-ONLY");
         }
-        if bits.is_empty() {
-            "reachable, no coherence endpoints".into()
-        } else {
-            bits.join("+")
-        }
+        if bits.is_empty() { "reachable, no coherence endpoints".into() } else { bits.join("+") }
     }
 
     /// Whether checkpoint-aligned eviction boundaries (FR-7) can be attempted.
@@ -189,11 +184,7 @@ impl SlotState {
 
     /// Fraction of the slot's window currently occupied.
     pub fn fill_ratio(&self) -> f64 {
-        if self.n_ctx <= 0 {
-            0.0
-        } else {
-            (self.n_past as f64 / self.n_ctx as f64).clamp(0.0, 1.0)
-        }
+        if self.n_ctx <= 0 { 0.0 } else { (self.n_past as f64 / self.n_ctx as f64).clamp(0.0, 1.0) }
     }
 }
 
@@ -278,7 +269,11 @@ pub trait InferenceBackend: Send + Sync + std::fmt::Debug {
 
     /// Persist a slot's KV + recurrent state. `path` is a hint; backends that
     /// manage their own storage return the real path in the outcome.
-    async fn save_slot(&self, slot_id: &str, path: Option<&std::path::Path>) -> Result<SnapshotOutcome>;
+    async fn save_slot(
+        &self,
+        slot_id: &str,
+        path: Option<&std::path::Path>,
+    ) -> Result<SnapshotOutcome>;
 
     /// Reload previously persisted slot state.
     async fn restore_slot(&self, slot_id: &str, path: &std::path::Path) -> Result<RestoreOutcome>;
@@ -304,10 +299,7 @@ pub trait InferenceBackend: Send + Sync + std::fmt::Debug {
     /// Exact token count for the loaded model, when the backend can do it.
     async fn tokenize(&self, text: &str) -> Result<usize> {
         let _ = text;
-        Err(Error::BackendUnavailable(format!(
-            "{} cannot tokenize",
-            self.name()
-        )))
+        Err(Error::BackendUnavailable(format!("{} cannot tokenize", self.name())))
     }
 
     /// Health summary for `doctor`.
@@ -392,7 +384,10 @@ pub async fn resolve(spec: &BackendSpec, timeout: std::time::Duration) -> Resolv
                     ResolvedBackend {
                         backend: Arc::new(b),
                         requested: spec.clone(),
-                        resolution_note: format!("auto-detected llama.cpp at {candidate} ({})", caps.summary()),
+                        resolution_note: format!(
+                            "auto-detected llama.cpp at {candidate} ({})",
+                            caps.summary()
+                        ),
                     }
                 }
                 Err(e) => {
@@ -577,17 +572,9 @@ mod tests {
 
     #[test]
     fn slot_fill_ratio_is_clamped() {
-        let s = SlotState {
-            n_past: 90,
-            n_ctx: 100,
-            ..Default::default()
-        };
+        let s = SlotState { n_past: 90, n_ctx: 100, ..Default::default() };
         assert!((s.fill_ratio() - 0.9).abs() < 1e-9);
-        let over = SlotState {
-            n_past: 150,
-            n_ctx: 100,
-            ..Default::default()
-        };
+        let over = SlotState { n_past: 150, n_ctx: 100, ..Default::default() };
         assert_eq!(over.fill_ratio(), 1.0);
         let zero = SlotState::default();
         assert_eq!(zero.fill_ratio(), 0.0);

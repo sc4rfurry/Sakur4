@@ -245,9 +245,8 @@ pub fn init_tracing(verbose: u8) {
         2 => "debug",
         _ => "trace",
     };
-    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| {
-        format!("sakur4={level},sakur4_core={level},sakur4d={level},warn")
-    });
+    let filter = std::env::var("RUST_LOG")
+        .unwrap_or_else(|_| format!("sakur4={level},sakur4_core={level},sakur4d={level},warn"));
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_new(filter)
@@ -270,11 +269,7 @@ pub(crate) fn build_config(cli: &Cli) -> EngineConfig {
             .project_root
             .as_ref()
             .map(|p| p.display().to_string())
-            .or_else(|| {
-                std::env::current_dir()
-                    .ok()
-                    .map(|p| p.display().to_string())
-            }),
+            .or_else(|| std::env::current_dir().ok().map(|p| p.display().to_string())),
         ..Default::default()
     };
     cfg.eviction = EvictionPolicy::default();
@@ -284,9 +279,7 @@ pub(crate) fn build_config(cli: &Cli) -> EngineConfig {
 
 async fn open_engine(cli: &Cli) -> Result<Engine> {
     let cfg = build_config(cli);
-    Engine::open(cfg)
-        .await
-        .context("opening the Sakur4 engine")
+    Engine::open(cfg).await.context("opening the Sakur4 engine")
 }
 
 /// Dispatch a parsed command.
@@ -297,12 +290,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         no_dream: false,
         quiet_secs: 90,
     }) {
-        Command::Serve {
-            transport,
-            bind,
-            no_dream,
-            quiet_secs,
-        } => {
+        Command::Serve { transport, bind, no_dream, quiet_secs } => {
             // `--bind` wins over a bare `http` transport, so the common case
             // (`--transport http --bind 127.0.0.1:9000`) behaves as written.
             let resolved = match crate::gateway::Transport::parse(&transport) {
@@ -314,50 +302,26 @@ pub async fn run(cli: Cli) -> Result<()> {
             let engine = open_engine(&cli).await?;
             crate::gateway::serve(engine, resolved, !no_dream, quiet_secs).await
         }
-        Command::Config {
-            harness,
-            binary,
-            db,
-        } => config(&cli, &harness, binary, db),
+        Command::Config { harness, binary, db } => config(&cli, &harness, binary, db),
         Command::Doctor { refresh } => doctor(&cli, refresh).await,
         Command::Index { path, full } => index(&cli, path, full).await,
         Command::RepoMap { budget, focus } => repo_map(&cli, budget, focus).await,
         Command::Impact { symbol, depth } => impact(&cli, &symbol, depth).await,
         Command::Symbol { qualified_name } => symbol(&cli, &qualified_name).await,
-        Command::Recall {
-            query,
-            k,
-            session,
-            include_folded,
-        } => recall(&cli, &query, k, session, include_folded).await,
-        Command::Commit {
-            session,
-            content,
-            role,
-            slot,
-        } => commit(&cli, &session, &content, &role, &slot).await,
-        Command::Pin {
-            content,
-            kind,
-            session,
-        } => pin(&cli, &content, &kind, session).await,
+        Command::Recall { query, k, session, include_folded } => {
+            recall(&cli, &query, k, session, include_folded).await
+        }
+        Command::Commit { session, content, role, slot } => {
+            commit(&cli, &session, &content, &role, &slot).await
+        }
+        Command::Pin { content, kind, session } => pin(&cli, &content, &kind, session).await,
         Command::Anchors { session } => anchors(&cli, session).await,
-        Command::Plan {
-            session,
-            slot,
-            apply,
-        } => plan(&cli, &session, &slot, apply).await,
+        Command::Plan { session, slot, apply } => plan(&cli, &session, &slot, apply).await,
         Command::Snapshot { slot, session } => snapshot(&cli, &session, &slot).await,
-        Command::Restore {
-            slot,
-            session,
-            path,
-        } => restore(&cli, &session, &slot, &path).await,
-        Command::Receipt {
-            session,
-            history,
-            limit,
-        } => receipt(&cli, &session, history, limit).await,
+        Command::Restore { slot, session, path } => restore(&cli, &session, &slot, &path).await,
+        Command::Receipt { session, history, limit } => {
+            receipt(&cli, &session, history, limit).await
+        }
         Command::Dream => dream(&cli).await,
         Command::Staleness => staleness(&cli).await,
         Command::Demo { repo } => crate::cli::demo::run(&cli, repo).await,
@@ -379,20 +343,12 @@ pub async fn run(cli: Cli) -> Result<()> {
 /// binary's absolute path and *this* store baked in — removes the guesswork, and
 /// an absolute path matters because a harness does not inherit the shell's `PATH`
 /// or working directory.
-fn config(
-    cli: &Cli,
-    harness: &str,
-    binary: Option<PathBuf>,
-    db: Option<PathBuf>,
-) -> Result<()> {
+fn config(cli: &Cli, harness: &str, binary: Option<PathBuf>, db: Option<PathBuf>) -> Result<()> {
     let exe = binary
         .or_else(|| std::env::current_exe().ok())
         .context("could not determine the sakur4d path; pass --binary")?;
     let exe = exe.display().to_string();
-    let store = db
-        .unwrap_or_else(|| cli.db.clone())
-        .display()
-        .to_string();
+    let store = db.unwrap_or_else(|| cli.db.clone()).display().to_string();
     let project = cli
         .project_root
         .clone()
@@ -400,11 +356,7 @@ fn config(
         .map(|p| p.display().to_string());
 
     // A single spawnable command line, used by every stdio-shaped harness.
-    let mut argv = vec![
-        exe.clone(),
-        "--db".into(),
-        store.clone(),
-    ];
+    let mut argv = vec![exe.clone(), "--db".into(), store.clone()];
     if let Some(p) = &project {
         argv.push("--project-root".into());
         argv.push(p.clone());
@@ -495,7 +447,10 @@ fn config(
 fn yaml_scalar(s: &str) -> String {
     let needs_quotes = s.is_empty()
         || s.chars().any(|c| c.is_whitespace())
-        || s.contains([':', '\\', '#', '"', '\'', '*', '&', '!', '|', '>', '%', '@', '`', ',', '[', ']', '{', '}']);
+        || s.contains([
+            ':', '\\', '#', '"', '\'', '*', '&', '!', '|', '>', '%', '@', '`', ',', '[', ']', '{',
+            '}',
+        ]);
     if needs_quotes {
         format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
     } else {
@@ -507,12 +462,7 @@ fn yaml_scalar(s: &str) -> String {
 fn json_mcp_servers(exe: &str, args: &[String]) -> String {
     let args_json = args
         .iter()
-        .map(|a| {
-            format!(
-                "        {}",
-                serde_json::to_string(a).unwrap_or_else(|_| "\"\"".into())
-            )
-        })
+        .map(|a| format!("        {}", serde_json::to_string(a).unwrap_or_else(|_| "\"\"".into())))
         .collect::<Vec<_>>()
         .join(",\n");
     format!(
@@ -522,7 +472,8 @@ fn json_mcp_servers(exe: &str, args: &[String]) -> String {
     )
 }
 
-async fn doctor(cli: &Cli, refresh: bool) -> Result<()> {    let engine = open_engine(cli).await?;
+async fn doctor(cli: &Cli, refresh: bool) -> Result<()> {
+    let engine = open_engine(cli).await?;
     if refresh {
         engine.refresh_backend().await?;
     }
@@ -534,10 +485,7 @@ async fn doctor(cli: &Cli, refresh: bool) -> Result<()> {    let engine = open_e
         "  schema           v{} · {} · {} bytes",
         status.db.schema_version, status.db.journal_mode, status.db.size_bytes
     );
-    println!(
-        "  vector backend   {}",
-        engine.db().vector_backend().describe()
-    );
+    println!("  vector backend   {}", engine.db().vector_backend().describe());
     println!(
         "  lexical index    {}",
         if status.db.fts5 {
@@ -584,9 +532,7 @@ fn coherence_verdict(caps: &sakur4_core::llama::CapabilitySet) -> String {
     if caps.can_align_boundaries() {
         let mut note = "checkpoint-aligned eviction boundaries available".to_string();
         if caps.partial_state_only {
-            note.push_str(
-                " (partial-state architecture: only durable save points are trusted)",
-            );
+            note.push_str(" (partial-state architecture: only durable save points are trusted)");
         }
         note
     } else {
@@ -600,11 +546,8 @@ async fn index(cli: &Cli, path: Option<PathBuf>, full: bool) -> Result<()> {
         .or_else(|| cli.project_root.clone())
         .or_else(|| std::env::current_dir().ok())
         .context("no repository root given")?;
-    let report = if full {
-        engine.repo().index(&root).await?
-    } else {
-        engine.repo().reindex(&root).await?
-    };
+    let report =
+        if full { engine.repo().index(&root).await? } else { engine.repo().reindex(&root).await? };
     println!("indexed {}", root.display());
     println!("  {}", report.summary());
     for w in report.warnings.iter().take(10) {
@@ -615,15 +558,8 @@ async fn index(cli: &Cli, path: Option<PathBuf>, full: bool) -> Result<()> {
 
 async fn repo_map(cli: &Cli, budget: usize, focus: Vec<String>) -> Result<()> {
     let engine = open_engine(cli).await?;
-    let focus = if focus.is_empty() {
-        None
-    } else {
-        Some(focus.as_slice())
-    };
-    let (map, used) = engine
-        .repo()
-        .repo_map(budget, focus, engine.tokens())
-        .await?;
+    let focus = if focus.is_empty() { None } else { Some(focus.as_slice()) };
+    let (map, used) = engine.repo().repo_map(budget, focus, engine.tokens()).await?;
     println!("{map}");
     eprintln!("({used} tokens of a {budget}-token budget)");
     Ok(())
@@ -683,11 +619,7 @@ async fn recall(
             hit.kind.as_str(),
             hit.score,
             if hit.stale { "  STALE" } else { "" },
-            hit.retrievers
-                .iter()
-                .map(|r| r.as_str())
-                .collect::<Vec<_>>()
-                .join("+")
+            hit.retrievers.iter().map(|r| r.as_str()).collect::<Vec<_>>().join("+")
         );
         for line in hit.rendered.lines().take(6) {
             println!("      {line}");
@@ -702,13 +634,7 @@ async fn recall(
     Ok(())
 }
 
-async fn commit(
-    cli: &Cli,
-    session: &str,
-    content: &str,
-    role: &str,
-    slot: &str,
-) -> Result<()> {
+async fn commit(cli: &Cli, session: &str, content: &str, role: &str, slot: &str) -> Result<()> {
     let engine = open_engine(cli).await?;
     let role = sakur4_core::memory::episodic::Role::parse(role)?;
     let out = engine
@@ -789,15 +715,17 @@ async fn plan(cli: &Cli, session: &str, slot: &str, apply: bool) -> Result<()> {
     let engine = open_engine(cli).await?;
     let parts = assemble_parts(&engine, session).await?;
     let window = engine.context_window().await;
-    let plan = engine
-        .eviction()
-        .plan(session, slot, window, &parts)
-        .await?;
+    let plan = engine.eviction().plan(session, slot, window, &parts).await?;
 
     println!("pressure: {:?}", plan.pressure);
     println!(
         "budget {} · trigger {} · target {} · live {} (anchors {}, fixed {})",
-        plan.budget, plan.threshold, plan.target, plan.live_tokens, plan.anchor_tokens, plan.fixed_tokens
+        plan.budget,
+        plan.threshold,
+        plan.target,
+        plan.live_tokens,
+        plan.anchor_tokens,
+        plan.fixed_tokens
     );
     println!("{}", plan.summary());
     for u in &plan.updates {
@@ -816,7 +744,10 @@ async fn plan(cli: &Cli, session: &str, slot: &str, apply: bool) -> Result<()> {
 
     if apply && !plan.is_empty() {
         let outcome = engine.eviction().apply(&plan, &parts).await?;
-        println!("\napplied {} episode(s), {} tokens reclaimed", outcome.applied, outcome.tokens_reclaimed);
+        println!(
+            "\napplied {} episode(s), {} tokens reclaimed",
+            outcome.applied, outcome.tokens_reclaimed
+        );
         println!("cache: {}", outcome.cache_status.headline());
         if outcome.snapshot_taken {
             println!("pre-rewrite snapshot taken");
@@ -828,7 +759,12 @@ async fn plan(cli: &Cli, session: &str, slot: &str, apply: bool) -> Result<()> {
 async fn snapshot(cli: &Cli, session: &str, slot: &str) -> Result<()> {
     let engine = open_engine(cli).await?;
     let out = engine.coherence().snapshot(session, slot).await?;
-    println!("snapshot {} ({} bytes, {} ms)", out.snapshot_id, out.size_bytes.unwrap_or(0), out.elapsed_ms);
+    println!(
+        "snapshot {} ({} bytes, {} ms)",
+        out.snapshot_id,
+        out.size_bytes.unwrap_or(0),
+        out.elapsed_ms
+    );
     if let Some(p) = out.file_path {
         println!("  file: {p}");
         println!("  restore with: sakur4d restore --slot {slot} --session {session} {p}");
@@ -839,10 +775,7 @@ async fn snapshot(cli: &Cli, session: &str, slot: &str) -> Result<()> {
 async fn restore(cli: &Cli, session: &str, slot: &str, path: &str) -> Result<()> {
     let engine = open_engine(cli).await?;
     let out = engine.coherence().restore(session, slot, path).await?;
-    println!(
-        "restored={} in {} ms — {}",
-        out.restored, out.restore_time_ms, out.detail
-    );
+    println!("restored={} in {} ms — {}", out.restored, out.restore_time_ms, out.detail);
     Ok(())
 }
 
@@ -866,10 +799,8 @@ async fn receipt(cli: &Cli, session: &str, history: bool, limit: usize) -> Resul
 
 async fn dream(cli: &Cli) -> Result<()> {
     let engine = open_engine(cli).await?;
-    let cfg = sakur4_core::consolidate::ConsolidatorConfig {
-        quiet_period_secs: 0,
-        ..Default::default()
-    };
+    let cfg =
+        sakur4_core::consolidate::ConsolidatorConfig { quiet_period_secs: 0, ..Default::default() };
     let c = sakur4_core::consolidate::Consolidator::new(
         engine.db().clone(),
         engine.memory().clone(),
@@ -911,15 +842,8 @@ async fn staleness(cli: &Cli) -> Result<()> {
 /// Assemble the prompt for a session from the Fabric, the way the gateway does.
 pub(crate) async fn assemble_parts(engine: &Engine, session: &str) -> Result<PromptParts> {
     let anchors = engine.memory().anchors(Some(session)).await?;
-    let anchor_block = anchors
-        .iter()
-        .map(|a| a.render())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let timeline = engine
-        .memory()
-        .timeline(session, 1_000_000, engine.tokens(), false)
-        .await?;
+    let anchor_block = anchors.iter().map(|a| a.render()).collect::<Vec<_>>().join("\n");
+    let timeline = engine.memory().timeline(session, 1_000_000, engine.tokens(), false).await?;
     Ok(PromptParts::new()
         .with_system("You are a local coding agent using Sakur4 memory and context management.")
         .with_anchors(anchor_block)

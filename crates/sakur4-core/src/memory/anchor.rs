@@ -26,7 +26,9 @@ use crate::tokens::TokenCounter;
 /// Why an anchor was pinned. The kind is not cosmetic: it drives the
 /// constraint-detection pass that proposes auto-pins (PRD risk mitigation for
 /// governance decay) and the ordering in which anchors are rendered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum AnchorKind {
     /// The user told the agent it was wrong about something.
@@ -187,13 +189,7 @@ const RULES: &[(&str, AnchorKind, &[&str])] = &[
     (
         "explicit_never",
         AnchorKind::SafetyConstraint,
-        &[
-            "never ",
-            "do not ever",
-            "don't ever",
-            "under no circumstances",
-            "at no point",
-        ],
+        &["never ", "do not ever", "don't ever", "under no circumstances", "at no point"],
     ),
     (
         "prohibition",
@@ -288,10 +284,8 @@ impl ConstraintDetector {
                         rule,
                         confidence,
                     };
-                    let better = best
-                        .as_ref()
-                        .map(|b| candidate.confidence > b.confidence)
-                        .unwrap_or(true);
+                    let better =
+                        best.as_ref().map(|b| candidate.confidence > b.confidence).unwrap_or(true);
                     if better {
                         best = Some(candidate);
                     }
@@ -464,14 +458,10 @@ mod tests {
     fn detector_respects_min_confidence() {
         // A late-appearing rule scores 0.45; requiring 0.6 must filter it out.
         let text = format!("{} never do this", "padding ".repeat(30));
-        let all = ConstraintDetector::detect_all(
-            [("e", 1, Role::User, text.as_str())],
-            0.0,
-        );
+        let all = ConstraintDetector::detect_all([("e", 1, Role::User, text.as_str())], 0.0);
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].confidence, 0.45);
-        let strict =
-            ConstraintDetector::detect_all([("e", 1, Role::User, text.as_str())], 0.6);
+        let strict = ConstraintDetector::detect_all([("e", 1, Role::User, text.as_str())], 0.6);
         assert!(strict.is_empty());
     }
 }

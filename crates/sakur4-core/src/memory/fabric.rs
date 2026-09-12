@@ -110,10 +110,8 @@ impl MemoryFabric {
         let slot_id = new.slot_id.clone();
         let fold_id = new.fold_id.clone();
         let droppable = new.droppable;
-        let meta_json = new
-            .meta
-            .as_ref()
-            .map(|m| serde_json::to_string(m).unwrap_or_else(|_| "null".into()));
+        let meta_json =
+            new.meta.as_ref().map(|m| serde_json::to_string(m).unwrap_or_else(|_| "null".into()));
 
         // Deterministic extraction happens before the transaction so the write
         // stays short; nothing here can call a model (see `symbolic`).
@@ -380,10 +378,7 @@ impl MemoryFabric {
             episodes.retain(|e| e.fold_id.is_none());
         }
 
-        let total_tokens: usize = episodes
-            .iter()
-            .map(|e| e.live_tokens(counter))
-            .sum();
+        let total_tokens: usize = episodes.iter().map(|e| e.live_tokens(counter)).sum();
 
         // Walk newest -> oldest, taking what fits.
         let mut selected: Vec<usize> = Vec::new();
@@ -406,11 +401,7 @@ impl MemoryFabric {
             let text = ep.render();
             if included {
                 let role = ep.role.as_str();
-                let tool = ep
-                    .tool_name
-                    .as_deref()
-                    .map(|t| format!("[{t}] "))
-                    .unwrap_or_default();
+                let tool = ep.tool_name.as_deref().map(|t| format!("[{t}] ")).unwrap_or_default();
                 rendered.push_str(&format!("<{role}> {tool}{text}\n"));
             }
             items.push(TimelineItem {
@@ -424,11 +415,7 @@ impl MemoryFabric {
             });
         }
 
-        let included_tokens = items
-            .iter()
-            .filter(|i| i.included)
-            .map(|i| i.tokens)
-            .sum();
+        let included_tokens = items.iter().filter(|i| i.included).map(|i| i.tokens).sum();
         let evicted = items.iter().filter(|i| !i.included).count();
 
         Ok(SessionTimeline {
@@ -470,16 +457,18 @@ impl MemoryFabric {
     ///
     /// `Ok(None)` means the anchor does not exist. Callers must treat that as
     /// staleness, not as "no information" — see [`SemanticEntry::from_row`].
-    pub async fn anchor_hash(&self, anchor_type: AnchorType, anchor_id: &str) -> Result<Option<String>> {
+    pub async fn anchor_hash(
+        &self,
+        anchor_type: AnchorType,
+        anchor_id: &str,
+    ) -> Result<Option<String>> {
         let id = anchor_id.to_string();
         self.db
             .with(move |c| match anchor_type {
                 AnchorType::SymbolicFact => Ok(c
-                    .query_row(
-                        "SELECT ast_hash FROM symbolic_fact WHERE fact_id = ?1",
-                        [id],
-                        |r| r.get::<_, String>(0),
-                    )
+                    .query_row("SELECT ast_hash FROM symbolic_fact WHERE fact_id = ?1", [id], |r| {
+                        r.get::<_, String>(0)
+                    })
                     .optional()?),
                 AnchorType::EpisodicStream => Ok(c
                     .query_row(
@@ -498,7 +487,9 @@ impl MemoryFabric {
         self.db
             .with(move |c| {
                 Ok(c.query_row(
-                    &format!("SELECT {FACT_COLS} FROM symbolic_fact WHERE qualified_name = ?1 LIMIT 1"),
+                    &format!(
+                        "SELECT {FACT_COLS} FROM symbolic_fact WHERE qualified_name = ?1 LIMIT 1"
+                    ),
                     [name],
                     map_fact,
                 )
@@ -563,7 +554,8 @@ impl MemoryFabric {
                             [id],
                         )?;
                     }
-                    removed += tx.execute("DELETE FROM symbolic_fact WHERE file_path = ?1", [path])?;
+                    removed +=
+                        tx.execute("DELETE FROM symbolic_fact WHERE file_path = ?1", [path])?;
                 }
                 Ok(removed)
             })
@@ -601,15 +593,12 @@ impl MemoryFabric {
         let anchor_type = write.anchor_type;
         let anchor_id = write.anchor_id.clone();
 
-        let current = self
-            .anchor_hash(anchor_type, &anchor_id)
-            .await?
-            .ok_or_else(|| {
-                Error::Integrity(format!(
-                    "cannot anchor a Semantic Atlas entry to a non-existent {} ({anchor_id}) — FR-3",
-                    anchor_type.as_str()
-                ))
-            })?;
+        let current = self.anchor_hash(anchor_type, &anchor_id).await?.ok_or_else(|| {
+            Error::Integrity(format!(
+                "cannot anchor a Semantic Atlas entry to a non-existent {} ({anchor_id}) — FR-3",
+                anchor_type.as_str()
+            ))
+        })?;
 
         // Extra anchors must also exist; a summary that claims to depend on
         // something imaginary is exactly the drift Sakur4 exists to prevent.
@@ -623,10 +612,7 @@ impl MemoryFabric {
         }
 
         let atlas_id = new_id("atlas");
-        let recorded_hash = write
-            .anchor_hash_at_write
-            .clone()
-            .unwrap_or_else(|| current.clone());
+        let recorded_hash = write.anchor_hash_at_write.clone().unwrap_or_else(|| current.clone());
         let now = now_rfc3339();
 
         let id_for_tx = atlas_id.clone();
@@ -741,7 +727,11 @@ impl MemoryFabric {
     }
 
     /// Compute staleness across the whole Atlas (or one project).
-    pub async fn staleness_report(&self, project_id: Option<&str>, limit: usize) -> Result<StalenessReport> {
+    pub async fn staleness_report(
+        &self,
+        project_id: Option<&str>,
+        limit: usize,
+    ) -> Result<StalenessReport> {
         let project = project_id.map(String::from);
         let limit = limit as i64;
         self.db
@@ -770,7 +760,13 @@ impl MemoryFabric {
                 sql.push_str(if project.is_some() { "2" } else { "1" });
 
                 let mut stmt = c.prepare(&sql)?;
-                let mapper = |r: &Row<'_>| -> rusqlite::Result<(String, String, String, String, Option<String>)> {
+                let mapper = |r: &Row<'_>| -> rusqlite::Result<(
+                    String,
+                    String,
+                    String,
+                    String,
+                    Option<String>,
+                )> {
                     Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
                 };
                 let rows: Vec<(String, String, String, String, Option<String>)> = match &project {
@@ -814,7 +810,11 @@ impl MemoryFabric {
     /// Replace an entry's content and refresh its recorded anchor hash.
     ///
     /// Used by the Idle Consolidator when it regenerates a drifted summary.
-    pub async fn refresh_semantic(&self, atlas_id: &str, new_content: String) -> Result<SemanticEntry> {
+    pub async fn refresh_semantic(
+        &self,
+        atlas_id: &str,
+        new_content: String,
+    ) -> Result<SemanticEntry> {
         let existing = self.semantic_entry(atlas_id).await?;
         let current = self
             .anchor_hash(existing.anchor_type, &existing.anchor_id)
@@ -822,8 +822,7 @@ impl MemoryFabric {
             .ok_or_else(|| {
                 Error::Integrity(format!(
                     "cannot refresh {}: its anchor {} no longer exists",
-                    atlas_id,
-                    existing.anchor_id
+                    atlas_id, existing.anchor_id
                 ))
             })?;
         let id = atlas_id.to_string();
@@ -890,12 +889,13 @@ impl MemoryFabric {
                         // A stored kind that fails to parse is a schema-level
                         // impossibility (the column has a CHECK constraint); map
                         // it to a conversion error rather than panicking.
-                        kind: crate::memory::anchor::AnchorKind::parse(&kind)
-                            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+                        kind: crate::memory::anchor::AnchorKind::parse(&kind).map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
                                 2,
                                 rusqlite::types::Type::Text,
                                 Box::new(e),
-                            ))?,
+                            )
+                        })?,
                         session_id: r.get(3)?,
                         project_id: r.get(4)?,
                         pinned_by: r.get(5)?,
@@ -1057,10 +1057,7 @@ impl MemoryFabric {
         session_id: &str,
         counter: &TokenCounter,
     ) -> Result<usize> {
-        Ok(self
-            .timeline(session_id, usize::MAX, counter, false)
-            .await?
-            .included_tokens)
+        Ok(self.timeline(session_id, usize::MAX, counter, false).await?.included_tokens)
     }
 
     /// Distinct sessions known to the store, newest first.
@@ -1201,7 +1198,10 @@ fn preview_of(text: &str, limit: usize) -> String {
 }
 
 /// Insert-or-refresh a deterministic fact. Shared by the Fabric and the indexer.
-pub(crate) fn upsert_symbolic_fact_tx(tx: &crate::store::WriteTxn<'_>, fact: &SymbolicFact) -> Result<()> {
+pub(crate) fn upsert_symbolic_fact_tx(
+    tx: &crate::store::WriteTxn<'_>,
+    fact: &SymbolicFact,
+) -> Result<()> {
     // Natural key: (project, qualified name, kind, file), with NULLs folded so
     // the key behaves as one key rather than as "distinct whenever a column is
     // absent". Re-parsing the same symbol refreshes its row instead of
@@ -1292,6 +1292,10 @@ pub fn fact_node(fact_id: &str) -> NodeRef {
 }
 
 /// Convenience: build a `SymbolicWrite` from a parser result.
-pub fn parser_write(kind: FactKind, name: impl Into<String>, body: impl Into<String>) -> SymbolicWrite {
+pub fn parser_write(
+    kind: FactKind,
+    name: impl Into<String>,
+    body: impl Into<String>,
+) -> SymbolicWrite {
     SymbolicWrite::new(kind, name).body(body)
 }

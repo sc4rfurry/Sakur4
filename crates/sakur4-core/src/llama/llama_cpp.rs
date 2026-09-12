@@ -45,8 +45,17 @@ use crate::llama::{
 /// save/restore over ring rewind (C3's "detect and route around known
 /// limitations" responsibility).
 const PARTIAL_STATE_ARCH_HINTS: &[&str] = &[
-    "swa", "sliding", "gemma3", "gemma-3", "recurrent", "mamba", "hybrid", "jamba", "qwen3next",
-    "lfm2", "granite",
+    "swa",
+    "sliding",
+    "gemma3",
+    "gemma-3",
+    "recurrent",
+    "mamba",
+    "hybrid",
+    "jamba",
+    "qwen3next",
+    "lfm2",
+    "granite",
 ];
 
 /// An HTTP client for a llama.cpp `llama-server`.
@@ -72,9 +81,7 @@ impl LlamaCppBackend {
             .user_agent(concat!("sakur4d/", env!("CARGO_PKG_VERSION")))
             .build()?;
 
-        let api_key = std::env::var("SAKUR4_LLAMA_API_KEY")
-            .ok()
-            .filter(|s| !s.trim().is_empty());
+        let api_key = std::env::var("SAKUR4_LLAMA_API_KEY").ok().filter(|s| !s.trim().is_empty());
 
         let save_dir = std::env::var("SAKUR4_SNAPSHOT_DIR")
             .map(std::path::PathBuf::from)
@@ -97,22 +104,6 @@ impl LlamaCppBackend {
             )));
         }
         Ok(backend)
-    }
-
-    /// Build a backend without probing. Used by tests.
-    pub fn new_unprobed(base_url: &str) -> Self {
-        Self {
-            base_url: base_url.trim_end_matches('/').to_string(),
-            http: reqwest::Client::builder()
-                .timeout(Duration::from_secs(5))
-                .build()
-                .expect("reqwest client"),
-            caps: RwLock::new(CapabilitySet::default()),
-            model_name: RwLock::new(None),
-            n_ctx_hint: RwLock::new(None),
-            api_key: None,
-            save_dir: std::env::temp_dir().join("sakur4-snapshots"),
-        }
     }
 
     pub fn base_url(&self) -> &str {
@@ -157,11 +148,7 @@ impl LlamaCppBackend {
     }
 
     async fn post_json(&self, path: &str, body: Value) -> Result<(bool, Value)> {
-        let resp = self
-            .request(reqwest::Method::POST, path)
-            .json(&body)
-            .send()
-            .await?;
+        let resp = self.request(reqwest::Method::POST, path).json(&body).send().await?;
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
         let parsed: Value = serde_json::from_str(&text).unwrap_or(Value::String(text.clone()));
@@ -202,11 +189,7 @@ impl InferenceBackend for LlamaCppBackend {
         // --- 2. model identity and architecture ------------------------------
         let arch = props
             .as_ref()
-            .and_then(|p| {
-                p.get("model_path")
-                    .or_else(|| p.get("model"))
-                    .and_then(|v| v.as_str())
-            })
+            .and_then(|p| p.get("model_path").or_else(|| p.get("model")).and_then(|v| v.as_str()))
             .map(|s| s.to_lowercase())
             .or_else(|| {
                 slots_doc.as_ref().and_then(|s| {
@@ -221,16 +204,12 @@ impl InferenceBackend for LlamaCppBackend {
 
         if !arch.is_empty() {
             *self.model_name.write() = Some(arch.clone());
-            caps.partial_state_only = PARTIAL_STATE_ARCH_HINTS
-                .iter()
-                .any(|hint| arch.contains(hint));
+            caps.partial_state_only =
+                PARTIAL_STATE_ARCH_HINTS.iter().any(|hint| arch.contains(hint));
         }
 
-        if let Some(n_ctx) = props
-            .as_ref()
-            .and_then(|p| p.get("n_ctx"))
-            .and_then(|v| v.as_i64())
-            .or_else(|| {
+        if let Some(n_ctx) =
+            props.as_ref().and_then(|p| p.get("n_ctx")).and_then(|v| v.as_i64()).or_else(|| {
                 slots_doc
                     .as_ref()
                     .and_then(|s| s.as_array())
@@ -264,9 +243,8 @@ impl InferenceBackend for LlamaCppBackend {
         caps.slot_erase = caps.slots;
 
         // --- 4. exact tokenization ------------------------------------------
-        if let Ok((ok, body)) = self
-            .post_json("/tokenize", serde_json::json!({"content": "Sakur4 probe."}))
-            .await
+        if let Ok((ok, body)) =
+            self.post_json("/tokenize", serde_json::json!({"content": "Sakur4 probe."})).await
         {
             caps.tokenize = ok && body.get("tokens").is_some_and(|t| t.is_array());
         }
@@ -306,11 +284,8 @@ impl InferenceBackend for LlamaCppBackend {
             .or_else(|| array.first())
             .ok_or_else(|| Error::NotFound(format!("slot {slot_id}")))?;
 
-        let n_ctx = slot
-            .get("n_ctx")
-            .and_then(|v| v.as_i64())
-            .or(*self.n_ctx_hint.read())
-            .unwrap_or(0);
+        let n_ctx =
+            slot.get("n_ctx").and_then(|v| v.as_i64()).or(*self.n_ctx_hint.read()).unwrap_or(0);
         let n_past = slot
             .get("n_past")
             .and_then(|v| v.as_i64())
@@ -327,10 +302,7 @@ impl InferenceBackend for LlamaCppBackend {
             slot_id: slot_id.to_string(),
             n_past,
             n_ctx,
-            is_processing: slot
-                .get("is_processing")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
+            is_processing: slot.get("is_processing").and_then(|v| v.as_bool()).unwrap_or(false),
             checkpoints,
             prompt_eval_ms: slot
                 .get("prompt_eval_ms")
@@ -369,8 +341,7 @@ impl InferenceBackend for LlamaCppBackend {
             Some(p) => p.to_path_buf(),
             None => {
                 std::fs::create_dir_all(&self.save_dir)?;
-                self.save_dir
-                    .join(format!("slot{slot_id}-{}.bin", crate::ids::uuid_v7()))
+                self.save_dir.join(format!("slot{slot_id}-{}.bin", crate::ids::uuid_v7()))
             }
         };
         let file_str = file.to_string_lossy().to_string();
@@ -380,10 +351,7 @@ impl InferenceBackend for LlamaCppBackend {
         let mut last_error = String::new();
         for key in ["filename", "path"] {
             match self
-                .post_json(
-                    &format!("/slots/{slot_id}/save"),
-                    serde_json::json!({ key: file_str }),
-                )
+                .post_json(&format!("/slots/{slot_id}/save"), serde_json::json!({ key: file_str }))
                 .await
             {
                 Ok((true, body)) => {
@@ -449,22 +417,17 @@ impl InferenceBackend for LlamaCppBackend {
     }
 
     async fn erase_slot(&self, slot_id: &str) -> Result<()> {
-        let (ok, body) = self
-            .post_json(&format!("/slots/{slot_id}/erase"), serde_json::json!({}))
-            .await?;
+        let (ok, body) =
+            self.post_json(&format!("/slots/{slot_id}/erase"), serde_json::json!({})).await?;
         if ok {
             Ok(())
         } else {
-            Err(Error::BackendUnavailable(format!(
-                "POST /slots/{slot_id}/erase failed: {body}"
-            )))
+            Err(Error::BackendUnavailable(format!("POST /slots/{slot_id}/erase failed: {body}")))
         }
     }
 
     async fn tokenize(&self, text: &str) -> Result<usize> {
-        let (ok, body) = self
-            .post_json("/tokenize", serde_json::json!({"content": text}))
-            .await?;
+        let (ok, body) = self.post_json("/tokenize", serde_json::json!({"content": text})).await?;
         if !ok {
             return Err(Error::BackendUnavailable("POST /tokenize failed".into()));
         }
@@ -515,10 +478,8 @@ fn parse_checkpoints(slot: &Value) -> Vec<CheckpointRef> {
                         let pos = ["token_position", "pos", "n_past", "position"]
                             .iter()
                             .find_map(|k| obj.get(*k).and_then(|v| v.as_i64()));
-                        let size = obj
-                            .get("size")
-                            .or_else(|| obj.get("n_bytes"))
-                            .and_then(|v| v.as_u64());
+                        let size =
+                            obj.get("size").or_else(|| obj.get("n_bytes")).and_then(|v| v.as_u64());
                         if let Some(pos) = pos {
                             push(idx, pos, size);
                         }
@@ -549,7 +510,10 @@ fn parse_checkpoints(slot: &Value) -> Vec<CheckpointRef> {
 
 /// Convenience: resolve `SAKUR4_LLAMA_URL` or the given default into a backend,
 /// returning `None` instead of an error when nothing is listening.
-pub async fn try_connect(base_url: Option<&str>, timeout: Duration) -> Option<Arc<LlamaCppBackend>> {
+pub async fn try_connect(
+    base_url: Option<&str>,
+    timeout: Duration,
+) -> Option<Arc<LlamaCppBackend>> {
     let url = base_url
         .map(String::from)
         .or_else(|| std::env::var("SAKUR4_LLAMA_URL").ok())
@@ -586,10 +550,7 @@ mod tests {
             {"pos": 900}
         ]});
         let cps = parse_checkpoints(&slot);
-        assert_eq!(
-            cps.iter().map(|c| c.token_position).collect::<Vec<_>>(),
-            vec![100, 900, 1200]
-        );
+        assert_eq!(cps.iter().map(|c| c.token_position).collect::<Vec<_>>(), vec![100, 900, 1200]);
         assert_eq!(cps[2].size_bytes, Some(4096));
     }
 
@@ -597,10 +558,7 @@ mod tests {
     fn parses_index_keyed_maps() {
         let slot = json!({"checkpoints": {"0": 500, "1": 1500}});
         let cps = parse_checkpoints(&slot);
-        assert_eq!(
-            cps.iter().map(|c| c.token_position).collect::<Vec<_>>(),
-            vec![500, 1500]
-        );
+        assert_eq!(cps.iter().map(|c| c.token_position).collect::<Vec<_>>(), vec![500, 1500]);
     }
 
     #[test]

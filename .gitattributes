@@ -1,0 +1,30 @@
+# Normalize line endings on checkout, and be explicit about it.
+#
+# This matters more than usual here: the stdio transport is a newline-delimited
+# JSON-RPC channel, and the test suite compares protocol frames. A stray CR is
+# invisible in an editor and visible in a protocol trace.
+* text=auto
+
+*.rs        text eol=lf
+*.toml      text eol=lf
+*.md        text eol=lf
+*.json      text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+LICENSE     text eol=lf
+
+# Windows scripts need CRLF to run.
+*.ps1       text eol=crlf
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+
+# Binary assets must never be touched.
+*.png       binary
+*.jpg       binary
+*.webp      binary
+*.gguf      binary
+*.db        binary
+
+# Generated and vendored content: keep it out of diffs and language stats.
+Cargo.lock  linguist-generated=true
+target/     export-ignore

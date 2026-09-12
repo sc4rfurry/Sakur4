@@ -21,7 +21,7 @@ pub mod fabric;
 pub mod semantic;
 pub mod symbolic;
 
-pub use anchor::{AnchorKind, AnchorRow, AnchorProposal, ConstraintDetector, PinRequest};
+pub use anchor::{AnchorKind, AnchorProposal, AnchorRow, ConstraintDetector, PinRequest};
 pub use dependency::{DependencyGraph, EdgeKind, EdgeRow, NodeKind, NodeRef};
 pub use episodic::{EpisodeRow, EpisodeTier, NewEpisode, Role};
 pub use fabric::{CommitOutcome, MemoryFabric, SessionTimeline, TimelineItem};

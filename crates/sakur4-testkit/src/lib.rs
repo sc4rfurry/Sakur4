@@ -24,9 +24,6 @@ pub use harness::ScriptedSession;
 /// A short unique suffix for temporary paths, without depending on `uuid`.
 pub fn unique_suffix() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     format!("{:x}{:x}", std::process::id(), nanos)
 }

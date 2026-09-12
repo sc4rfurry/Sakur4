@@ -14,8 +14,8 @@ use anyhow::Result;
 use sakur4_core::memory::anchor::PinRequest;
 use sakur4_core::memory::episodic::NewEpisode;
 use sakur4_core::memory::symbolic::{FactKind, FactSource, SymbolicWrite};
-use sakur4_core::receipt::Receipt;
 use sakur4_core::recall::RecallFilters;
+use sakur4_core::receipt::Receipt;
 
 use crate::cli::{self, Cli};
 
@@ -115,10 +115,7 @@ pub async fn run(cli_args: &Cli, repo: Option<std::path::PathBuf>) -> Result<()>
             false,
         )
         .await?;
-    println!(
-        "  committed unstructured result · symbolic: {}",
-        prose.symbolic_summary
-    );
+    println!("  committed unstructured result · symbolic: {}", prose.symbolic_summary);
 
     // A symbolic fact plus an interpretation, to show staleness detection. This
     // is the failure mode PP-2 describes: the agent "remembers" a signature that
@@ -151,15 +148,11 @@ pub async fn run(cli_args: &Cli, repo: Option<std::path::PathBuf>) -> Result<()>
     engine.memory().upsert_facts(vec![v2]).await?;
     println!("  ...the function is then edited (signature and body both change)");
 
-    let recalled = engine
-        .recall()
-        .recall("checkUser", Some(5), Some(RecallFilters::default()))
-        .await?;
+    let recalled =
+        engine.recall().recall("checkUser", Some(5), Some(RecallFilters::default())).await?;
     println!("\n{}", indent(&recalled.render(), 2));
     let stale_hits = recalled.hits.iter().filter(|h| h.stale).count();
-    println!(
-        "  → {stale_hits} hit(s) flagged stale, each carrying its anchor's current value"
-    );
+    println!("  → {stale_hits} hit(s) flagged stale, each carrying its anchor's current value");
 
     section("4 · long session, past the context budget");
     let window = engine.context_window().await;
@@ -203,10 +196,7 @@ pub async fn run(cli_args: &Cli, repo: Option<std::path::PathBuf>) -> Result<()>
                     NewEpisode::tool_result(
                         "demo",
                         "read_file",
-                        format!(
-                            "pub fn placeholder() -> usize {{ {} }}",
-                            "0 + ".repeat(700)
-                        ),
+                        format!("pub fn placeholder() -> usize {{ {} }}", "0 + ".repeat(700)),
                     )
                     .with_slot("0"),
                     &counter,
@@ -237,10 +227,7 @@ pub async fn run(cli_args: &Cli, repo: Option<std::path::PathBuf>) -> Result<()>
 
     section("5 · the eviction decision");
     let parts = cli::assemble_parts(&engine, "demo").await?;
-    let plan = engine
-        .eviction()
-        .plan("demo", "0", window, &parts)
-        .await?;
+    let plan = engine.eviction().plan("demo", "0", window, &parts).await?;
     println!("  pressure       {:?}", plan.pressure);
     println!(
         "  budget         {} · trigger {} · target {}",
@@ -272,15 +259,10 @@ pub async fn run(cli_args: &Cli, repo: Option<std::path::PathBuf>) -> Result<()>
 
     // The crucial assertion the PRD is built around: an anchor is never touched.
     let anchors_before = engine.memory().anchors(Some("demo")).await?;
-    let evicted: std::collections::HashSet<&str> = plan
-        .updates
-        .iter()
-        .map(|u| u.episode_id.as_str())
-        .collect();
-    let anchor_ids: std::collections::HashSet<&str> = anchors_before
-        .iter()
-        .map(|a| a.anchor_id.as_str())
-        .collect();
+    let evicted: std::collections::HashSet<&str> =
+        plan.updates.iter().map(|u| u.episode_id.as_str()).collect();
+    let anchor_ids: std::collections::HashSet<&str> =
+        anchors_before.iter().map(|a| a.anchor_id.as_str()).collect();
     println!(
         "  anchor safety: {} anchor(s) pinned, {} of them in the eviction set (must be 0)",
         anchor_ids.len(),
@@ -304,23 +286,12 @@ pub async fn run(cli_args: &Cli, repo: Option<std::path::PathBuf>) -> Result<()>
     }
 
     let after = cli::assemble_parts(&engine, "demo").await?;
-    let observation = engine
-        .coherence()
-        .observe_prompt("demo", "0", &after.render(), &counter)
-        .await?;
-    let receipt = Receipt::build(
-        "demo",
-        Some("0"),
-        1,
-        &after,
-        &counter,
-        window,
-    )
-    .with_cache(observation.cache_status.as_str(), observation.detail.clone())
-    .with_cache_numbers(observation.reused_tokens, observation.prefilled_tokens)
-    .with_backend(sakur4_core::llama::InferenceBackend::name(
-        engine.backend().as_ref(),
-    ));
+    let observation =
+        engine.coherence().observe_prompt("demo", "0", &after.render(), &counter).await?;
+    let receipt = Receipt::build("demo", Some("0"), 1, &after, &counter, window)
+        .with_cache(observation.cache_status.as_str(), observation.detail.clone())
+        .with_cache_numbers(observation.reused_tokens, observation.prefilled_tokens)
+        .with_backend(sakur4_core::llama::InferenceBackend::name(engine.backend().as_ref()));
     println!("\n{}", indent(&receipt.render(), 2));
     engine.receipts().record(&receipt).await?;
 
@@ -341,9 +312,7 @@ pub async fn run(cli_args: &Cli, repo: Option<std::path::PathBuf>) -> Result<()>
             }
         }
     }
-    println!(
-        "  recalled {checked} evicted episode(s) verbatim — content is unchanged by eviction"
-    );
+    println!("  recalled {checked} evicted episode(s) verbatim — content is unchanged by eviction");
 
     if let Some(root) = repo.or_else(|| cli_args.project_root.clone()) {
         section("8 · Repo Cortex");
@@ -379,18 +348,11 @@ fn section(title: &str) {
 /// talking to in section 1.
 async fn advance_simulated_slot(engine: &sakur4_core::Engine, tokens: usize) {
     if engine.backend().name() == "embedded" {
-        engine
-            .backend()
-            .note_compaction("0", tokens as i64)
-            .await
-            .ok();
+        engine.backend().note_compaction("0", tokens as i64).await.ok();
     }
 }
 
 fn indent(text: &str, spaces: usize) -> String {
     let pad = " ".repeat(spaces);
-    text.lines()
-        .map(|l| format!("{pad}{l}"))
-        .collect::<Vec<_>>()
-        .join("\n")
+    text.lines().map(|l| format!("{pad}{l}")).collect::<Vec<_>>().join("\n")
 }

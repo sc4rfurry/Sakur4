@@ -33,9 +33,9 @@
 use std::collections::HashMap;
 
 use crate::cache::{BoundaryPlan, CacheStatus, Coherence};
-use crate::llama::snap_to_checkpoint;
 use crate::error::{Error, Result};
 use crate::ids::new_id;
+use crate::llama::snap_to_checkpoint;
 use crate::memory::dependency::{EdgeKind, NodeRef};
 use crate::memory::episodic::{EpisodeRow, EpisodeTier};
 use crate::memory::fabric::MemoryFabric;
@@ -284,12 +284,7 @@ impl EvictionEngine {
         policy: EvictionPolicy,
         counter: TokenCounter,
     ) -> Self {
-        Self {
-            fabric,
-            coherence,
-            policy,
-            counter,
-        }
+        Self { fabric, coherence, policy, counter }
     }
 
     pub fn policy(&self) -> &EvictionPolicy {
@@ -379,7 +374,8 @@ impl EvictionEngine {
                 "the Anchor Set plus fixed prompt parts need {} tokens of a {}-token window; \
                  there is no room for any history. Sakur4 will not silently drop a pinned \
                  constraint (FR-4).",
-                anchor_tokens + fixed_tokens, context_window
+                anchor_tokens + fixed_tokens,
+                context_window
             )));
         }
 
@@ -407,9 +403,7 @@ impl EvictionEngine {
         // reusing a cache.
         let mut notes: Vec<String> = Vec::new();
         let (coherence, prefix_budget) = if self.policy.cache_align {
-            let (plan, prefix) = self
-                .boundary_and_prefix(session_id, slot_id, live_tokens)
-                .await;
+            let (plan, prefix) = self.boundary_and_prefix(session_id, slot_id, live_tokens).await;
             if let Some(p) = &plan {
                 notes.push(p.summary());
             }
@@ -420,7 +414,8 @@ impl EvictionEngine {
                 self.policy
                     .keep_prefix_tokens
                     .max(self.policy.cache_prefix_reserve_tokens)
-                    .min((live_tokens as f64 * self.policy.max_prefix_ratio) as usize),            )
+                    .min((live_tokens as f64 * self.policy.max_prefix_ratio) as usize),
+            )
         };
 
         let prefix_end = Self::prefix_end_index(&episodes, prefix_budget);
@@ -428,10 +423,8 @@ impl EvictionEngine {
 
         // Keep only what sits strictly between the preserved prefix and the
         // preserved recent window: that gap is the evictable middle.
-        let prefix_boundary_seq: Option<i64> = prefix_end
-            .checked_sub(1)
-            .and_then(|i| episodes.get(i))
-            .map(|e| e.seq);
+        let prefix_boundary_seq: Option<i64> =
+            prefix_end.checked_sub(1).and_then(|i| episodes.get(i)).map(|e| e.seq);
         let recent_boundary_seq: Option<i64> = episodes.get(recent_start).map(|e| e.seq);
 
         let mut kept: Vec<Candidate> = Vec::with_capacity(candidates.len());
@@ -563,26 +556,21 @@ impl EvictionEngine {
     /// Execute a plan: snapshot if the cache layer asks for one, then apply tiers.
     pub async fn apply(&self, plan: &EvictionPlan, parts: &PromptParts) -> Result<EvictionOutcome> {
         let mut snapshot_taken = false;
-        let cache_status = plan
-            .coherence
-            .as_ref()
-            .map(|c| c.status)
-            .unwrap_or(CacheStatus::Unknown);
+        let cache_status =
+            plan.coherence.as_ref().map(|c| c.status).unwrap_or(CacheStatus::Unknown);
 
         if let Some(coherence) = &plan.coherence
-            && coherence.wants_snapshot() {
-                let cp = self
-                    .coherence
-                    .pre_rewrite_snapshot(&plan.session_id, &plan.slot_id, &coherence.reason)
-                    .await?;
-                snapshot_taken = cp.is_some();
-            }
+            && coherence.wants_snapshot()
+        {
+            let cp = self
+                .coherence
+                .pre_rewrite_snapshot(&plan.session_id, &plan.slot_id, &coherence.reason)
+                .await?;
+            snapshot_taken = cp.is_some();
+        }
 
-        let updates: Vec<(String, EpisodeTier)> = plan
-            .updates
-            .iter()
-            .map(|u| (u.episode_id.clone(), u.to))
-            .collect();
+        let updates: Vec<(String, EpisodeTier)> =
+            plan.updates.iter().map(|u| (u.episode_id.clone(), u.to)).collect();
         let applied = self.fabric.set_tiers(updates).await?;
 
         // Tell the cache layer what the surviving prefix is, so the next turn's
@@ -619,9 +607,7 @@ impl EvictionEngine {
         context_window: usize,
         parts: &PromptParts,
     ) -> Result<Option<(EvictionPlan, EvictionOutcome)>> {
-        let plan = self
-            .plan(session_id, slot_id, context_window, parts)
-            .await?;
+        let plan = self.plan(session_id, slot_id, context_window, parts).await?;
         if plan.pressure == Pressure::Relaxed || plan.is_empty() {
             return Ok(None);
         }
@@ -651,20 +637,13 @@ impl EvictionEngine {
             return Err(Error::Invalid("fold() requires a description".into()));
         }
         let fold_id = new_id("fold");
-        let tokens_at_open = self
-            .fabric
-            .session_live_tokens(session_id, &self.counter)
-            .await
-            .unwrap_or(0);
+        let tokens_at_open =
+            self.fabric.session_live_tokens(session_id, &self.counter).await.unwrap_or(0);
 
         // Prefer a durable save point at open: it is what makes the rollback
         // possible even if the ring wraps during a long folded subtask.
-        let checkpoint = self
-            .coherence
-            .snapshot(session_id, slot_id)
-            .await
-            .ok()
-            .and_then(|o| o.file_path);
+        let checkpoint =
+            self.coherence.snapshot(session_id, slot_id).await.ok().and_then(|o| o.file_path);
 
         let token_position = self
             .coherence
@@ -684,9 +663,7 @@ impl EvictionEngine {
             ),
         };
 
-        self.coherence
-            .mark_fold_open(session_id, slot_id, &fold_id, token_position)
-            .await?;
+        self.coherence.mark_fold_open(session_id, slot_id, &fold_id, token_position).await?;
 
         self.fabric
             .db()
@@ -730,13 +707,7 @@ impl EvictionEngine {
             ))
             .await?;
 
-        Ok(FoldOutcome {
-            fold_id,
-            checkpoint,
-            token_position,
-            tokens_at_open,
-            cache_note,
-        })
+        Ok(FoldOutcome { fold_id, checkpoint, token_position, tokens_at_open, cache_note })
     }
 
     /// Attach an episode to a fold.
@@ -811,10 +782,8 @@ impl EvictionEngine {
 
         // Collapse: every episode inside the fold becomes `Referenced`. The text
         // stays in the store (round-trip integrity), the live window drops it.
-        let updates: Vec<(String, EpisodeTier)> = episodes
-            .iter()
-            .map(|e| (e.episode_id.clone(), EpisodeTier::Referenced))
-            .collect();
+        let updates: Vec<(String, EpisodeTier)> =
+            episodes.iter().map(|e| (e.episode_id.clone(), EpisodeTier::Referenced)).collect();
         self.fabric.set_tiers(updates).await?;
 
         // Put the result summary into the stream as one episode, so the collapsed
@@ -848,15 +817,14 @@ impl EvictionEngine {
         let summary_tokens = self.counter.count(summary).get();
         let tokens_reclaimed = tokens_before.saturating_sub(summary_tokens);
 
-        let rollback = self
-            .coherence
-            .roll_back_to(session_id, slot_id, token_position)
-            .await
-            .unwrap_or(crate::cache::RollBackOutcome {
-                performed: false,
-                method: crate::cache::RollBackMethod::None,
-                detail: "rollback could not be attempted".into(),
-            });
+        let rollback =
+            self.coherence.roll_back_to(session_id, slot_id, token_position).await.unwrap_or(
+                crate::cache::RollBackOutcome {
+                    performed: false,
+                    method: crate::cache::RollBackMethod::None,
+                    detail: "rollback could not be attempted".into(),
+                },
+            );
 
         self.fabric
             .db()
@@ -955,7 +923,8 @@ impl EvictionEngine {
                         "SELECT fold_id, description, goal FROM folds
                          WHERE session_id = ?1 AND status='open' ORDER BY created_at",
                     )?;
-                    let rows = stmt.query_map([session], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+                    let rows =
+                        stmt.query_map([session], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
                     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
                 }
             })
@@ -1063,7 +1032,11 @@ impl EvictionEngine {
     }
 
     /// The next tier for a candidate, or `None` when it may not move.
-    async fn propose_escalation(&self, c: &Candidate, still_needed: usize) -> Result<Option<TierUpdate>> {
+    async fn propose_escalation(
+        &self,
+        c: &Candidate,
+        still_needed: usize,
+    ) -> Result<Option<TierUpdate>> {
         let Some(next) = c.current_tier.escalate() else {
             return Ok(None);
         };
@@ -1090,10 +1063,13 @@ impl EvictionEngine {
         // A step may not overshoot the remaining need by a huge margin: evicting a
         // 50k-token tool result to reclaim 200 tokens is a bad trade even when the
         // tier is technically correct.
-        if c.tokens > 0 && still_needed > 0 && c.tokens > still_needed.saturating_mul(8).max(8192)
-            && next != EpisodeTier::Masked {
-                return Ok(None);
-            }
+        if c.tokens > 0
+            && still_needed > 0
+            && c.tokens > still_needed.saturating_mul(8).max(8192)
+            && next != EpisodeTier::Masked
+        {
+            return Ok(None);
+        }
 
         let episode = self.fabric.episode(&c.episode_id).await?;
         let tokens_before = episode.live_tokens(&self.counter);
@@ -1159,10 +1135,8 @@ impl EvictionEngine {
         slot_id: &str,
         live_tokens: usize,
     ) -> (Option<BoundaryPlan>, usize) {
-        let base_reserve = self
-            .policy
-            .keep_prefix_tokens
-            .max(self.policy.cache_prefix_reserve_tokens);
+        let base_reserve =
+            self.policy.keep_prefix_tokens.max(self.policy.cache_prefix_reserve_tokens);
         // Two independent bounds on the prefix: no more than a fraction of the live
         // window (or there is no middle left to evict), and no more than the
         // configured absolute ceiling (so a pathological ring cannot eat the whole
@@ -1194,13 +1168,7 @@ impl EvictionEngine {
         // Prefer the nearest checkpoint at or below the proposal, inside tolerance.
         if let Some((cut, reason)) = snap_to_checkpoint(proposal, &checkpoints, tolerance) {
             return (
-                Some(BoundaryPlan::aligned(
-                    proposal,
-                    cut,
-                    reason,
-                    checkpoints.len(),
-                    false,
-                )),
+                Some(BoundaryPlan::aligned(proposal, cut, reason, checkpoints.len(), false)),
                 (cut as usize).clamp(1, prefix_max),
             );
         }
@@ -1366,12 +1334,8 @@ mod tests {
         let counter = counter();
         let fabric = MemoryFabric::new(db.clone());
         let coherence = Coherence::new(db.clone(), backend.clone(), CoherenceConfig::default());
-        let engine = EvictionEngine::new(
-            fabric.clone(),
-            coherence,
-            EvictionPolicy::default(),
-            counter,
-        );
+        let engine =
+            EvictionEngine::new(fabric.clone(), coherence, EvictionPolicy::default(), counter);
         (fabric, engine, backend)
     }
 
@@ -1381,12 +1345,7 @@ mod tests {
         for i in 0..n {
             let body = "x".repeat(tokens * 4);
             fabric
-                .commit_episode(
-                    NewEpisode::user("s1", body).with_slot("0"),
-                    &counter,
-                    false,
-                    false,
-                )
+                .commit_episode(NewEpisode::user("s1", body).with_slot("0"), &counter, false, false)
                 .await
                 .unwrap_or_else(|e| panic!("seed {i} failed: {e}"));
         }
@@ -1434,10 +1393,7 @@ mod tests {
     async fn evictions_escalate_one_tier_at_a_time() {
         let (fabric, engine, _b) = rig().await;
         seed(&fabric, 40, 1000).await;
-        let plan = engine
-            .plan("s1", "0", 32_768, &big_prompt(40_000))
-            .await
-            .unwrap();
+        let plan = engine.plan("s1", "0", 32_768, &big_prompt(40_000)).await.unwrap();
         for u in &plan.updates {
             assert_eq!(
                 u.to.severity(),
@@ -1453,10 +1409,7 @@ mod tests {
     async fn drop_is_never_selected_without_explicit_opt_in() {
         let (fabric, engine, _b) = rig().await;
         seed(&fabric, 60, 1000).await;
-        let plan = engine
-            .plan("s1", "0", 32_768, &big_prompt(60_000))
-            .await
-            .unwrap();
+        let plan = engine.plan("s1", "0", 32_768, &big_prompt(60_000)).await.unwrap();
         assert!(
             plan.updates.iter().all(|u| u.to != EpisodeTier::Dropped),
             "allow_drop defaults to false; nothing may be dropped"
@@ -1467,25 +1420,15 @@ mod tests {
     async fn round_trip_integrity_survives_the_harshest_plan() {
         let (fabric, engine, _b) = rig().await;
         seed(&fabric, 40, 1000).await;
-        let before: Vec<String> = fabric
-            .session_episodes("s1")
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|e| e.content)
-            .collect();
+        let before: Vec<String> =
+            fabric.session_episodes("s1").await.unwrap().into_iter().map(|e| e.content).collect();
 
         let parts = big_prompt(40_000);
         let plan = engine.plan("s1", "0", 32_768, &parts).await.unwrap();
         engine.apply(&plan, &parts).await.unwrap();
 
-        let after: Vec<String> = fabric
-            .session_episodes("s1")
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|e| e.content)
-            .collect();
+        let after: Vec<String> =
+            fabric.session_episodes("s1").await.unwrap().into_iter().map(|e| e.content).collect();
         assert_eq!(before, after, "FR-5: evicted content must be bit-identical");
 
         // And the tiers really did change.
@@ -1503,10 +1446,7 @@ mod tests {
     async fn recent_context_is_never_evicted() {
         let (fabric, engine, _b) = rig().await;
         seed(&fabric, 40, 1000).await;
-        let plan = engine
-            .plan("s1", "0", 32_768, &big_prompt(40_000))
-            .await
-            .unwrap();
+        let plan = engine.plan("s1", "0", 32_768, &big_prompt(40_000)).await.unwrap();
 
         let episodes = fabric.session_episodes("s1").await.unwrap();
         let seq_of = |id: &str| episodes.iter().find(|e| e.episode_id == id).map(|e| e.seq);
@@ -1560,10 +1500,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let err = engine
-            .plan("s1", "0", 1024, &big_prompt(100))
-            .await
-            .unwrap_err();
+        let err = engine.plan("s1", "0", 1024, &big_prompt(100)).await.unwrap_err();
         assert!(matches!(err, Error::BudgetOverflow(_)));
         assert!(err.to_string().contains("will not silently drop"));
     }
@@ -1583,12 +1520,7 @@ mod tests {
             .await
             .unwrap();
         let derived = fabric
-            .commit_episode(
-                NewEpisode::user("s1", "w".repeat(400)),
-                &counter,
-                false,
-                false,
-            )
+            .commit_episode(NewEpisode::user("s1", "w".repeat(400)), &counter, false, false)
             .await
             .unwrap();
         fabric
@@ -1601,15 +1533,9 @@ mod tests {
             .unwrap();
         seed(&fabric, 20, 1000).await;
 
-        let plan = engine
-            .plan("s1", "0", 32_768, &big_prompt(41_000))
-            .await
-            .unwrap();
-        let tool_update = plan
-            .updates
-            .iter()
-            .find(|u| u.episode_id == tool.episode_id)
-            .map(|u| u.to);
+        let plan = engine.plan("s1", "0", 32_768, &big_prompt(41_000)).await.unwrap();
+        let tool_update =
+            plan.updates.iter().find(|u| u.episode_id == tool.episode_id).map(|u| u.to);
         // It may be masked (cheap, reversible) but never archived or dropped,
         // because something still depends on it.
         if let Some(tier) = tool_update {
@@ -1644,10 +1570,7 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            engine
-                .tag_episode_with_fold(&ep.episode_id, &fold.fold_id)
-                .await
-                .unwrap();
+            engine.tag_episode_with_fold(&ep.episode_id, &fold.fold_id).await.unwrap();
         }
         backend.advance_to(6000);
 
@@ -1660,10 +1583,7 @@ mod tests {
         assert!(out.trace_retrievable);
 
         // Live window no longer carries the folded steps.
-        let timeline = fabric
-            .timeline("s1", 100_000, &counter, false)
-            .await
-            .unwrap();
+        let timeline = fabric.timeline("s1", 100_000, &counter, false).await.unwrap();
         assert!(
             timeline.rendered.contains("result: extracted TokenValidator"),
             "the summary must be in the live window"
@@ -1694,10 +1614,7 @@ mod tests {
         let (fabric, engine, _b) = rig().await;
         let fold = engine.fold("s1", "0", "d", "g").await.unwrap();
         engine.unfold("s1", "0", &fold.fold_id, "done").await.unwrap();
-        let err = engine
-            .unfold("s1", "0", &fold.fold_id, "done again")
-            .await
-            .unwrap_err();
+        let err = engine.unfold("s1", "0", &fold.fold_id, "done again").await.unwrap_err();
         assert!(err.to_string().contains("already closed"));
         let _ = fabric;
     }
@@ -1707,10 +1624,7 @@ mod tests {
         let (fabric, engine, backend) = rig().await;
         seed(&fabric, 40, 1000).await;
         backend.advance_to(41_000);
-        let plan = engine
-            .plan("s1", "0", 32_768, &big_prompt(40_000))
-            .await
-            .unwrap();
+        let plan = engine.plan("s1", "0", 32_768, &big_prompt(40_000)).await.unwrap();
         let coherence = plan.coherence.expect("cache alignment must be evaluated");
         // The retained prefix ends where the first escalation begins, and the
         // embedded ring is 256-deep, so this boundary is usually an exact or
@@ -1744,10 +1658,7 @@ mod tests {
     async fn compact_if_needed_is_a_no_op_when_relaxed() {
         let (fabric, engine, _b) = rig().await;
         seed(&fabric, 3, 100).await;
-        let out = engine
-            .compact_if_needed("s1", "0", 32_768, &big_prompt(300))
-            .await
-            .unwrap();
+        let out = engine.compact_if_needed("s1", "0", 32_768, &big_prompt(300)).await.unwrap();
         assert!(out.is_none());
         let _ = fabric;
     }
@@ -1758,16 +1669,10 @@ mod tests {
         let backend = Arc::new(EmbeddedBackend::new().with_ring(256, 8));
         let fabric = MemoryFabric::new(db.clone());
         let coherence = Coherence::new(db, backend, CoherenceConfig::default());
-        let policy = EvictionPolicy {
-            cache_align: false,
-            ..Default::default()
-        };
+        let policy = EvictionPolicy { cache_align: false, ..Default::default() };
         let engine = EvictionEngine::new(fabric.clone(), coherence, policy, counter());
         seed(&fabric, 40, 1000).await;
-        let plan = engine
-            .plan("s1", "0", 32_768, &big_prompt(40_000))
-            .await
-            .unwrap();
+        let plan = engine.plan("s1", "0", 32_768, &big_prompt(40_000)).await.unwrap();
         assert!(plan.coherence.is_none());
         assert!(!plan.is_cache_cheap());
     }

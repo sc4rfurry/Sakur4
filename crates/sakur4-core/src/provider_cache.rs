@@ -374,7 +374,10 @@ impl Db {
     }
 
     /// Aggregate provider-cache statistics for a session (or every session).
-    pub async fn provider_cache_stats(&self, session_id: Option<&str>) -> Result<ProviderCacheStats> {
+    pub async fn provider_cache_stats(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<ProviderCacheStats> {
         let session = session_id.map(String::from);
         self.with(move |c| {
             let mut stmt = c.prepare(
@@ -421,11 +424,7 @@ mod tests {
     use super::*;
 
     fn usage_of(prompt: usize, cached: Option<usize>) -> ProviderUsage {
-        ProviderUsage {
-            prompt_tokens: prompt,
-            cache_read_tokens: cached,
-            ..Default::default()
-        }
+        ProviderUsage { prompt_tokens: prompt, cache_read_tokens: cached, ..Default::default() }
     }
 
     #[test]
@@ -517,26 +516,19 @@ mod tests {
     async fn usage_records_persist_and_aggregate() {
         let db = Db::open_in_memory().await.unwrap();
 
-        let r1 = db
-            .record_provider_usage("s1", Some("0"), usage_of(5000, Some(0)))
-            .await
-            .unwrap();
+        let r1 = db.record_provider_usage("s1", Some("0"), usage_of(5000, Some(0))).await.unwrap();
         assert_eq!(r1.turn, 1);
         assert_eq!(r1.verdict, ProviderCacheVerdict::CacheMiss);
 
-        let r2 = db
-            .record_provider_usage("s1", Some("0"), usage_of(6000, Some(5000)))
-            .await
-            .unwrap();
+        let r2 =
+            db.record_provider_usage("s1", Some("0"), usage_of(6000, Some(5000))).await.unwrap();
         assert_eq!(r2.turn, 2);
         assert_eq!(r2.verdict, ProviderCacheVerdict::PartialReuse);
         assert_eq!(r2.previous_cache_read_tokens, Some(0));
 
         // A rewrite: the prefix collapses while the prompt stays large.
-        let r3 = db
-            .record_provider_usage("s1", Some("0"), usage_of(6200, Some(300)))
-            .await
-            .unwrap();
+        let r3 =
+            db.record_provider_usage("s1", Some("0"), usage_of(6200, Some(300))).await.unwrap();
         assert_eq!(r3.verdict, ProviderCacheVerdict::PrefixBroken);
         assert!(r3.detail.contains("no longer cached"));
 
@@ -553,9 +545,7 @@ mod tests {
     #[tokio::test]
     async fn a_session_with_no_reported_usage_says_so_rather_than_claiming_zero() {
         let db = Db::open_in_memory().await.unwrap();
-        db.record_provider_usage("s1", None, usage_of(1000, None))
-            .await
-            .unwrap();
+        db.record_provider_usage("s1", None, usage_of(1000, None)).await.unwrap();
         let stats = db.provider_cache_stats(Some("s1")).await.unwrap();
         assert_eq!(stats.turns, 1);
         assert_eq!(stats.turns_reporting, 0);

@@ -1,0 +1,25 @@
+# Editor configuration, so a contributor's editor does not fight the project.
+#
+# `rustfmt.toml` is the source of truth for Rust formatting; this file exists for
+# the formats rustfmt does not cover, and to state the whitespace rules once
+# rather than per-editor.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{yml,yaml,json,toml}]
+indent_size = 2
+
+[*.md]
+# Markdown uses two trailing spaces for a hard line break, so trimming them
+# would silently change rendering.
+trim_trailing_whitespace = false
+
+[*.{ps1,bat,cmd}]
+end_of_line = crlf

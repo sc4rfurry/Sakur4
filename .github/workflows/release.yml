@@ -1,0 +1,210 @@
+name: Release
+
+# Triggered by a version tag. The release workflow does three things, in order of
+# how much they would hurt to get wrong:
+#
+#  1. Re-runs the full test suite against the tagged commit. A tag can point at
+#     anything; the release must not.
+#  2. Builds prebuilt binaries for the three platforms the PRD names.
+#  3. Publishes the GitHub release with those binaries and generated notes.
+#
+# Publishing to crates.io is deliberately *not* automatic. It is irreversible
+# (a yanked version stays yanked, and the name stays taken), so it belongs behind
+# a human decision. The `package` job below verifies the crates are publishable,
+# and the README documents the one command that pushes them.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and verify, but do not create a GitHub release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  verify:
+    name: verify the tagged commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features
+      - run: cargo build --workspace --bins
+      - run: cargo test --workspace --all-targets
+      # `sakur4-core` must be publishable before it can go to crates.io; and it
+      # must go first, because `sakur4d` depends on it by version.
+      - run: cargo publish -p sakur4-core --dry-run --allow-dirty
+
+  # ---------------------------------------------------------------------------
+  # Prebuilt binaries. A user on a machine without a Rust toolchain should be
+  # able to download `sakur4d` and run it — which is also what makes the MCP
+  # integration path one step instead of two.
+  # ---------------------------------------------------------------------------
+  binaries:
+    name: build (${{ matrix.target }})
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross-linker (aarch64 Linux)
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} -p sakur4d
+
+      - name: Package (unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="sakur4d-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/sakur4d" "dist/$name/"
+          cp README.md LICENSE CHANGELOG.md "dist/$name/" 2>/dev/null || true
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          echo "ASSET=dist/$name.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Package (windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $name = "sakur4d-$env:GITHUB_REF_NAME-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "dist/$name" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/sakur4d.exe" "dist/$name/"
+          foreach ($f in 'README.md','LICENSE','CHANGELOG.md') {
+            if (Test-Path $f) { Copy-Item $f "dist/$name/" }
+          }
+          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+          "ASSET=dist/$name.zip" | Out-File -Append -FilePath $env:GITHUB_ENV
+
+      # A checksum per artifact, so a downloader can verify what they got.
+      - name: Checksum
+        shell: bash
+        run: |
+          cd dist
+          if command -v sha256sum >/dev/null; then sha256sum ./*.tar.gz ./*.zip > SHA256SUMS.txt 2>/dev/null || true; fi
+          if command -v shasum >/dev/null; then shasum -a 256 ./*.tar.gz ./*.zip > SHA256SUMS.txt 2>/dev/null || true; fi
+          cat SHA256SUMS.txt 2>/dev/null || echo "no checksums generated"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sakur4d-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # The GitHub release itself.
+  # ---------------------------------------------------------------------------
+  publish:
+    name: publish GitHub release
+    needs: binaries
+    if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Collect release assets
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name 'SHA256SUMS.txt' \) -exec cp {} release/ \;
+          ls -la release/
+
+      - name: Extract the changelog section for this tag
+        id: notes
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          if [ -f CHANGELOG.md ]; then
+            awk -v ver="$version" '
+              $0 ~ "^## \\[" ver "\\]" { found=1; next }
+              found && /^## \[/ { exit }
+              found { print }
+            ' CHANGELOG.md > notes.md
+          fi
+          if [ ! -s notes.md ]; then
+            echo "No CHANGELOG section found for ${version}; using generated notes." >&2
+            echo "" > notes.md
+          fi
+          {
+            cat notes.md
+            echo ""
+            echo "---"
+            echo ""
+            echo "### Installing"
+            echo ""
+            echo 'Download the archive for your platform, then:'
+            echo ""
+            echo '```bash'
+            echo './sakur4d --version'
+            echo './sakur4d --db :memory: doctor'
+            echo '```'
+            echo ""
+            echo "Or build from source with \`cargo build --release\` (Rust 1.94+)."
+            echo ""
+            echo "### Using it from a harness"
+            echo ""
+            echo '```bash'
+            echo '# Print ready-to-paste MCP configuration'
+            echo './sakur4d config hermes'
+            echo './sakur4d config claude'
+            echo './sakur4d config generic-stdio'
+            echo '```'
+          } > release-notes.md
+          wc -l release-notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: release-notes.md
+          files: release/*
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: false

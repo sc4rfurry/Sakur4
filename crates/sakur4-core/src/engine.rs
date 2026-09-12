@@ -13,8 +13,8 @@ use crate::error::Result;
 use crate::evict::{EvictionEngine, EvictionPolicy};
 use crate::llama::{BackendSpec, InferenceBackend, ResolvedBackend};
 use crate::memory::MemoryFabric;
-use crate::receipt::ReceiptLog;
 use crate::recall::{RecallEngine, RecallPolicy};
+use crate::receipt::ReceiptLog;
 use crate::repo::RepoCortex;
 use crate::store::Db;
 use crate::tokens::TokenCounter;
@@ -72,25 +72,30 @@ impl EngineConfig {
     /// Apply environment overrides (`SAKUR4_*`), then CLI overrides.
     pub fn with_env(mut self) -> Self {
         if let Ok(v) = std::env::var("SAKUR4_DB")
-            && !v.trim().is_empty() {
-                self.db_path = v;
-            }
+            && !v.trim().is_empty()
+        {
+            self.db_path = v;
+        }
         if let Ok(v) = std::env::var("SAKUR4_BACKEND")
-            && !v.trim().is_empty() {
-                self.backend = v;
-            }
+            && !v.trim().is_empty()
+        {
+            self.backend = v;
+        }
         if let Ok(v) = std::env::var("SAKUR4_PROJECT_ROOT")
-            && !v.trim().is_empty() {
-                self.project_root = Some(v);
-            }
+            && !v.trim().is_empty()
+        {
+            self.project_root = Some(v);
+        }
         if let Ok(v) = std::env::var("SAKUR4_EMBED_URL")
-            && !v.trim().is_empty() {
-                self.embed_url = Some(v);
-            }
+            && !v.trim().is_empty()
+        {
+            self.embed_url = Some(v);
+        }
         if let Ok(v) = std::env::var("SAKUR4_EMBED_MODEL")
-            && !v.trim().is_empty() {
-                self.embed_model = Some(v);
-            }
+            && !v.trim().is_empty()
+        {
+            self.embed_model = Some(v);
+        }
         self
     }
 
@@ -262,9 +267,10 @@ impl Engine {
         if caps.reachable {
             // `n_ctx` is reported per slot; slot 0 is the default single-slot case.
             if let Ok(state) = self.backend.slot_state("0").await
-                && state.n_ctx > 0 {
-                    return state.n_ctx as usize;
-                }
+                && state.n_ctx > 0
+            {
+                return state.n_ctx as usize;
+            }
         }
         self.config.default_n_ctx
     }

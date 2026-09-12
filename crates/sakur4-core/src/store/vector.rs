@@ -66,10 +66,7 @@ pub fn encode(v: &[f32]) -> Vec<u8> {
 
 /// Decode little-endian `f32` bytes back into a vector.
 pub fn decode(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect()
+    bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
 }
 
 /// L2 norm, used to persist the precomputed magnitude alongside each vector.
@@ -170,16 +167,8 @@ impl Db {
                 let v = decode(&blob);
                 let dot: f32 = v.iter().zip(q.iter()).map(|(a, b)| a * b).sum();
                 let denom = (stored_norm as f32) * qnorm;
-                let similarity = if denom <= f32::EPSILON {
-                    0.0
-                } else {
-                    (dot / denom) as f64
-                };
-                scored.push(VectorHit {
-                    source_table: table,
-                    source_id: id,
-                    similarity,
-                });
+                let similarity = if denom <= f32::EPSILON { 0.0 } else { (dot / denom) as f64 };
+                scored.push(VectorHit { source_table: table, source_id: id, similarity });
             }
             scored.sort_by(|a, b| {
                 // Descending similarity, then a stable tiebreak on id so the
@@ -225,20 +214,11 @@ mod tests {
     #[tokio::test]
     async fn cosine_search_is_exact_and_ordered() {
         let db = Db::open_in_memory().await.unwrap();
-        db.put_vector("semantic_atlas", "a", "m", &[1.0, 0.0, 0.0])
-            .await
-            .unwrap();
-        db.put_vector("semantic_atlas", "b", "m", &[0.9, 0.1, 0.0])
-            .await
-            .unwrap();
-        db.put_vector("semantic_atlas", "c", "m", &[0.0, 1.0, 0.0])
-            .await
-            .unwrap();
+        db.put_vector("semantic_atlas", "a", "m", &[1.0, 0.0, 0.0]).await.unwrap();
+        db.put_vector("semantic_atlas", "b", "m", &[0.9, 0.1, 0.0]).await.unwrap();
+        db.put_vector("semantic_atlas", "c", "m", &[0.0, 1.0, 0.0]).await.unwrap();
 
-        let hits = db
-            .search_vectors(&[1.0, 0.0, 0.0], 3, None, Some("m".into()))
-            .await
-            .unwrap();
+        let hits = db.search_vectors(&[1.0, 0.0, 0.0], 3, None, Some("m".into())).await.unwrap();
         assert_eq!(hits[0].source_id, "a");
         assert_eq!(hits[1].source_id, "b");
         assert_eq!(hits[2].source_id, "c");
@@ -249,13 +229,8 @@ mod tests {
     #[tokio::test]
     async fn dimension_mismatch_is_skipped_not_scored() {
         let db = Db::open_in_memory().await.unwrap();
-        db.put_vector("semantic_atlas", "wide", "m", &[1.0, 0.0, 0.0, 0.0])
-            .await
-            .unwrap();
-        let hits = db
-            .search_vectors(&[1.0, 0.0], 5, None, None)
-            .await
-            .unwrap();
+        db.put_vector("semantic_atlas", "wide", "m", &[1.0, 0.0, 0.0, 0.0]).await.unwrap();
+        let hits = db.search_vectors(&[1.0, 0.0], 5, None, None).await.unwrap();
         assert!(hits.is_empty());
     }
 }

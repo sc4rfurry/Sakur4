@@ -47,9 +47,7 @@ pub fn now_rfc3339() -> String {
 
 /// Parse a stored RFC 3339 timestamp.
 pub fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-    chrono::DateTime::parse_from_rfc3339(s)
-        .ok()
-        .map(|d| d.with_timezone(&chrono::Utc))
+    chrono::DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&chrono::Utc))
 }
 
 /// Normalise a repository-relative path to forward slashes.

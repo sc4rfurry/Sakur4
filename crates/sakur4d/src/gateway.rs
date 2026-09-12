@@ -24,12 +24,12 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use rmcp::transport::stdio;
 use rmcp::transport::streamable_http_server::{
     StreamableHttpService, session::local::LocalSessionManager,
 };
-use rmcp::transport::stdio;
-use sakur4_core::consolidate::{Consolidator, ConsolidatorConfig};
 use sakur4_core::Engine;
+use sakur4_core::consolidate::{Consolidator, ConsolidatorConfig};
 
 use crate::tools::Sakur4Server;
 
@@ -108,9 +108,8 @@ async fn serve_stdio(
         env!("CARGO_PKG_VERSION"),
         sakur4_core::MCP_PROTOCOL_VERSION
     );
-    let running = rmcp::serve_server(server, stdio())
-        .await
-        .context("starting the MCP server on stdio")?;
+    let running =
+        rmcp::serve_server(server, stdio()).await.context("starting the MCP server on stdio")?;
 
     tokio::select! {
         result = running.waiting() => {
@@ -146,10 +145,7 @@ async fn serve_http(
     let addr = listener.local_addr()?;
 
     tracing::info!(%addr, "Sakur4 MCP gateway listening (protocol {})", sakur4_core::MCP_PROTOCOL_VERSION);
-    eprintln!(
-        "sakur4d {} — MCP gateway on http://{addr}",
-        env!("CARGO_PKG_VERSION")
-    );
+    eprintln!("sakur4d {} — MCP gateway on http://{addr}", env!("CARGO_PKG_VERSION"));
     eprintln!("  protocol        {}", sakur4_core::MCP_PROTOCOL_VERSION);
     eprintln!("  store           {}", server.engine().db().path().display());
     eprintln!(
@@ -181,17 +177,11 @@ fn spawn_consolidator(
     engine: &Engine,
     dream: bool,
     quiet_secs: u64,
-) -> Option<(
-    tokio::task::JoinHandle<()>,
-    tokio::sync::watch::Sender<bool>,
-)> {
+) -> Option<(tokio::task::JoinHandle<()>, tokio::sync::watch::Sender<bool>)> {
     if !dream {
         return None;
     }
-    let cfg = ConsolidatorConfig {
-        quiet_period_secs: quiet_secs,
-        ..Default::default()
-    };
+    let cfg = ConsolidatorConfig { quiet_period_secs: quiet_secs, ..Default::default() };
     let consolidator = Consolidator::new(
         engine.db().clone(),
         engine.memory().clone(),
@@ -205,5 +195,3 @@ fn spawn_consolidator(
     tracing::debug!(quiet_secs, "dream cycle started");
     Some((handle, tx))
 }
-
-

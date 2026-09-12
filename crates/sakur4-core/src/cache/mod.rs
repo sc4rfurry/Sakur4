@@ -45,8 +45,8 @@ use std::sync::Arc;
 use crate::error::Result;
 use crate::ids::{new_id, now_rfc3339};
 use crate::llama::{
-    snap_to_checkpoint, CapabilitySet, CheckpointKind, CheckpointRef, InferenceBackend, SlotState,
-    SnapReason,
+    CapabilitySet, CheckpointKind, CheckpointRef, InferenceBackend, SlotState, SnapReason,
+    snap_to_checkpoint,
 };
 use crate::store::Db;
 use crate::tokens::TokenCounter;
@@ -121,11 +121,7 @@ impl PromptObservation {
 
 impl Coherence {
     pub fn new(db: Db, backend: Arc<dyn InferenceBackend>, config: CoherenceConfig) -> Self {
-        Self {
-            db,
-            backend,
-            config,
-        }
+        Self { db, backend, config }
     }
 
     pub fn backend(&self) -> &Arc<dyn InferenceBackend> {
@@ -170,9 +166,7 @@ impl Coherence {
         let recorded = self.recorded_checkpoints(slot_id, session_id).await?;
         let mut candidates = state.checkpoints.clone();
         for r in recorded {
-            if !candidates
-                .iter()
-                .any(|c| c.token_position == r.token_position && c.kind == r.kind)
+            if !candidates.iter().any(|c| c.token_position == r.token_position && c.kind == r.kind)
             {
                 candidates.push(r);
             }
@@ -243,9 +237,7 @@ impl Coherence {
         let recorded = self.recorded_checkpoints(slot_id, session_id).await?;
         let mut candidates = state.checkpoints.clone();
         for r in recorded {
-            if !candidates
-                .iter()
-                .any(|c| c.token_position == r.token_position && c.kind == r.kind)
+            if !candidates.iter().any(|c| c.token_position == r.token_position && c.kind == r.kind)
             {
                 candidates.push(r);
             }
@@ -312,9 +304,7 @@ impl Coherence {
             return Ok(BoundaryPlan::aligned(
                 requested_cut,
                 live_position,
-                SnapReason::InternalCheckpoint {
-                    delta: requested_cut - live_position,
-                },
+                SnapReason::InternalCheckpoint { delta: requested_cut - live_position },
                 usable.len(),
                 caps.partial_state_only,
             ));
@@ -398,14 +388,15 @@ impl Coherence {
             return Ok(None);
         }
         if let Some(free) = free_disk_bytes()
-            && free < self.config.min_free_disk_bytes {
-                tracing::warn!(
-                    free_bytes = free,
-                    required = self.config.min_free_disk_bytes,
-                    "skipping pre-rewrite snapshot: low disk space"
-                );
-                return Ok(None);
-            }
+            && free < self.config.min_free_disk_bytes
+        {
+            tracing::warn!(
+                free_bytes = free,
+                required = self.config.min_free_disk_bytes,
+                "skipping pre-rewrite snapshot: low disk space"
+            );
+            return Ok(None);
+        }
 
         let state = self.slot_state(slot_id).await.ok();
         // Prefer what Sakur4 knows survived the last plan over the server's raw
@@ -422,28 +413,29 @@ impl Coherence {
             Ok(o) => o,
             Err(e) => {
                 tracing::warn!(slot = slot_id, error = %e, "pre-rewrite snapshot failed");
-                self.log(session_id, slot_id, "snapshot_failed", serde_json::json!({
-                    "reason": reason,
-                    "error": e.to_string(),
-                    "token_position": token_position,
-                }))
+                self.log(
+                    session_id,
+                    slot_id,
+                    "snapshot_failed",
+                    serde_json::json!({
+                        "reason": reason,
+                        "error": e.to_string(),
+                        "token_position": token_position,
+                    }),
+                )
                 .await?;
                 return Ok(None);
             }
         };
 
         let checkpoint = CheckpointRef {
-            id: outcome
-                .file_path
-                .clone()
-                .unwrap_or_else(|| outcome.snapshot_id.clone()),
+            id: outcome.file_path.clone().unwrap_or_else(|| outcome.snapshot_id.clone()),
             token_position,
             kind: CheckpointKind::PreRewrite,
             size_bytes: outcome.size_bytes,
         };
 
-        self.record_checkpoint(session_id, slot_id, &checkpoint, Some(reason))
-            .await?;
+        self.record_checkpoint(session_id, slot_id, &checkpoint, Some(reason)).await?;
         self.log(
             session_id,
             slot_id,
@@ -463,14 +455,15 @@ impl Coherence {
     }
 
     /// Force an immediate save (`session.snapshot`, FR-8).
-    pub async fn snapshot(&self, session_id: &str, slot_id: &str) -> Result<crate::llama::SnapshotOutcome> {
+    pub async fn snapshot(
+        &self,
+        session_id: &str,
+        slot_id: &str,
+    ) -> Result<crate::llama::SnapshotOutcome> {
         let outcome = self.backend.save_slot(slot_id, None).await?;
         let state = self.slot_state(slot_id).await.ok();
         let checkpoint = CheckpointRef {
-            id: outcome
-                .file_path
-                .clone()
-                .unwrap_or_else(|| outcome.snapshot_id.clone()),
+            id: outcome.file_path.clone().unwrap_or_else(|| outcome.snapshot_id.clone()),
             token_position: state.as_ref().map(|s| s.n_past).unwrap_or(0),
             kind: CheckpointKind::SlotSaveFile,
             size_bytes: outcome.size_bytes,
@@ -497,11 +490,13 @@ impl Coherence {
     ///
     /// Turns a 60-120 s cold prefill into a sub-second restore — the difference
     /// UC3 cares about ("resuming a session the next day with full continuity").
-    pub async fn restore(&self, session_id: &str, slot_id: &str, path: &str) -> Result<crate::llama::RestoreOutcome> {
-        let outcome = self
-            .backend
-            .restore_slot(slot_id, std::path::Path::new(path))
-            .await?;
+    pub async fn restore(
+        &self,
+        session_id: &str,
+        slot_id: &str,
+        path: &str,
+    ) -> Result<crate::llama::RestoreOutcome> {
+        let outcome = self.backend.restore_slot(slot_id, std::path::Path::new(path)).await?;
         self.db
             .write({
                 let slot = slot_id.to_string();
@@ -651,10 +646,7 @@ impl Coherence {
                     Some(p) => (
                         CacheStatus::FullRePrefill,
                         common_prefix_tokens("", prompt, counter),
-                        format!(
-                            "{} Full re-prefill of {prompt_tokens} tokens",
-                            p.reason
-                        ),
+                        format!("{} Full re-prefill of {prompt_tokens} tokens", p.reason),
                     ),
                     None => (
                         CacheStatus::Cold,
@@ -691,7 +683,13 @@ impl Coherence {
                             cache_status = excluded.cache_status,
                             prompt_tokens = excluded.prompt_tokens,
                             last_seen_at = excluded.last_seen_at",
-                        rusqlite::params![slot, session, status, observation.prompt_tokens as i64, now],
+                        rusqlite::params![
+                            slot,
+                            session,
+                            status,
+                            observation.prompt_tokens as i64,
+                            now
+                        ],
                     )?;
                     Ok(())
                 }
@@ -715,8 +713,7 @@ impl Coherence {
             kind: CheckpointKind::FoldMarker,
             size_bytes: None,
         };
-        self.record_checkpoint(session_id, slot_id, &checkpoint, Some("fold opened"))
-            .await
+        self.record_checkpoint(session_id, slot_id, &checkpoint, Some("fold opened")).await
     }
 
     /// Record that a fold was rolled back (FR-6's "instructs the
@@ -743,26 +740,28 @@ impl Coherence {
         // Prefer a ring rewind: it costs no disk I/O and no re-prefill.
         if let Ok(state) = self.slot_state(slot_id).await
             && let Some(cp) = state.nearest_checkpoint_at_or_before(target_tokens)
-                && cp.token_position == target_tokens && !self.capabilities().partial_state_only {
-                    // The server owns the rewind: issuing a request whose prompt
-                    // matches this prefix is what actually rewinds the slot.
-                    self.log(
-                        session_id,
-                        slot_id,
-                        "fold_rollback_ring",
-                        serde_json::json!({"checkpoint": cp.id, "tokens": cp.token_position}),
-                    )
-                    .await?;
-                    return Ok(RollBackOutcome {
-                        performed: true,
-                        method: RollBackMethod::RingRewind,
-                        detail: format!(
-                            "slot {} retained a ring checkpoint at {} tokens; the next request \
+            && cp.token_position == target_tokens
+            && !self.capabilities().partial_state_only
+        {
+            // The server owns the rewind: issuing a request whose prompt
+            // matches this prefix is what actually rewinds the slot.
+            self.log(
+                session_id,
+                slot_id,
+                "fold_rollback_ring",
+                serde_json::json!({"checkpoint": cp.id, "tokens": cp.token_position}),
+            )
+            .await?;
+            return Ok(RollBackOutcome {
+                performed: true,
+                method: RollBackMethod::RingRewind,
+                detail: format!(
+                    "slot {} retained a ring checkpoint at {} tokens; the next request \
                              with that prefix rewinds in place",
-                            slot_id, cp.token_position
-                        ),
-                    });
-                }
+                    slot_id, cp.token_position
+                ),
+            });
+        }
 
         // Otherwise restore the durable save recorded for this session.
         if let Some(path) = self.durable_snapshot_path(slot_id, session_id).await? {
@@ -771,14 +770,19 @@ impl Coherence {
                     return Ok(RollBackOutcome {
                         performed: o.restored,
                         method: RollBackMethod::SlotRestore,
-                        detail: format!("restored slot state from {path} in {} ms", o.restore_time_ms),
+                        detail: format!(
+                            "restored slot state from {path} in {} ms",
+                            o.restore_time_ms
+                        ),
                     });
                 }
                 Err(e) => {
                     return Ok(RollBackOutcome {
                         performed: false,
                         method: RollBackMethod::None,
-                        detail: format!("restore from {path} failed ({e}); next turn pays full prefill"),
+                        detail: format!(
+                            "restore from {path} failed ({e}); next turn pays full prefill"
+                        ),
                     });
                 }
             }
@@ -907,7 +911,11 @@ impl Coherence {
     }
 
     /// Find the newest durable save file for a slot/session.
-    async fn durable_snapshot_path(&self, slot_id: &str, session_id: &str) -> Result<Option<String>> {
+    async fn durable_snapshot_path(
+        &self,
+        slot_id: &str,
+        session_id: &str,
+    ) -> Result<Option<String>> {
         let slot = slot_id.to_string();
         let session = session_id.to_string();
         self.db
@@ -934,18 +942,17 @@ impl Coherence {
         let slot = slot_id.to_string();
         self.db
             .with(move |c| {
-                Ok(c.query_row(
-                    "SELECT n_past FROM slot_state WHERE slot_id = ?1",
-                    [slot],
-                    |r| r.get::<_, Option<i64>>(0),
-                )
+                Ok(c.query_row("SELECT n_past FROM slot_state WHERE slot_id = ?1", [slot], |r| {
+                    r.get::<_, Option<i64>>(0)
+                })
                 .ok()
                 .flatten())
             })
             .await
     }
 
-    async fn slot_cache_detail(&self, slot_id: &str) -> Result<Option<String>> {        let slot = slot_id.to_string();
+    async fn slot_cache_detail(&self, slot_id: &str) -> Result<Option<String>> {
+        let slot = slot_id.to_string();
         self.db
             .with(move |c| {
                 Ok(c.query_row(
@@ -974,9 +981,8 @@ impl Coherence {
                      ORDER BY created_at DESC
                      LIMIT -1 OFFSET ?2",
                 )?;
-                let rows = stmt.query_map(rusqlite::params![slot, keep], |r| {
-                    r.get::<_, Option<String>>(0)
-                })?;
+                let rows = stmt
+                    .query_map(rusqlite::params![slot, keep], |r| r.get::<_, Option<String>>(0))?;
                 let mut out = Vec::new();
                 for row in rows {
                     if let Some(p) = row? {
@@ -1001,11 +1007,13 @@ impl Coherence {
                     d.contains("sakur4")
                 })
                 .unwrap_or(false);
-            if in_snapshot_dir && p.exists()
-                && let Err(e) = std::fs::remove_file(p) {
-                    tracing::warn!(path = %path, error = %e, "snapshot prune failed");
-                    continue;
-                }
+            if in_snapshot_dir
+                && p.exists()
+                && let Err(e) = std::fs::remove_file(p)
+            {
+                tracing::warn!(path = %path, error = %e, "snapshot prune failed");
+                continue;
+            }
             self.db
                 .write({
                     let path = path.clone();
@@ -1131,15 +1139,13 @@ mod tests {
 
     async fn coherence(backend: Arc<dyn InferenceBackend>) -> (Coherence, Db) {
         let db = Db::open_in_memory().await.unwrap();
-        (
-            Coherence::new(db.clone(), backend, CoherenceConfig::default()),
-            db,
-        )
+        (Coherence::new(db.clone(), backend, CoherenceConfig::default()), db)
     }
 
     #[tokio::test]
     async fn unreachable_backend_yields_a_full_rewrite_plan() {
-        let backend: Arc<dyn InferenceBackend> = Arc::new(crate::llama::embedded::NullBackend::new());
+        let backend: Arc<dyn InferenceBackend> =
+            Arc::new(crate::llama::embedded::NullBackend::new());
         let (ccl, _db) = coherence(backend).await;
         let plan = ccl.plan_boundary("s1", "0", 4000).await.unwrap();
         assert_eq!(plan.status, CacheStatus::FullRePrefill);
@@ -1189,10 +1195,7 @@ mod tests {
                 "sakur4://swa".into()
             }
             fn capabilities(&self) -> CapabilitySet {
-                CapabilitySet {
-                    partial_state_only: true,
-                    ..self.0.capabilities()
-                }
+                CapabilitySet { partial_state_only: true, ..self.0.capabilities() }
             }
             async fn probe(&self) -> Result<CapabilitySet> {
                 Ok(self.capabilities())
@@ -1200,10 +1203,18 @@ mod tests {
             async fn slot_state(&self, s: &str) -> Result<SlotState> {
                 self.0.slot_state(s).await
             }
-            async fn save_slot(&self, s: &str, p: Option<&std::path::Path>) -> Result<crate::llama::SnapshotOutcome> {
+            async fn save_slot(
+                &self,
+                s: &str,
+                p: Option<&std::path::Path>,
+            ) -> Result<crate::llama::SnapshotOutcome> {
                 self.0.save_slot(s, p).await
             }
-            async fn restore_slot(&self, s: &str, p: &std::path::Path) -> Result<crate::llama::RestoreOutcome> {
+            async fn restore_slot(
+                &self,
+                s: &str,
+                p: &std::path::Path,
+            ) -> Result<crate::llama::RestoreOutcome> {
                 self.0.restore_slot(s, p).await
             }
             async fn erase_slot(&self, s: &str) -> Result<()> {
@@ -1281,10 +1292,7 @@ mod tests {
     #[tokio::test]
     async fn snapshots_are_pruned_to_the_retention_policy() {
         let backend = Arc::new(EmbeddedBackend::new().with_ring(256, 4));
-        let cfg = CoherenceConfig {
-            snapshot_retention_per_slot: 2,
-            ..Default::default()
-        };
+        let cfg = CoherenceConfig { snapshot_retention_per_slot: 2, ..Default::default() };
         let rt_db = Db::open_in_memory().await.unwrap();
         let ccl = Coherence::new(rt_db.clone(), backend, cfg);
 
@@ -1313,14 +1321,9 @@ mod tests {
         let (ccl, _db) = coherence(backend).await;
         let plan = ccl.plan_boundary("s1", "0", 5000).await.unwrap();
         let counter = TokenCounter::heuristic();
-        ccl.record_plan("s1", "0", &plan, &"abcd".repeat(1000), &counter)
-            .await
-            .unwrap();
+        ccl.record_plan("s1", "0", &plan, &"abcd".repeat(1000), &counter).await.unwrap();
 
-        let obs = ccl
-            .observe_prompt("s1", "0", "some prompt text", &counter)
-            .await
-            .unwrap();
+        let obs = ccl.observe_prompt("s1", "0", "some prompt text", &counter).await.unwrap();
         assert_eq!(obs.cache_status, CacheStatus::PartialReuse);
         assert!(obs.reused_tokens > 0);
         assert!(obs.detail.contains("reused from the LCP"));
@@ -1328,15 +1331,13 @@ mod tests {
 
     #[tokio::test]
     async fn full_rewrite_plans_are_reported_as_such_at_observation_time() {
-        let backend: Arc<dyn InferenceBackend> = Arc::new(crate::llama::embedded::NullBackend::new());
+        let backend: Arc<dyn InferenceBackend> =
+            Arc::new(crate::llama::embedded::NullBackend::new());
         let (ccl, _db) = coherence(backend).await;
         let plan = ccl.plan_boundary("s1", "0", 1000).await.unwrap();
         let counter = TokenCounter::heuristic();
         ccl.record_plan("s1", "0", &plan, "", &counter).await.unwrap();
-        let obs = ccl
-            .observe_prompt("s1", "0", "hello", &counter)
-            .await
-            .unwrap();
+        let obs = ccl.observe_prompt("s1", "0", "hello", &counter).await.unwrap();
         assert_eq!(obs.cache_status, CacheStatus::FullRePrefill);
         assert_eq!(obs.reused_tokens, 0);
         assert_eq!(obs.reuse_ratio(), 0.0);

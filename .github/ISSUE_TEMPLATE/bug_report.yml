@@ -1,0 +1,103 @@
+name: Bug report
+description: Something behaved incorrectly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The two things that make a bug report actionable
+        here are the output of `sakur4d doctor` and whether a harness is involved —
+        most subtle problems in this project have turned out to be integration
+        problems rather than logic problems.
+
+        If this is a security issue, please do **not** file it here. See
+        [SECURITY.md](../blob/main/SECURITY.md).
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: What actually happened? Include the exact error text if there was one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: |
+        The smallest sequence of steps that shows the problem. A `sakur4d` command
+        line, an MCP tool call, or a harness interaction — whatever gets closest.
+      placeholder: |
+        1. sakur4d --db :memory: serve --transport stdio
+        2. call memory.commit_episode with ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `sakur4d doctor`
+      description: |
+        This reports the resolved backend, the detected cache capabilities, and the
+        store's contents. Most cache and eviction problems are diagnosable from it.
+      render: text
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Sakur4 version
+      description: Output of `sakur4d --version`
+      placeholder: "sakur4d 0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: harness
+    attributes:
+      label: How are you running it?
+      options:
+        - Standalone CLI
+        - MCP over stdio, from Hermes Agent
+        - MCP over stdio, from another client
+        - MCP over HTTP
+        - As a library (`sakur4-core`)
+        - Other (describe below)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Which inference backend?
+      description: What `sakur4d doctor` reports under "inference backend".
+      options:
+        - embedded (no server)
+        - llama.cpp server
+        - none (cache coherence disabled)
+        - Not applicable
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Debug logs
+      description: |
+        `RUST_LOG=debug` output, if the problem concerns eviction or cache
+        behaviour. For a compaction that was slow or expensive, `context.receipt`
+        or `sakur4d receipt <session>` is the place to look first.
+      render: text
+    validations:
+      required: false
