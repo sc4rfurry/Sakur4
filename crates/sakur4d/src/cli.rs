@@ -157,6 +157,14 @@ pub enum Command {
         role: String,
         #[arg(long, default_value = "0")]
         slot: String,
+        /// Name of the tool that produced this content, when it is a tool result.
+        ///
+        /// The symbolic extractor uses it to choose a parser, so a diff, a JSON
+        /// body or a command's exit status becomes deterministic facts rather than
+        /// being stored as unstructured prose. Without it, a `git diff` result is
+        /// just text and nothing downstream can anchor to it.
+        #[arg(long)]
+        tool: Option<String>,
     },
 
     /// Pin a constraint into the Anchor Set.
@@ -311,8 +319,8 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Recall { query, k, session, include_folded } => {
             recall(&cli, &query, k, session, include_folded).await
         }
-        Command::Commit { session, content, role, slot } => {
-            commit(&cli, &session, &content, &role, &slot).await
+        Command::Commit { session, content, role, slot, tool } => {
+            commit(&cli, &session, &content, &role, &slot, tool.as_deref()).await
         }
         Command::Pin { content, kind, session } => pin(&cli, &content, &kind, session).await,
         Command::Anchors { session } => anchors(&cli, session).await,
@@ -634,7 +642,14 @@ async fn recall(
     Ok(())
 }
 
-async fn commit(cli: &Cli, session: &str, content: &str, role: &str, slot: &str) -> Result<()> {
+async fn commit(
+    cli: &Cli,
+    session: &str,
+    content: &str,
+    role: &str,
+    slot: &str,
+    tool: Option<&str>,
+) -> Result<()> {
     let engine = open_engine(cli).await?;
     let role = sakur4_core::memory::episodic::Role::parse(role)?;
     let out = engine
@@ -645,7 +660,7 @@ async fn commit(cli: &Cli, session: &str, content: &str, role: &str, slot: &str)
                 slot_id: Some(slot.to_string()),
                 role,
                 content: content.to_string(),
-                tool_name: None,
+                tool_name: tool.map(String::from),
                 fold_id: None,
                 droppable: false,
                 meta: None,

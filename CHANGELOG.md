@@ -15,7 +15,39 @@ home on crates.io rather than as a stability promise, and may change within a
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+**Oh My Pi extension (`integrations/omp-plugin/`)**
+
+- Nine native tools (`sakur4_commit`, `sakur4_pin`, `sakur4_recall`,
+  `sakur4_symbol`, `sakur4_impact`, `sakur4_fold`, `sakur4_unfold`,
+  `sakur4_receipt`, `sakur4_status`) and a `/sakur4` command.
+- Hooks a tool provider cannot reach: a preamble injected once per session, memory
+  retrieved and prepended per turn with its own token cost reported, provider usage
+  forwarded automatically on every turn, `session_before_compact` replaced with
+  Sakur4's planned eviction, and staleness reported at session shutdown.
+- Compaction via the extension deliberately falls back to OMP's own behaviour when
+  the daemon is unreachable, the plan is empty, or the plan would not reduce the
+  context.
+- `install.mjs`, which installs without a symlink (the `omp install` path fails on
+  Windows with `EPERM` unless Developer Mode is on) and writes both the
+  `package.json` dependency and the lockfile entry, because OMP's loader silently
+  skips a lockfile entry that is in neither place while still listing the plugin as
+  installed.
+
+**Portable Agent Skill (`skills/sakur4/`)**
+
+- An [Agent Skills](https://agentskills.io/specification) package usable from OMP,
+  Claude Code, Codex, pi, and anything else that reads `~/.agents/skills/`.
+- `scripts/sakur4.mjs`, a dependency-free Node CLI over the daemon: it locates
+  `sakur4d` across install layouts, defaults the store to `~/.sakur4/sakur4.db`,
+  and speaks MCP over stdio for the operations that exist only as tools. No shell is
+  involved, so recorded content may contain anything.
+
+### Changed
+
+- `sakur4d commit` gained `--tool`, so a tool result's parser can be selected by
+  name and its structured output becomes deterministic facts.
 
 ## [0.1.0] - 2026-09-12
 
@@ -122,13 +154,14 @@ The first release. Everything below is new.
 
 ### Known limitations
 
-- **OMP (Oh My Pi) 18.1.17 has no MCP client**, so it cannot use Sakur4 over MCP.
-  It needs a native TypeScript extension or a reverse proxy.
 - **No real llama.cpp server has been exercised end to end.** The adapter is tested
   against a fake server that speaks the documented routes over real HTTP, but first
   contact with a real build is still first contact.
-- **No live agent session has been run through a harness under a real model.** The
-  transport is verified; tool selection under a model's judgement is not.
+- **The OMP compaction hook has not been exercised against a real compaction.** The
+  tool path is verified end to end with a live model; forcing OMP past its context
+  limit to observe `session_before_compact` is separate work.
+- **Hermes has not been driven by a live model.** Its transport is verified
+  (`hermes mcp test sakur4` discovers all 17 tools); its tool selection is not.
 - **Optional encryption at rest (FR-20) is not implemented.**
 - **`cargo deny` and `cargo audit` are not wired into CI.** Review `Cargo.lock`
   changes in a pull request.

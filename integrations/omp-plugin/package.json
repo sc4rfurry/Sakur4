@@ -1,0 +1,51 @@
+{
+  "name": "omp-sakur4",
+  "version": "0.1.0",
+  "description": "Sakur4 memory and context management for Oh My Pi: persistent memory, pinned constraints that survive compaction, code-graph queries, and prompt-cache-aware compaction.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sakur4/sakur4.git",
+    "directory": "integrations/omp-plugin"
+  },
+  "homepage": "https://github.com/sakur4/sakur4#readme",
+  "bugs": {
+    "url": "https://github.com/sakur4/sakur4/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "omp",
+    "sakur4",
+    "memory",
+    "context",
+    "llama-cpp"
+  ],
+  "files": [
+    "index.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  }
+}

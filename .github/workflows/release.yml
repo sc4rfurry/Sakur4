@@ -94,6 +94,9 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} -p sakur4d
 
+      # The archive carries the skill alongside the binary, so a download is a
+      # complete install: `sakur4d` on PATH, and `skills/sakur4/` ready to copy
+      # into `~/.agents/skills/` or point a harness at.
       - name: Package (unix)
         if: matrix.archive == 'tar.gz'
         shell: bash
@@ -103,6 +106,8 @@ jobs:
           mkdir -p "dist/$name"
           cp "target/${{ matrix.target }}/release/sakur4d" "dist/$name/"
           cp README.md LICENSE CHANGELOG.md "dist/$name/" 2>/dev/null || true
+          cp -r skills "dist/$name/" 2>/dev/null || true
+          cp -r integrations "dist/$name/" 2>/dev/null || true
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           echo "ASSET=dist/$name.tar.gz" >> "$GITHUB_ENV"
 
@@ -115,6 +120,9 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/sakur4d.exe" "dist/$name/"
           foreach ($f in 'README.md','LICENSE','CHANGELOG.md') {
             if (Test-Path $f) { Copy-Item $f "dist/$name/" }
+          }
+          foreach ($d in 'skills','integrations') {
+            if (Test-Path $d) { Copy-Item $d "dist/$name/" -Recurse }
           }
           Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
           "ASSET=dist/$name.zip" | Out-File -Append -FilePath $env:GITHUB_ENV

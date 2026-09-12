@@ -132,13 +132,40 @@ $ hermes mcp test sakur4
   ✓ Tools discovered: 17
 ```
 
-### OMP (Oh My Pi) needs a different integration
+### OMP (Oh My Pi) — native extension
 
-OMP 18.1.17 has **no MCP client**. Its help, plugin list, and plugin discovery
-surface contain no MCP support at all; its extension mechanism is TypeScript
-(`--extension` / `--hook`) plus skills and rules. Integrating Sakur4 with OMP
-therefore requires a native OMP extension or a reverse proxy, not an MCP
-registration. That work is not done.
+OMP 18.1.17 has **no MCP client**, so it cannot be reached the MCP way. It has a
+native TypeScript extension API instead, and `integrations/omp-plugin/` implements
+it: nine tools, a `/sakur4` command, and hooks that a tool provider cannot reach —
+automatic provider-usage reporting, memory injected before each turn, and
+compaction that defers to Sakur4's eviction plan.
+
+```bash
+cargo install sakur4d
+node integrations/omp-plugin/install.mjs
+```
+
+Restart OMP; it should report nine `sakur4_` tools. See
+[integrations/omp-plugin/README.md](integrations/omp-plugin/README.md).
+
+### Skills — for any harness that reads the Agent Skills standard
+
+`skills/sakur4/` is a portable [Agent Skills](https://agentskills.io/specification)
+package: a `SKILL.md` plus a dependency-free Node CLI that drives the daemon. It
+works in OMP, Claude Code, Codex, pi, and anything else that reads
+`~/.agents/skills/`.
+
+```bash
+node integrations/omp-plugin/install.mjs --skill-only   # into ~/.agents/skills/
+```
+
+The skill is progressive disclosure: only its description sits in context until a
+task matches, at which point the model loads the full instructions. That means a
+harness with no MCP support and no extension system still gets Sakur4 — the model
+runs `node scripts/sakur4.mjs commit …` directly.
+
+Everything the skill teaches is also reachable over MCP, so a harness can use
+either path, or both.
 
 ---
 
@@ -221,7 +248,7 @@ means precisely.
 | **C6 Idle Consolidator** — promotion, staleness regeneration, re-embedding, cold archival | done | `crates/sakur4-core/src/consolidate.rs` |
 | **C7 MCP Gateway** — 17 tools, 4 resources, 1 prompt, stdio + HTTP, spec 2026-07-28 | done | `crates/sakur4d/src/tools.rs`, `crates/sakur4d/src/gateway.rs` |
 | **C8 Context Ledger Receipt** — per-turn token, cache, and provider-cache accounting | done | `crates/sakur4-core/src/receipt.rs`, `crates/sakur4-core/src/provider_cache.rs` |
-| **C9 Harness Adapters** — Hermes plugin, OMP extension, generic reverse proxy | **not started** | — |
+| **C9 Harness Adapters** — Hermes MCP registration, OMP native extension, portable Agent Skill | done | `integrations/omp-plugin/`, `skills/sakur4/` |
 
 ---
 
@@ -331,6 +358,8 @@ crates/sakur4-core/     the engine: no MCP, no transport
   store/                SQLite schema, migrations, lexical and vector search
 crates/sakur4d/         the daemon: CLI + MCP gateway (stdio and HTTP)
 crates/sakur4-testkit/  fixture repos, a fake llama.cpp server, a scripted session driver
+integrations/omp-plugin/  native Oh My Pi extension + installer
+skills/sakur4/          portable Agent Skills package + a dependency-free Node CLI
 docs/DESIGN.md          how each requirement is met, and the trade-offs taken
 docs/RELEASING.md       how to cut a release, and what is manual and why
 ```
@@ -374,15 +403,17 @@ Two defaults worth knowing because they are deliberate rather than arbitrary:
 
 ## Known gaps
 
-* **C9 harness adapters are not implemented.** OMP in particular cannot be reached
-  over MCP at all, because OMP 18.1.17 has no MCP client; it needs a TypeScript
-  extension or a reverse proxy.
 * **Hermes' deeper integration points are unused.** Hermes exposes a `ContextEngine`
   base class whose `update_from_response` already carries `cache_read_tokens` and
   `cache_write_tokens`, and whose `compress()` hook could delegate eviction to
   Sakur4 in-process. Today Hermes reaches Sakur4 as a tool provider only — which
   works, but means cache accounting has to be reported explicitly rather than
-  arriving automatically on every turn.
+  arriving automatically on every turn. The OMP extension does use its equivalent
+  hooks; Hermes could do the same.
+* **The OMP extension's compaction hook has not been exercised against a real
+  compaction.** The tool path is verified end to end with a live model, but forcing
+  OMP past its context limit to observe `session_before_compact` is a separate piece
+  of work.
 * **No real llama.cpp server has been exercised end to end.** The adapter is built
   against the documented `/slots`, `/slots/{id}/save|restore|erase`, `/tokenize`,
   `/props` and `/metrics` contracts, with tolerant parsing for the field-name and
@@ -394,10 +425,10 @@ Two defaults worth knowing because they are deliberate rather than arbitrary:
   backends exist so the logic could be built and verified anyway; the latency and
   memory numbers in the PRD's NFR section have not been measured against the real
   thing here.
-* **No live agent session has been run through a harness.** Hermes' *transport* is
-  verified — `hermes mcp test sakur4` connects and discovers all 17 tools — but an
-  actual agent conversation driving these tools under a real model has not been run,
-  so the tool descriptions have not been exercised against a model's judgement about
-  when to call them.
+* **Hermes has not been driven by a live model.** Hermes' *transport* is verified —
+  `hermes mcp test sakur4` connects and discovers all 17 tools — and the OMP tools
+  have been driven end to end by a live model, but no agent conversation has run
+  through Hermes itself, so its tool descriptions have not been exercised against a
+  model's judgement about when to call them.
 * **`acceptance_criteria` covering external systems** — an MCP conformance run
   against the reference client, LoCoMo, the Endurance Benchmark — have not been run.
