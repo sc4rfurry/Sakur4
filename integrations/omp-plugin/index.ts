@@ -131,34 +131,78 @@ interface Daemon {
 }
 
 /**
- * Find `sakur4d` without assuming where it was installed.
+ * Everywhere `sakur4d` plausibly lives, in the order a user would expect it to be
+ * found, each with a note on *why* it is on the list.
  *
- * Returns null rather than throwing: a missing daemon disables the extension and
- * says so once. That is the difference between "this session has no memory" and
- * "this session is broken".
+ * The notes exist for the failure path. "No sakur4d binary found" is useless on its
+ * own — it does not say where was searched, so the user cannot tell whether their
+ * install landed somewhere unusual or did not happen at all. The warning below
+ * prints this list.
  */
-function findDaemon(configured?: string): Daemon | null {
-  const candidates: Array<{ path: string; how: string }> = [];
-  if (configured) candidates.push({ path: configured, how: "SAKUR4_BIN" });
-
+function searchPaths(configured?: string): Array<{ path: string; how: string }> {
   const home = homedir();
-  const exeDir = dirname(process.execPath);
-  candidates.push(
+  const found: Array<{ path: string; how: string }> = [];
+
+  if (configured) found.push({ path: configured, how: "SAKUR4_BIN" });
+
+  // `~/.cargo/bin` is where `cargo install` puts a binary on every platform, and
+  // where the Rust installer adds to PATH. It is the single most likely place a
+  // correct install lands, which makes it the single most confusing place for the
+  // search to have missed.
+  found.push(
     { path: join(home, ".cargo", "bin", EXE), how: "cargo install" },
-    { path: join(exeDir, EXE), how: "beside node" },
+    { path: join(home, ".local", "bin", EXE), how: "~/.local/bin" },
     { path: join(home, ".sakur4", "bin", EXE), how: "~/.sakur4/bin" },
   );
 
-  for (const candidate of candidates) {
-    if (existsSync(candidate.path)) {
+  if (platform() === "win32") {
+    found.push(
+      { path: join(process.env.LOCALAPPDATA ?? "", "Sakur4", EXE), how: "%LOCALAPPDATA%\\Sakur4" },
+      { path: join(home, "scoop", "shims", EXE), how: "scoop" },
+      { path: join(process.env.ProgramData ?? "", "chocolatey", "bin", EXE), how: "chocolatey" },
+    );
+  } else {
+    found.push(
+      { path: `/usr/local/bin/${EXE}`, how: "/usr/local/bin" },
+      { path: `/opt/homebrew/bin/${EXE}`, how: "homebrew (arm64)" },
+      { path: `/usr/local/opt/sakur4/bin/${EXE}`, how: "homebrew (intel)" },
+    );
+  }
+
+  // A source checkout, which is how this is run during development. Checked from
+  // the working directory upward, because OMP is usually started at the repo root.
+  found.push(
+    { path: join(dirname(process.execPath), EXE), how: "beside the running node" },
+    { path: join(process.cwd(), EXE), how: "the working directory" },
+    { path: join(process.cwd(), "target", "release", EXE), how: "a checkout (release build)" },
+    { path: join(process.cwd(), "target", "debug", EXE), how: "a checkout (debug build)" },
+  );
+
+  return found;
+}
+
+/**
+ * Find `sakur4d` without assuming where it was installed.
+ *
+ * Returns null rather than throwing: a missing daemon disables the extension and
+ * says so once, with the search list. That is the difference between "this session
+ * has no memory" and "this session is broken".
+ */
+function findDaemon(configured?: string): Daemon | null {
+  for (const candidate of searchPaths(configured)) {
+    if (candidate.path && existsSync(candidate.path)) {
       return { command: candidate.path, how: candidate.how };
     }
   }
 
-  const probe = spawnSync(EXE, ["--version"], { encoding: "utf8", timeout: 10_000 });
+  // Finally, a bare invocation so the OS resolves PATH itself. Last because it
+  // costs a process spawn and every check above is free. `shell: false` keeps a
+  // stray `sakur4d.bat` from being interpreted by a shell.
+  const probe = spawnSync(EXE, ["--version"], { encoding: "utf8", timeout: 10_000, shell: false });
   if (!probe.error && probe.status === 0) {
     return { command: EXE, how: "PATH" };
   }
+
   return null;
 }
 
@@ -288,16 +332,53 @@ class Client {
     return null;
   }
 
-  /** Report the daemon's absence once, so a broken install is obvious without
-   *  spamming a notification every turn. */
+  /**
+   * Report the daemon's absence once per session, with enough detail to act on.
+   *
+   * # Why the message is long
+   *
+   * The first version said only "no sakur4d binary found, so memory is disabled".
+   * That is true and nearly useless: it does not say where was searched, so the
+   * user cannot tell whether their install landed somewhere unusual or never
+   * happened. The most likely case by far is a correct `cargo install` into
+   * `~/.cargo/bin` that this plugin failed to look in — and the fix for *that* is a
+   * bug fix here, not a user action.
+   *
+   * So the message names the search list, the three ways to install, and the two
+   * ways to point at an existing binary. A warning a user cannot act on is noise.
+   *
+   * # Why it is reported per session, not per turn
+   *
+   * It fires from `session_start`, so it appears once. A notification on every turn
+   * would be worse than the missing feature; a notification never shown would leave
+   * the user wondering why nothing is being remembered.
+   */
   warnOnce(ctx: ExtensionContext | ExtensionCommandContext): void {
     if (this.warned || this.available()) return;
     this.warned = true;
+
+    const searched = searchPaths(this.config.bin)
+      .filter((candidate) => candidate.path)
+      .map((candidate) => `    ${candidate.path}   (${candidate.how})`)
+      .join("\n");
+
     ctx.ui.notify(
-      "Sakur4: no sakur4d binary found, so memory is disabled for this session. " +
-        "Install it with `cargo install sakur4d`, or set SAKUR4_BIN to its path.",
+      [
+        "Sakur4: no sakur4d binary found, so memory is disabled for this session.",
+        "",
+        "Install it:",
+        "    cargo install sakur4d",
+        "    or download a release binary and put it on PATH",
+        "",
+        "Or point at an existing build: set SAKUR4_BIN to the binary's path.",
+        "",
+        "Searched:",
+        searched,
+      ].join("\n"),
       "warning",
     );
+
+    diagnose("daemon not found", { searched: searchPaths(this.config.bin).map((c) => c.path) });
   }
 
   ensureStoreDir(): void {

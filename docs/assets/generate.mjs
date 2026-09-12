@@ -789,7 +789,73 @@ function turnLifecycle() {
 }
 
 // ===========================================================================
-// 6 · Repository map
+// 8 · Why prefix preservation is the whole game
+// ===========================================================================
+
+function prefillCost() {
+  const W = 1280;
+  const H = 520;
+  const id = "cost";
+  let s = canvas(W, H, { id });
+
+  s += text(64, 60, "Why the prefix is the whole game", { size: 25, weight: 700, fill: T.ink });
+  s += text(64, 86, "Prompt processing is not incremental. A cache hit skips work; a miss repeats it, at full price.", {
+    size: 13,
+    fill: T.inkFaint,
+  });
+
+  // Two bars: the same session, compacted two ways.
+  const bars = [
+    ["Summarising compaction", 100, T.red, "every token reprocessed from scratch"],
+    ["Sakur4 eviction", 76, T.green, "the preserved head is skipped entirely"],
+  ];
+
+  const bx = 64;
+  const bw = 900;
+  const by0 = 148;
+  const barH = 52;
+  const pitch = 108;
+
+  bars.forEach(([name, pct, colour, note], i) => {
+    const y = by0 + i * pitch;
+    s += text(bx, y - 12, name, { size: 13.5, weight: 600, fill: T.ink });
+    s += text(bx + bw + 16, y - 12, `${pct}% of the prompt processed`, { size: 11.5, fill: colour });
+
+    s += `<rect x="${bx}" y="${y}" width="${bw}" height="${barH}" rx="6" fill="${T.panel}" stroke="${T.panelEdge}"/>`;
+    s += `<rect x="${bx}" y="${y}" width="${(bw * pct) / 100}" height="${barH}" rx="6" fill="${colour}" opacity="0.28" stroke="${colour}" stroke-width="1"/>`;
+    s += text(bx + 16, y + barH / 2 + 5, note, { size: 12, fill: T.ink });
+  });
+
+  // The measured detail, from `sakur4d demo`.
+  const dy = 380;
+  s += panel(64, dy, 1152, 100, { fill: T.bgAlt, stroke: T.panelEdge });
+  s += text(88, dy + 28, "Measured on a 32K-window session", { size: 12, weight: 600, fill: T.inkDim });
+
+  const cells = [
+    ["4034", "tokens reused", T.green],
+    ["13080", "tokens prefilled", T.amber],
+    ["24%", "prefill avoided", T.cyan],
+  ];
+  let cx = 88;
+  for (const [big, small, colour] of cells) {
+    s += mono(cx, dy + 68, big, { size: 24, fill: colour, weight: 700 });
+    s += text(cx + big.length * 15 + 10, dy + 66, small, { size: 11.5, fill: T.inkFaint });
+    cx += 300;
+  }
+  s += text(88, dy + 90, "Produced by `sakur4d demo`; the receipt prints in full with `context.receipt`.", {
+    size: 10.5,
+    fill: T.inkFaint,
+  });
+
+  return svg(W, H, s, {
+    title: "Why prefix preservation determines prefill cost",
+    desc:
+      "A summarising compaction rewrites the prompt so the server's cache matches nothing and the whole context is processed again. Sakur4's eviction preserves a byte-identical prefix, so that portion is skipped: of 17114 prompt tokens, 4034 were reused and 13080 prefilled, avoiding 24 percent of the work.",
+  });
+}
+
+// ===========================================================================
+// 9 · Repository map
 // ===========================================================================
 
 function repoMap() {
@@ -902,7 +968,7 @@ function verification() {
       "VERIFIED",
       T.green,
       [
-        "223 tests, workspace-wide, green",
+        "224 tests, workspace-wide, green",
         "MCP over stdio — real binary, real pipes",
         "MCP over HTTP — SDK client, live listener",
         "Hermes discovers all 17 tools",
@@ -962,6 +1028,7 @@ write("architecture.svg", architecture());
 write("coherence.svg", coherence());
 write("dual-track.svg", dualTrack());
 write("turn-lifecycle.svg", turnLifecycle());
+write("prefill-cost.svg", prefillCost());
 write("repo-map.svg", repoMap());
 write("verification.svg", verification());
 process.stdout.write("done.\n");

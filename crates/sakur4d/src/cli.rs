@@ -85,6 +85,14 @@ pub enum Command {
         /// Seconds of quiet before consolidation may run.
         #[arg(long, default_value_t = 90)]
         quiet_secs: u64,
+        /// Print a startup banner to stderr.
+        ///
+        /// Off by default, because over stdio the client owns this process, and a
+        /// harness that captures stderr collects a banner on every session — noise
+        /// that is not a diagnostic and that nobody asked for. Turn it on when running
+        /// the server by hand and wanting to see what resolved.
+        #[arg(long)]
+        banner: bool,
     },
 
     /// Print ready-to-paste MCP configuration for a harness.
@@ -297,8 +305,12 @@ pub async fn run(cli: Cli) -> Result<()> {
         bind: "127.0.0.1:8765".into(),
         no_dream: false,
         quiet_secs: 90,
+        // Bare `sakur4d` is a person running it by hand, so the banner is useful
+        // here — unlike when a harness spawns it, which passes no flags and gets
+        // the quiet default.
+        banner: true,
     }) {
-        Command::Serve { transport, bind, no_dream, quiet_secs } => {
+        Command::Serve { transport, bind, no_dream, quiet_secs, banner } => {
             // `--bind` wins over a bare `http` transport, so the common case
             // (`--transport http --bind 127.0.0.1:9000`) behaves as written.
             let resolved = match crate::gateway::Transport::parse(&transport) {
@@ -308,7 +320,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 other => other,
             };
             let engine = open_engine(&cli).await?;
-            crate::gateway::serve(engine, resolved, !no_dream, quiet_secs).await
+            crate::gateway::serve(engine, resolved, !no_dream, quiet_secs, banner).await
         }
         Command::Config { harness, binary, db } => config(&cli, &harness, binary, db),
         Command::Doctor { refresh } => doctor(&cli, refresh).await,

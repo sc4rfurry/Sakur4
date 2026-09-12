@@ -79,13 +79,14 @@ pub async fn serve(
     transport: Transport,
     dream: bool,
     quiet_secs: u64,
+    banner: bool,
 ) -> Result<()> {
     let server = Sakur4Server::new(engine.clone());
     let cancel = tokio_util::sync::CancellationToken::new();
     let consolidator = spawn_consolidator(&engine, dream, quiet_secs);
 
     match transport {
-        Transport::Stdio => serve_stdio(server, cancel).await,
+        Transport::Stdio => serve_stdio(server, cancel, !banner).await,
         Transport::Http(addr) => serve_http(server, &addr, cancel).await,
     }?;
 
@@ -101,13 +102,22 @@ pub async fn serve(
 async fn serve_stdio(
     server: Sakur4Server,
     cancel: tokio_util::sync::CancellationToken,
+    quiet: bool,
 ) -> Result<()> {
-    // stdout is the protocol channel; everything human-readable goes to stderr.
-    eprintln!(
-        "sakur4d {} — MCP over stdio (protocol {})",
-        env!("CARGO_PKG_VERSION"),
-        sakur4_core::MCP_PROTOCOL_VERSION
-    );
+    // stdout is the protocol channel, so anything human-readable goes to stderr —
+    // but *nothing* should go there unasked. A harness that captures stderr (every
+    // one of them does, to show diagnostics when something fails) otherwise collects
+    // a banner per session that is not a diagnostic and that nobody asked for.
+    //
+    // A person running it by hand to debug still wants the banner, so it is available
+    // rather than removed: `--verbose` prints it, and `RUST_LOG=info` prints far more.
+    if !quiet {
+        eprintln!(
+            "sakur4d {} — MCP over stdio (protocol {})",
+            env!("CARGO_PKG_VERSION"),
+            sakur4_core::MCP_PROTOCOL_VERSION
+        );
+    }
     let running =
         rmcp::serve_server(server, stdio()).await.context("starting the MCP server on stdio")?;
 

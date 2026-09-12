@@ -48,6 +48,23 @@ home on crates.io rather than as a stability promise, and may change within a
 
 - `sakur4d commit` gained `--tool`, so a tool result's parser can be selected by
   name and its structured output becomes deterministic facts.
+- **The stdio server no longer prints a startup banner to stderr.** A harness that
+  captures stderr collected one per session — noise that is not a diagnostic and
+  that nobody asked for. Pass `--banner` when running the server by hand.
+- **The OMP extension searches many more locations** for `sakur4d`: `~/.local/bin`,
+  scoop and chocolatey shims on Windows, homebrew prefixes on macOS, and a source
+  checkout's `target/release` and `target/debug`. Its failure message now lists
+  every path searched, because the previous one did not say where to look — which
+  is unhelpful in exactly the case that matters, a correct install the search
+  missed.
+
+### Fixed
+
+- A debug `eprintln!` left in `ToolOutputParser::parse_any` printed a line per parse
+  to stderr. It survived because the stdio tests asserted that *stdout* carried only
+  protocol frames while leaving stderr inherited. A new test,
+  `stderr_stays_quiet_during_a_normal_session`, asserts that a normal session writes
+  nothing at all to stderr.
 
 ## [0.1.0] - 2026-09-12
 
@@ -146,7 +163,7 @@ The first release. Everything below is new.
 
 ### Verified
 
-- 223 tests (221 unit and integration, 2 doctests), including integration tests
+- 224 tests (222 unit and integration, 2 doctests), including integration tests
   that spawn the real binary and speak JSON-RPC over its pipes, and contract tests
   for the cache-coherence claim.
 - `hermes mcp test sakur4` connects and discovers all 17 tools against Hermes Agent

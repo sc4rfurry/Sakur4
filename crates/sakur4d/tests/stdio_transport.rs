@@ -18,7 +18,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 
 /// A minimal JSON-RPC client over a child process's stdio.
@@ -55,7 +55,9 @@ impl StdioClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // Inherited so a panic in the server is visible in test output rather
-            // than swallowed.
+            // than swallowed. `stderr_stays_quiet_below_warn` is what asserts the
+            // server does not *also* use stderr as a second protocol channel or as
+            // an ad-hoc debug console.
             .stderr(Stdio::inherit())
             .kill_on_drop(true)
             .spawn()
@@ -643,4 +645,81 @@ async fn a_restart_preserves_the_store_and_resumes() {
         .expect("commit after restart");
     let status = client.call_tool("sakur4.status", json!({})).await.expect("status");
     assert_eq!(status["episodes"], 3);
+}
+
+/// The server must not use stderr as a second console.
+///
+/// # Why this is a test and not a style preference
+///
+/// A debug `eprintln!` once shipped in `ToolOutputParser::parse_any`, printing a line
+/// per parse. It went unnoticed for a while because the stdio tests assert that
+/// *stdout* carries only protocol frames — stderr was inherited and simply scrolled
+/// past. A harness that captures stderr (all of them do, to show diagnostics on
+/// failure) would have had its logs flooded with one line per tool result.
+///
+/// The rule this pins down: at the default verbosity, a normal session writes nothing
+/// to stderr at all. Diagnostics are opt-in via `RUST_LOG`, and actual errors are the
+/// only thing that speaks unprompted.
+#[tokio::test]
+async fn stderr_stays_quiet_during_a_normal_session() {
+    let store_dir = tempfile::tempdir().expect("temp dir");
+    let db = store_dir.path().join("quiet.db");
+    let exe = sakur4d_binary();
+
+    // Spawned directly rather than through StdioClient, because that helper inherits
+    // stderr by design — here it has to be captured.
+    let mut child = Command::new(&exe)
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--backend",
+            "embedded",
+            "serve",
+            "--transport",
+            "stdio",
+            "--no-dream",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn");
+
+    // Stdin is taken by value so it is *moved* and dropped at the end of this block:
+    // dropping it closes the pipe, which ends the session. Holding a borrow instead
+    // leaves the pipe open and the child waiting forever.
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        for frame in [
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize",
+                   "params":{"protocolVersion":"2025-11-25","capabilities":{},
+                             "clientInfo":{"name":"quiet","version":"1"}}}),
+            json!({"jsonrpc":"2.0","method":"notifications/initialized","params":{}}),
+            // A normal turn, and a tool result — the path the stray print was on, so
+            // a regression here reproduces that bug directly.
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/call",
+                   "params":{"name":"memory.commit_episode",
+                             "arguments":{"role":"tool","tool_name":"read_file",
+                                          "content":"{\"a\":1,\"b\":[2,3]}","session_id":"quiet"}}}),
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call",
+                   "params":{"name":"sakur4.status","arguments":{}}}),
+        ] {
+            stdin.write_all(format!("{frame}\n").as_bytes()).await.expect("write frame");
+        }
+        stdin.flush().await.expect("flush");
+    }
+
+    let mut stderr = String::new();
+    if let Some(mut pipe) = child.stderr.take() {
+        let _ = pipe.read_to_string(&mut stderr).await;
+    }
+    let _ = child.wait().await;
+
+    assert!(
+        stderr.trim().is_empty(),
+        "a normal session must write nothing to stderr, but got:\n{stderr}\n\n\
+         Diagnostics belong behind RUST_LOG. If this is an intentional new message, \
+         either gate it on a log level or update this test and say why in the commit."
+    );
 }
