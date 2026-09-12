@@ -31,23 +31,27 @@ do not know about each other. That gap is what this project closes.
 
 ---
 
-## What is implemented
+## How it closes the gap
 
-| Component | Status | Where |
-|---|---|---|
-| **C1 Memory Fabric** — Episodic Stream, Symbolic Ledger, Semantic Atlas, Anchor Set, Dependency Graph | done | `crates/sakur4-core/src/memory/` |
-| **C2 Graduated Eviction Engine** — four tiers, dependency-graph walk, `fold`/`unfold` | done | `crates/sakur4-core/src/evict.rs` |
-| **C3 Cache-Coherence Layer** — capability probing, checkpoint-aligned boundaries, snapshot/restore, graceful fallback | done | `crates/sakur4-core/src/cache/`, `crates/sakur4-core/src/llama/` |
-| **C4 Repo Cortex** — tree-sitter AST/call/import graph, incremental re-index, token-budgeted repo map, impact query | done | `crates/sakur4-core/src/repo.rs` |
-| **C5 Hybrid Recall** — BM25 + dense + graph, staleness-aware rerank | done | `crates/sakur4-core/src/recall.rs` |
-| **C6 Idle Consolidator** — promotion, staleness regeneration, re-embedding, cold archival | done | `crates/sakur4-core/src/consolidate.rs` |
-| **C7 MCP Gateway** — 16 tools, 4 resources, 1 prompt, targeting spec 2026-07-28 | done | `crates/sakur4d/src/tools.rs`, `crates/sakur4d/src/gateway.rs` |
-| **C8 Context Ledger Receipt** — per-turn token and cache accounting | done | `crates/sakur4-core/src/receipt.rs` |
-| **C9 Harness Adapters** — Hermes plugin, OMP extension, generic reverse proxy | **not started** | — |
+Three commitments, and they are what the architecture is shaped around.
 
-204 tests pass (`cargo test --workspace`), including integration tests that drive the
-MCP tool surface over a real HTTP listener and contract tests for the
-cache-coherence claim itself.
+**Memory is two tracks.** Deterministic parser facts live in the Symbolic Ledger,
+model interpretation lives in the Semantic Atlas, and there is no path from a model
+into the first. A summary that has drifted from its source is caught at read time by
+comparing hashes, not trusted because it was written.
+
+**Eviction is deterministic.** The Graduated Eviction Engine selects what to compress
+from token counts, recency, graph in-degree and explicit droppability — no model in
+the decision path, so a plan is reproducible and cannot hallucinate.
+
+**Compaction is cache-aware.** The Cache-Coherence Layer decides *where the eviction
+boundary may fall* by asking what the inference server can actually rewind to, so the
+surviving prompt head stays a prefix of what the server holds.
+
+Jump to [Status](#status) for what is verified versus not,
+[What is implemented](#what-is-implemented) for the component map, or
+[the novel part](#the-novel-part-and-how-to-see-it-working) for the cache-coherence
+claim and how to watch it work.
 
 ---
 
@@ -170,6 +174,41 @@ harness pushes the numbers; Sakur4 does the accounting and the eviction.
 
 ---
 
+## Status
+
+v0.1.0. 223 tests pass, CI runs on Linux, macOS and Windows with warnings denied,
+and the tool surface is verified against a real Hermes Agent install.
+
+"Production ready" is a claim that should come with evidence, so here is what that
+means precisely.
+
+**Verified**
+
+- The MCP surface works over both transports. The stdio tests spawn the real binary
+  and speak JSON-RPC over its pipes; `hermes mcp test sakur4` connects to a real
+  Hermes install and discovers all 17 tools.
+- The cache-coherence claim is stated as executable contracts in
+  `crates/sakur4-core/tests/cache_coherence.rs`, and `sakur4d demo` shows it working.
+- Durability: killing the process mid-session preserves the store, and the session
+  resumes with every committed turn intact.
+- Malformed input is rejected per call without killing the server, including a
+  large-payload round trip.
+- Library code contains zero `unwrap`/`expect`/`panic!` paths outside tests.
+- `cargo publish -p sakur4-core --dry-run` builds the extracted archive in
+  isolation, so the published crate is known to compile standalone.
+
+**Not verified**
+
+- **No real `llama.cpp` server has been contacted.** The adapter is tested against a
+  fake server that speaks the documented routes over real HTTP, so the *client* is
+  exercised, but first contact with a real build is still first contact.
+- **No live agent session has driven these tools under a real model**, so the tool
+  descriptions have not been tested against a model's judgement about when to call
+  them.
+- **OMP cannot use Sakur4 over MCP**, because OMP has no MCP client.
+- **Optional encryption at rest (FR-20) is not implemented.**
+- **`cargo deny` / `cargo audit` are not wired into CI.**
+
 ## What is implemented
 
 | Component | Status | Where |
@@ -183,10 +222,6 @@ harness pushes the numbers; Sakur4 does the accounting and the eviction.
 | **C7 MCP Gateway** — 17 tools, 4 resources, 1 prompt, stdio + HTTP, spec 2026-07-28 | done | `crates/sakur4d/src/tools.rs`, `crates/sakur4d/src/gateway.rs` |
 | **C8 Context Ledger Receipt** — per-turn token, cache, and provider-cache accounting | done | `crates/sakur4-core/src/receipt.rs`, `crates/sakur4-core/src/provider_cache.rs` |
 | **C9 Harness Adapters** — Hermes plugin, OMP extension, generic reverse proxy | **not started** | — |
-
-221 tests pass (`cargo test --workspace`), including integration tests that spawn
-the real binary and speak JSON-RPC over its pipes, and contract tests for the
-cache-coherence claim itself.
 
 ---
 
@@ -290,15 +325,24 @@ crates/sakur4-core/     the engine: no MCP, no transport
   recall.rs             C5 — hybrid retrieval, staleness resolution, rerank
   consolidate.rs        C6 — the dream cycle
   receipt.rs            C8 — Context Ledger Receipt
+  provider_cache.rs     C8 — prompt-cache accounting for hosted providers
   prompt.rs             the single prompt assembler every budget decision uses
-crates/sakur4d/         the daemon: CLI + MCP gateway
+  tokens.rs             the single tokenizer every budget decision uses
+  store/                SQLite schema, migrations, lexical and vector search
+crates/sakur4d/         the daemon: CLI + MCP gateway (stdio and HTTP)
 crates/sakur4-testkit/  fixture repos, a fake llama.cpp server, a scripted session driver
 docs/DESIGN.md          how each requirement is met, and the trade-offs taken
+docs/RELEASING.md       how to cut a release, and what is manual and why
 ```
 
-`tests/` at the crate roots hold the behavioural contracts:
-`cache_coherence.rs` (the central claim), `repo_parsing.rs` (Ledger contents), and
-`sakur4d/tests/gateway.rs` (the tool surface over real HTTP).
+The behavioural contracts live in `tests/` at the crate roots:
+
+| File | What it pins down |
+|---|---|
+| `sakur4-core/tests/cache_coherence.rs` | the central claim: a compaction preserves a prefix the cache can reuse |
+| `sakur4-core/tests/repo_parsing.rs` | what ends up in the Symbolic Ledger for each language |
+| `sakur4d/tests/gateway.rs` | the tool surface over real HTTP, driven by the SDK's own client |
+| `sakur4d/tests/stdio_transport.rs` | the tool surface over stdio, driving a spawned `sakur4d` |
 
 ---
 
