@@ -74,23 +74,119 @@ sakur4d symbol src::auth::validate
 
 # What did Sakur4 actually detect about the inference backend?
 sakur4d doctor
-
-# Run the MCP gateway.
-sakur4d serve --bind 127.0.0.1:8765
 ```
 
-### Against a real llama.cpp server
+---
+
+## Using Sakur4 from a harness
+
+Sakur4 is an MCP server. Any harness that speaks MCP can use it; nothing in the
+tool surface depends on which harness is calling.
 
 ```bash
-llama-server -m model.gguf -c 65536 --slots -cms 256 -ctxcp 64
-
-sakur4d --backend http://127.0.0.1:8080 doctor
-sakur4d --backend http://127.0.0.1:8080 serve
+# Print ready-to-paste configuration for your harness.
+sakur4d config hermes          # ~/.hermes/config.yaml
+sakur4d config claude          # claude_desktop_config.json
+sakur4d config claude-code     # one-line CLI registration
+sakur4d config generic-http    # for anything that connects to a URL
+sakur4d config generic-stdio   # for anything that spawns a child process
 ```
 
-`--backend` accepts `auto` (probe, fall back to embedded), `embedded`, `none`, or any
-base URL — including one on another machine. `doctor` prints exactly which cache
-endpoints were detected and what that means for compaction.
+### Two transports, because harnesses disagree
+
+| Transport | How the harness reaches it | Use it when |
+|---|---|---|
+| **stdio** (default) | spawns `sakur4d` as a child and speaks JSON-RPC over its pipes | one harness, simplest setup, no port to manage |
+| **streamable HTTP** | connects to a URL | several sessions sharing one store, or a harness on another machine |
+
+```bash
+sakur4d serve --transport stdio                        # default
+sakur4d serve --transport http --bind 127.0.0.1:8765    # shared
+```
+
+### What Sakur4 exposes
+
+**17 tools** — `memory.commit_episode`, `memory.pin`, `memory.recall`,
+`memory.fold`, `memory.unfold`, `memory.recall_fold`, `memory.staleness`,
+`code.get_repo_map`, `code.query_symbol`, `code.impact_of_change`,
+`session.snapshot`, `session.restore`, `context.receipt`,
+`context.plan_eviction`, `context.record_usage`, `sakur4.status`, `sakur4.dream`.
+
+**4 resources** — `sakur4://repo-map/{project}`, `sakur4://receipt/latest`,
+`sakur4://anchors/{project}`, `sakur4://status/{project}`.
+
+**1 prompt** — `sakur4_system_preamble`, a preamble tuned for smaller models that
+under-trigger folding, naming *when* to call each tool rather than what it does.
+
+### Verified against Hermes Agent
+
+```
+$ hermes mcp test sakur4
+  Testing 'sakur4'...
+  Transport: stdio → D:\DuDu\Sakur4\target\debug\sakur4d.exe
+  ✓ Connected (5765ms)
+  ✓ Tools discovered: 17
+```
+
+### OMP (Oh My Pi) needs a different integration
+
+OMP 18.1.17 has **no MCP client**. Its help, plugin list, and plugin discovery
+surface contain no MCP support at all; its extension mechanism is TypeScript
+(`--extension` / `--hook`) plus skills and rules. Integrating Sakur4 with OMP
+therefore requires a native OMP extension or a reverse proxy, not an MCP
+registration. That work is not done.
+
+---
+
+## Cache accounting, local and cloud
+
+The Cache-Coherence Layer talks to a local `llama.cpp` slot: it asks the server
+where its KV cache can be rewound to, and aligns the eviction boundary to it.
+
+A hosted provider has no such API — but it reports, in every response, how many
+prompt tokens came from its prompt cache. Hermes' own documentation calls
+per-turn compaction's cache invalidation "the strongest argument against it", and
+notes the trade depends on numbers specific to you. Sakur4 can supply them:
+
+```jsonc
+// The harness reports what the provider said.
+context.record_usage { "session_id": "s", "prompt_tokens": 6200,
+                       "cache_read_tokens": 300 }
+
+// Sakur4 answers with a verdict.
+{ "verdict": "PREFIX-BROKEN", "regression": true,
+  "detail": "the provider's cached prefix fell from 5000 to 300 tokens (4700 tokens
+             no longer cached) while the prompt went 6000 → 6200; this turn was
+             billed for history that had already been paid for" }
+```
+
+The signature is an inversion: append-only growth makes the cached prefix *grow*,
+while a rewrite that replaces a long prefix with a shorter one makes it *shrink*
+even as the prompt stays large. That inversion is detectable, and it is what
+`context.receipt` now reports per session.
+
+Sakur4 never calls a provider itself — it is a subsystem, not a harness. The
+harness pushes the numbers; Sakur4 does the accounting and the eviction.
+
+---
+
+## What is implemented
+
+| Component | Status | Where |
+|---|---|---|
+| **C1 Memory Fabric** — Episodic Stream, Symbolic Ledger, Semantic Atlas, Anchor Set, Dependency Graph | done | `crates/sakur4-core/src/memory/` |
+| **C2 Graduated Eviction Engine** — four tiers, dependency-graph walk, `fold`/`unfold` | done | `crates/sakur4-core/src/evict.rs` |
+| **C3 Cache-Coherence Layer** — capability probing, checkpoint-aligned boundaries, snapshot/restore, graceful fallback | done | `crates/sakur4-core/src/cache/`, `crates/sakur4-core/src/llama/` |
+| **C4 Repo Cortex** — tree-sitter AST/call/import graph, incremental re-index, token-budgeted repo map, impact query | done | `crates/sakur4-core/src/repo.rs` |
+| **C5 Hybrid Recall** — BM25 + dense + graph, staleness-aware rerank | done | `crates/sakur4-core/src/recall.rs` |
+| **C6 Idle Consolidator** — promotion, staleness regeneration, re-embedding, cold archival | done | `crates/sakur4-core/src/consolidate.rs` |
+| **C7 MCP Gateway** — 17 tools, 4 resources, 1 prompt, stdio + HTTP, spec 2026-07-28 | done | `crates/sakur4d/src/tools.rs`, `crates/sakur4d/src/gateway.rs` |
+| **C8 Context Ledger Receipt** — per-turn token, cache, and provider-cache accounting | done | `crates/sakur4-core/src/receipt.rs`, `crates/sakur4-core/src/provider_cache.rs` |
+| **C9 Harness Adapters** — Hermes plugin, OMP extension, generic reverse proxy | **not started** | — |
+
+221 tests pass (`cargo test --workspace`), including integration tests that spawn
+the real binary and speak JSON-RPC over its pipes, and contract tests for the
+cache-coherence claim itself.
 
 ---
 
@@ -165,6 +261,23 @@ through a `CapabilitySet` produced by probing at connect time. `doctor` prints i
 
 ---
 
+---
+
+## Against a real llama.cpp server
+
+```bash
+llama-server -m model.gguf -c 65536 --slots -cms 256 -ctxcp 64
+
+sakur4d --backend http://127.0.0.1:8080 doctor
+sakur4d --backend http://127.0.0.1:8080 serve
+```
+
+`--backend` accepts `auto` (probe, fall back to embedded), `embedded`, `none`, or any
+base URL — including one on another machine. `doctor` prints exactly which cache
+endpoints were detected and what that means for compaction.
+
+---
+
 ## Workspace layout
 
 ```
@@ -217,9 +330,15 @@ Two defaults worth knowing because they are deliberate rather than arbitrary:
 
 ## Known gaps
 
-* **C9 harness adapters are not implemented.** The Hermes plugin, the OMP extension
-  and the generic reverse proxy are the remaining roadmap work. Everything they would
-  call is reachable through MCP today.
+* **C9 harness adapters are not implemented.** OMP in particular cannot be reached
+  over MCP at all, because OMP 18.1.17 has no MCP client; it needs a TypeScript
+  extension or a reverse proxy.
+* **Hermes' deeper integration points are unused.** Hermes exposes a `ContextEngine`
+  base class whose `update_from_response` already carries `cache_read_tokens` and
+  `cache_write_tokens`, and whose `compress()` hook could delegate eviction to
+  Sakur4 in-process. Today Hermes reaches Sakur4 as a tool provider only — which
+  works, but means cache accounting has to be reported explicitly rather than
+  arriving automatically on every turn.
 * **No real llama.cpp server has been exercised end to end.** The adapter is built
   against the documented `/slots`, `/slots/{id}/save|restore|erase`, `/tokenize`,
   `/props` and `/metrics` contracts, with tolerant parsing for the field-name and
@@ -231,5 +350,10 @@ Two defaults worth knowing because they are deliberate rather than arbitrary:
   backends exist so the logic could be built and verified anyway; the latency and
   memory numbers in the PRD's NFR section have not been measured against the real
   thing here.
+* **No live agent session has been run through a harness.** Hermes' *transport* is
+  verified — `hermes mcp test sakur4` connects and discovers all 17 tools — but an
+  actual agent conversation driving these tools under a real model has not been run,
+  so the tool descriptions have not been exercised against a model's judgement about
+  when to call them.
 * **`acceptance_criteria` covering external systems** — an MCP conformance run
   against the reference client, LoCoMo, the Endurance Benchmark — have not been run.
