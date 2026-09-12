@@ -1,0 +1,7 @@
+﻿target/
+sakur4.db
+sakur4.db-wal
+sakur4.db-shm
+*.snapshot
+.sakur4/
+sakur4-snapshots/

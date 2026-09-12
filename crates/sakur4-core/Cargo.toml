@@ -1,0 +1,48 @@
+[package]
+name = "sakur4-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Sakur4 core: Memory Fabric, Graduated Eviction Engine, Cache-Coherence Layer, Repo Cortex."
+
+[dependencies]
+tokio.workspace = true
+tokio-util.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+bytes.workspace = true
+parking_lot.workspace = true
+
+rusqlite.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+schemars.workspace = true
+
+blake3.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+humantime.workspace = true
+
+tree-sitter.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-typescript.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-go.workspace = true
+ignore.workspace = true
+walkdir.workspace = true
+notify.workspace = true
+notify-debouncer-full.workspace = true
+rayon.workspace = true
+
+reqwest.workspace = true
+
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio-test.workspace = true

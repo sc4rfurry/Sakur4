@@ -1,0 +1,1065 @@
+{
+  "document_metadata": {
+    "project_name": "Sakur4",
+    "document_type": "Project Requirements Document (PRD)",
+    "tagline": "A cache-coherent memory and context operating system for local coding/research agents.",
+    "version": "1.0.0",
+    "status": "Draft for review",
+    "date_created": "2026-09-12",
+    "authors": [
+      "Generated with Claude (Anthropic) based on directed research synthesis"
+    ],
+    "intended_audience": [
+      "Solo/independent developer(s) implementing Sakur4",
+      "Contributors to local-LLM agent harnesses (Hermes, OMP, custom)",
+      "Reviewers evaluating technical feasibility before implementation"
+    ],
+    "scope_statement": "Defines the requirements, architecture, interfaces, data model, evaluation plan and roadmap for Sakur4: a local-first memory + context-management framework, shipped as an MCP server plus companion sidecar processes, designed specifically for 20B-40B-class open-weight models served via llama.cpp with 32K-128K context windows and driven by agent harnesses such as Hermes Agent and OMP (Oh My Pi)."
+  },
+  "executive_summary": "Sakur4 is a local-first 'memory and context operating system' that sits between an agent harness (Hermes, OMP, or any OpenAI-compatible tool-calling loop) and a llama.cpp-served model in the 20B-40B class. It solves three compounding failures that show up specifically at the 64K-128K context scale on consumer hardware: (1) naive compaction/summarization silently destroys the llama.cpp prompt-cache prefix match, forcing full re-prefill of tens of thousands of tokens on every compaction event; (2) LLM-written summaries of code and long documents introduce fabricated details ('observer bias' and 'syntax hallucination') that compound over a session; and (3) even before the context window is full, model reliability measurably degrades as irrelevant or stale material accumulates ('context rot'), so simply having more room to store context does not fix the underlying problem. Sakur4 addresses all three with a single coherent architecture: a dual-track memory fabric that separates deterministic, parser-derived facts from LLM-derived interpretation; a graduated, dependency-graph-driven eviction policy that replaces blind summarization; and a cache-coherence layer that talks directly to llama.cpp's slot save/restore and checkpoint APIs so that every compaction decision is made with KV-cache prefix reuse as a first-class constraint, not an afterthought. The system is exposed as a single MCP server (targeting the 2026-07-28 MCP specification) so any MCP-capable harness can adopt it without bespoke integration work, plus thin adapters for Hermes Agent and OMP that hook their native compaction points directly.",
+  "problem_statement": {
+    "summary": "Running 27B-35B open-weight models locally through llama.cpp with 64K-80K context windows exposes a specific set of failure modes that are underserved by existing memory frameworks, most of which were designed against hosted, stateless, pay-per-token APIs rather than a stateful local inference server with an expensive, GPU-resident prefill step.",
+    "observed_pain_points": [
+      {
+        "id": "PP-1",
+        "title": "Compaction defeats the local prompt cache",
+        "detail": "When a harness's default context-compression step fires (typically at 70-90% of the configured window), it replaces the raw transcript with an LLM-written summary. Because this produces a materially different token sequence, llama.cpp's longest-common-prefix (LCP) slot matching finds no reusable cached state, forcing a full re-prefill of the entire compacted context. On consumer GPUs this has been measured at 100+ seconds for a single compaction event on a 50K+ token session. Compaction, whose entire purpose is to keep the session cheap and fast, becomes the single most expensive operation in the session.",
+        "evidence": "Reported directly against llama.cpp-served local models in a qwen-code integration issue; independently confirmed in production KV-cache/prefix-caching writeups."
+      },
+      {
+        "id": "PP-2",
+        "title": "Summarization-based memory hallucinates and drifts",
+        "detail": "Recursive LLM summarization of code and long documents is lossy by construction: important edge cases in a 100-line file collapse into a few sentences, the model remembers its own interpretation rather than the source, and by turn 50 a function the agent 'remembers' as checkUser(email) may actually be validateUser(id) in the real file, breaking the build. Deep code-oriented memory therefore cannot be built purely on LLM-written summaries.",
+        "evidence": "Multiple independent 2025-2026 sources converge on this failure pattern, including dedicated deterministic-memory-layer projects built specifically to counter it, and academic work on AST-based hallucination detection in generated code."
+      },
+      {
+        "id": "PP-3",
+        "title": "Context rot means the window size was never the real ceiling",
+        "detail": "Controlled research across 18 frontier and open models shows retrieval and reasoning reliability degrades measurably as input length grows, independent of whether the window is full, with the effect worsening as distractor content and semantic ambiguity increase. For a 27B-35B local model -- which starts from a lower long-context reliability baseline than a frontier hosted model -- an 80K window filled uncritically is actively harmful, not merely wasteful.",
+        "evidence": "Chroma's 'Context Rot' technical report and the broader 'lost-in-the-middle' literature it builds on."
+      },
+      {
+        "id": "PP-4",
+        "title": "Naive compaction can silently erase safety/task constraints",
+        "detail": "Summarization-based compaction optimizes for surface task accuracy and has no mechanism for recognizing which parts of the erased history encoded a governance constraint, a user correction, or a hard task requirement, so those constraints can quietly disappear from a long-running session without any visible failure until the agent violates them.",
+        "evidence": "Documented as 'governance decay' in recent long-horizon-agent safety research."
+      },
+      {
+        "id": "PP-5",
+        "title": "Codebase analysis at this scale needs structure, not just a bigger window",
+        "detail": "For real codebase work (multi-thousand-file repos), pouring files into context does not scale even at 80K-128K tokens, and semantic-only vector retrieval confuses structurally-unrelated but textually-similar code (e.g. two unrelated User types). The 2026 code-intelligence tooling landscape has converged on local, pre-computed structural graphs (AST + call graph + import graph) as the durable primitive, with semantic search layered on top rather than standing alone.",
+        "evidence": "Convergent design choice across the leading 2026 local code-intelligence tools and Aider's original repo-map research."
+      }
+    ]
+  },
+  "research_foundation": {
+    "summary": "Sakur4's design is a deliberate synthesis of several distinct 2024-2026 research and engineering threads, none of which individually solves the local-inference use case, but which compose into a coherent system when combined.",
+    "key_prior_art_reviewed": [
+      {
+        "name": "MemGPT / Letta",
+        "contribution_taken": "OS-inspired virtual-memory metaphor (context as 'RAM', external store as 'disk'); tiered core/recall/archival memory; sleep-time compute for background consolidation using a slower/stronger model without blocking the interactive loop.",
+        "limitation_addressed": "Recursive summarization/hierarchical compression as the primary compaction mechanism trades latency variability and fidelity loss for simplicity; Letta's own finding that a plain filesystem+agent approach beat specialized memory infrastructure on LoCoMo suggests infra alone is not the lever -- structure and eviction policy matter more."
+      },
+      {
+        "name": "Mem0 / OpenMemory MCP",
+        "contribution_taken": "Async, non-blocking memory writes as the default; second-pass reranking of retrieved candidates before they enter the context window; local MCP-first distribution model.",
+        "limitation_addressed": "Primarily tuned for conversational/preference memory rather than code-structural memory; graph-extraction tier is a paid feature in the reference implementation, which is unsuitable for a fully local, zero-cost target."
+      },
+      {
+        "name": "Context-folding / branch-return agents (arXiv 2606.11213, 'Beyond Compaction')",
+        "contribution_taken": "Explicit branch()/return() primitives that let the agent open an isolated sub-context for a token-intensive subtask and collapse it back to a single summary, with the underlying inference engine's KV cache rolled back to the pre-branch state -- demonstrated holding a main trajectory near 8K tokens while processing 100K+ tokens of total work across 89 sequential tasks with no measurable accuracy loss vs. isolated sessions.",
+        "limitation_addressed": "Applied here specifically against llama.cpp's slot model rather than a generic inference API, and combined with a deterministic (non-LLM) eviction policy rather than only agent-directed folding."
+      },
+      {
+        "name": "Structured/typed episode eviction (CWL) and lifecycle-aware KV eviction (CommitKV)",
+        "contribution_taken": "A deterministic, LLM-free graduated eviction policy driven by an explicit dependency graph over typed episodes, avoiding the four classic failure modes of summarization-based compaction (unpredictable lossiness, structural destruction, blocking cost, compression-induced hallucination); tool-call 'commit' boundaries as natural lifecycle checkpoints for retiring completed KV pages while preserving dormant ones.",
+        "limitation_addressed": "Neither line of work was designed against a resource-constrained single-node local server; Sakur4 adapts the eviction graph to also carry KV-checkpoint metadata so eviction boundaries and cache-checkpoint boundaries are the same boundaries."
+      },
+      {
+        "name": "Dual-track symbolic/semantic memory (open-mem 'OMP' pattern)",
+        "contribution_taken": "A hard architectural rule that an LLM may populate an interpretive 'semantic' layer but is categorically forbidden from rewriting the 'symbolic' layer, which is populated only by a deterministic parser (AST facts, qualified names, signatures, import edges). This is the direct countermeasure to code-memory hallucination.",
+        "limitation_addressed": "The reference implementation focuses on the symbolic/semantic split for source files; Sakur4 extends the same two-track discipline to conversational and research memory (deterministic tool-output facts vs. LLM interpretation of them)."
+      },
+      {
+        "name": "Local repo intelligence graphs (Aider repo-map descendants, tree-sitter based tools)",
+        "contribution_taken": "Local, pre-computed, incrementally-updated AST + call-graph + import-graph structure as the primary codebase representation, with a token-budget-fitted 'map' rendering rather than raw file dumps; MCP-servable so any harness can request it.",
+        "limitation_addressed": "Pure semantic/vector retrieval over code conflates structurally unrelated but textually similar symbols; the graph layer is used to disambiguate and to compute blast-radius/impact before an edit."
+      },
+      {
+        "name": "llama.cpp server internals: slot save/restore, context checkpoints, context shift",
+        "contribution_taken": "The server already exposes POST /slots/{id}/save and /slots/{id}/restore to persist and reload full KV-cache + recurrent state to disk, plus an internal checkpoint ring (-cms/--checkpoint-min-step, -ctxcp/--ctx-checkpoints, --cache-ram) that keeps partial-state checkpoints for fast partial-prefix rewinds, and an optional --context-shift mode for unbounded generation.",
+        "limitation_addressed": "None of the harnesses reviewed (Hermes, OMP, generic OpenAI-compatible clients) currently coordinate their compaction decisions with these primitives; today compaction and KV-cache management are two systems that don't talk to each other. Sakur4's cache-coherence layer is the piece that closes this gap."
+      },
+      {
+        "name": "Context Rot (Chroma Research)",
+        "contribution_taken": "Empirical justification for aggressive, continuous context curation as a correctness intervention, not only a cost-saving one -- even well under the window limit, unfiltered accumulated context measurably degrades reliability.",
+        "limitation_addressed": "N/A -- used as a design constraint and as a source of evaluation methodology (needle/distractor style stress tests)."
+      },
+      {
+        "name": "Model Context Protocol, 2026-07-28 specification",
+        "contribution_taken": "Stateless protocol core, Multi Round-Trip Requests (MRTR) replacing held-open bidirectional streams for elicitation/sampling/roots, and cacheable list results with ttlMs/cacheScope on tools/resources/prompts listings.",
+        "limitation_addressed": "Designing Sakur4's MCP surface against this revision (rather than an older stream-based assumption) keeps it compatible with the current generation of MCP clients and avoids building on a soon-to-be-deprecated transport pattern."
+      }
+    ],
+    "explicit_novel_synthesis": "No reviewed project combines: (a) a symbolic/semantic dual-track memory discipline, (b) a dependency-graph-driven deterministic eviction policy in place of default summarization, and (c) direct coordination with a local inference engine's KV-cache checkpoint/slot API so that eviction boundaries and cache-reuse boundaries are chosen jointly. Item (c) in particular is, as far as this research pass could establish, an open, unaddressed integration gap as of September 2026 -- it is raised as a feature request against at least one harness but not yet implemented anywhere reviewed. That gap is Sakur4's central technical bet."
+  },
+  "goals_and_non_goals": {
+    "goals": [
+      "G1: Reduce compaction-triggered full re-prefill events by making eviction boundaries cache-checkpoint-aware, targeting at least 80% of compaction events resolving as a partial-prefix re-use rather than a full re-prefill on supported llama.cpp builds.",
+      "G2: Eliminate LLM-authored fabrication of code facts from memory by construction, via the symbolic/semantic track separation, not via prompting or post-hoc checking alone.",
+      "G3: Keep the harness's live working context small and high-signal regardless of total session size, by defaulting to context-folding (branch/return) for token-intensive subtasks instead of accumulating everything in the main trajectory.",
+      "G4: Preserve pinned task constraints, user corrections, and safety-relevant instructions across unlimited compaction cycles with zero silent loss.",
+      "G5: Give the agent (and the user) structural codebase understanding -- symbols, call graphs, import graphs, blast radius -- as a first-class local resource, not a side effect of vector search.",
+      "G6: Ship as a single MCP server plus optional harness-native adapters, so integration effort for a new harness is bounded and small.",
+      "G7: Run entirely on the user's existing local hardware with no cloud dependency, no required API keys, and no mandatory external services (Docker permitted but not required for the default path).",
+      "G8: Make token and context spend legible: every turn, the agent and user can see where the context budget went and why."
+    ],
+    "non_goals": [
+      "NG1: Sakur4 is not a full agent harness or agent loop implementation; it is a memory/context subsystem consumed by existing harnesses (Hermes, OMP, or custom loops).",
+      "NG2: Sakur4 does not attempt to fine-tune or distill models, and does not require any specific model architecture beyond a standard llama.cpp-servable transformer.",
+      "NG3: Sakur4 does not target multi-tenant, cloud-hosted, or multi-user SaaS deployment in v1; the initial design target is a single developer/researcher on one to two local machines.",
+      "NG4: Sakur4 does not replace source control; the Symbolic Ledger indexes what git already tracks rather than duplicating version history.",
+      "NG5: Sakur4 does not guarantee perfect KV-cache reuse on every backend; cache-coherent compaction is a best-effort optimization layered over llama.cpp's actual capabilities, which vary by model architecture (e.g. SWA/hybrid models have documented partial-state limitations)."
+    ]
+  },
+  "target_users_and_use_cases": {
+    "primary_persona": {
+      "name": "Local-first power developer / independent researcher",
+      "profile": "Runs 20B-40B open-weight models (e.g. Qwen-class, dense or MoE) locally via llama.cpp on one or two consumer GPUs (16-48GB VRAM class), driving them through an agentic harness (Hermes Agent, OMP/Oh-My-Pi, or a custom OpenAI-compatible loop) for coding and long-form research tasks. Values privacy, zero recurring cost, and predictable behavior over raw frontier-model capability, and is willing to run an additional local sidecar process to get there.",
+      "primary_pain": "Long sessions (codebase refactors, multi-day research threads) degrade in reliability and become slow to resume because compaction and the inference server's cache are fighting each other."
+    },
+    "representative_use_cases": [
+      "UC1: Multi-hour codebase refactor across dozens of files in one continuous agent session without restarting context from scratch each time the window fills.",
+      "UC2: Long-running research/literature-review session that accumulates many tool results (web fetches, PDF extracts) without the working context becoming dominated by stale search results.",
+      "UC3: Resuming a session the next day with full continuity of both the raw history and the derived understanding, without a cold 60-120 second re-prefill.",
+      "UC4: Asking the agent to make a change and having it correctly recall the *actual current* signature of a function it edited 40 turns and one compaction cycle ago.",
+      "UC5: Running two concurrent agent sessions (two llama.cpp slots) against the same repository without either session's memory writes corrupting the other's."
+    ]
+  },
+  "system_architecture": {
+    "overview": "Sakur4 runs as a local sidecar process ('sakur4d') alongside the user's existing llama.cpp server(s) and agent harness. It owns a per-project SQLite-based store (the 'Memory Fabric') and exposes all functionality through one MCP server process, plus a small HTTP control API that the cache-coherence layer uses to talk to llama.cpp directly. The harness (Hermes, OMP, etc.) talks to Sakur4 exclusively through MCP tool calls and resources; it does not need to know about SQLite, tree-sitter, or the llama.cpp slot API directly.",
+    "deployment_topology": "Single machine, single project: sakur4d + llama-server + harness all on one box, communicating over localhost. Two-GPU / two-slot setup: sakur4d is slot-aware and tracks cache-checkpoint state per slot independently, matching the common local pattern of one llama-server exposing two concurrent slots for parallel sessions.",
+    "components": [
+      {
+        "id": "C1",
+        "name": "Memory Fabric",
+        "one_line": "The persistent, dual-track, multi-tier store of everything Sakur4 knows.",
+        "responsibilities": [
+          "Own the Episodic Stream (raw, append-only turn/tool-call log; source of truth).",
+          "Own the Symbolic Ledger (deterministic, parser-derived facts; LLM-write-forbidden).",
+          "Own the Semantic Atlas (LLM-derived summaries/interpretations, each entry linked to the symbolic or episodic anchor it was derived from, with a staleness flag).",
+          "Own the Anchor Set (pinned constraints, user corrections, task contracts; exempt from eviction).",
+          "Maintain the Dependency Graph connecting all of the above for eviction and retrieval."
+        ],
+        "novel_contribution": "Generalizes the code-specific symbolic/semantic split (previously applied only to source files) to all memory types, including tool outputs and research findings, under one consistent no-hallucination rule."
+      },
+      {
+        "id": "C2",
+        "name": "Graduated Eviction Engine (GEE)",
+        "one_line": "Deterministic, dependency-graph-aware compaction that replaces default LLM summarization as the primary mechanism.",
+        "responsibilities": [
+          "Continuously track live token budget vs. configured threshold per session/slot.",
+          "Walk the Dependency Graph to select the lowest-value, least-depended-upon episodes for eviction first (graduated severity: mask -> reference -> archive -> drop), never touching Anchor Set entries.",
+          "Expose explicit fold()/unfold() (branch/return) tools so the agent can proactively isolate a token-intensive subtask into a side context and collapse it to a single result on completion.",
+          "Fall back to LLM-assisted summarization only for the Semantic Atlas layer, during idle time, never as an emergency inline operation."
+        ],
+        "novel_contribution": "Treats eviction and KV-cache checkpoint boundaries as the same decision (see C3), which no reviewed prior art does."
+      },
+      {
+        "id": "C3",
+        "name": "Cache-Coherence Layer (CCL)",
+        "one_line": "The component that makes compaction KV-cache-aware for llama.cpp specifically.",
+        "responsibilities": [
+          "Track, per active slot, the current llama.cpp context-checkpoint ring state and the last known-good save point exposed via /slots/{id}/save.",
+          "When the GEE proposes an eviction boundary, snap it to the nearest existing checkpoint boundary where possible, so the surviving prefix is still LCP-matchable by llama.cpp's own slot-restore logic.",
+          "Before large, unavoidable summarization-based rewrites, proactively issue /slots/{id}/save to persist the pre-rewrite KV state to disk so a full re-prefill is never required to recover the prior state, only to move forward again if needed.",
+          "Expose slot warm/cold state so the harness can pre-warm a session (restore a saved slot) before the user's first message of the day, turning a 60-120s cold prefill into a sub-2-second restore.",
+          "Detect and route around known llama.cpp limitations (e.g. partial-state-only checkpoints on SWA/hybrid-attention models) by falling back to plain context-shift or full save/restore as appropriate for the loaded model architecture."
+        ],
+        "novel_contribution": "This is Sakur4's central, most novel component: it is the first reviewed system to make context-management/compaction decisions with explicit knowledge of, and coordination with, the local inference engine's own cache-checkpoint mechanics, rather than treating the inference server as an opaque token-in/token-out endpoint."
+      },
+      {
+        "id": "C4",
+        "name": "Repo Cortex",
+        "one_line": "Local, incremental, structural map of the codebase.",
+        "responsibilities": [
+          "Parse the project with tree-sitter into an AST-derived symbol table, call graph, and import graph, stored in SQLite and updated incrementally on file change (not full re-index).",
+          "Populate the Symbolic Ledger with qualified names, signatures, and an AST hash per symbol so staleness is trivially detectable (hash mismatch = stale reference).",
+          "Serve a token-budget-fitted 'repo map' (ranked by a PageRank-style centrality score over the call graph) as an MCP resource, so the agent gets an outline before deciding which files to open in full.",
+          "Compute blast-radius / impact-of-change queries (given a symbol, list all transitive callers/importers) to support safe refactors."
+        ],
+        "novel_contribution": "Directly feeds the Symbolic Ledger, so code-structural facts and general agent memory share one dependency graph and one eviction policy instead of being two disconnected subsystems."
+      },
+      {
+        "id": "C5",
+        "name": "Hybrid Recall Engine",
+        "one_line": "Retrieval across the whole Memory Fabric.",
+        "responsibilities": [
+          "Combine SQLite FTS5 (BM25 lexical search), sqlite-vec (dense vector search) and Repo Cortex graph traversal into one ranked result set.",
+          "Apply a lightweight local cross-encoder or LLM-scored rerank pass before anything is injected into the live context.",
+          "Always resolve a retrieved Semantic Atlas entry's link back to its Symbolic Ledger anchor and flag it if the anchor's hash has since changed (stale-summary detection)."
+        ],
+        "novel_contribution": "Reranking step explicitly checks semantic-entry staleness against the symbolic anchor before surfacing results, closing the 'agent remembers its own outdated interpretation' failure mode at retrieval time, not just at write time."
+      },
+      {
+        "id": "C6",
+        "name": "Idle Consolidator ('Dream Cycle')",
+        "one_line": "Background, sleep-time memory maintenance using a small auxiliary model.",
+        "responsibilities": [
+          "During detected idle periods (no active generation on any tracked slot), promote high-value Episodic Stream entries into refined Semantic Atlas entries using a smaller/faster local model (e.g. a distilled or lower-quant auxiliary model already loaded for embeddings).",
+          "Re-embed changed or newly-promoted content into the vector index.",
+          "Run consistency checks between Semantic Atlas entries and their Symbolic Ledger anchors, flagging or regenerating stale summaries.",
+          "Perform archival-tier compaction of long-cold episodes that are unlikely to be needed again, without touching Anchor Set entries."
+        ],
+        "novel_contribution": "Separates memory-quality work from user-facing latency entirely, applying the 'sleep-time compute' pattern specifically to the staleness-detection and re-consolidation problem created by the dual-track design."
+      },
+      {
+        "id": "C7",
+        "name": "Sakur4 MCP Gateway",
+        "one_line": "The single integration surface for any harness.",
+        "responsibilities": [
+          "Expose all Sakur4 functionality as MCP tools, resources and prompts, targeting the 2026-07-28 MCP specification (stateless core, MRTR for any interactive flows, cacheable list responses with ttlMs/cacheScope).",
+          "Provide a stable tool contract independent of internal storage/engine choices, so the Memory Fabric's internals can evolve without breaking harness integrations.",
+          "Emit the Context Ledger Receipt (see C8) as a resource updated every turn."
+        ],
+        "novel_contribution": "N/A (integration/compliance layer) -- deliberately the least novel component, by design, so adoption cost for any given harness stays low."
+      },
+      {
+        "id": "C8",
+        "name": "Context Ledger Receipt",
+        "one_line": "Turn-by-turn transparency into token spend.",
+        "responsibilities": [
+          "After each assembled prompt, publish a structured breakdown: tokens spent on system prompt, pinned anchors, retrieved memory, repo map, raw recent history, and tool schemas.",
+          "Surface cache-hit/cache-miss and cold/warm-restore status per turn from the Cache-Coherence Layer, so the user can see directly whether a given turn triggered an expensive re-prefill and why."
+        ],
+        "novel_contribution": "Makes the previously invisible interaction between compaction and KV-cache state visible and auditable, rather than a silent background cost."
+      },
+      {
+        "id": "C9",
+        "name": "Harness Adapters",
+        "one_line": "Thin, harness-specific glue.",
+        "responsibilities": [
+          "Hermes Agent adapter: register as a 'context engine' plugin (Hermes's plugin system explicitly supports pluggable context engines) so Sakur4's Graduated Eviction Engine replaces Hermes's default lineage-based compression trigger.",
+          "OMP (Oh My Pi) adapter: register as an extension hooking the agent loop's compaction point, and as a skill exposing Repo Cortex queries.",
+          "Generic adapter: for any OpenAI-compatible harness with no plugin system, a lightweight reverse-proxy mode that intercepts requests to the llama.cpp server, applies Sakur4 context assembly, and forwards the resulting prompt."
+        ],
+        "novel_contribution": "N/A (compatibility layer)."
+      }
+    ]
+  },
+  "core_innovations": [
+    {
+      "id": "INN-1",
+      "name": "Cache-Coherent Compaction (C3)",
+      "description": "Every compaction/eviction decision is made jointly with the llama.cpp slot's checkpoint state, so the surviving context after compaction remains a prefix-matchable continuation wherever architecturally possible.",
+      "why_it_matters": "Directly targets the highest-impact, currently-unaddressed pain point reported for local llama.cpp agent sessions: compaction destroying prefill-cache reuse."
+    },
+    {
+      "id": "INN-2",
+      "name": "Universal Symbolic/Semantic Split",
+      "description": "The dual-track, LLM-write-forbidden-on-symbolic-track discipline is applied not only to source code (as in prior art) but uniformly across tool outputs, research findings, and conversational facts.",
+      "why_it_matters": "Extends a proven anti-hallucination pattern beyond its original narrow scope, giving research and non-code agent work the same fabrication resistance code memory gets."
+    },
+    {
+      "id": "INN-3",
+      "name": "Dependency-Graph Eviction with Agent-Directed Folding",
+      "description": "Combines a deterministic, LLM-free graduated eviction policy with explicit agent-callable fold()/unfold() primitives for proactive sub-context isolation.",
+      "why_it_matters": "Gives both automatic safety-net compaction and agent-directed optimization in one mechanism, rather than forcing a choice between the two."
+    },
+    {
+      "id": "INN-4",
+      "name": "Staleness-Aware Retrieval",
+      "description": "Every retrieved Semantic Atlas entry is checked against its Symbolic Ledger anchor's current hash before being surfaced, and flagged if stale.",
+      "why_it_matters": "Catches drifted memory at read time as a second line of defense, even if a write-time error slipped through."
+    },
+    {
+      "id": "INN-5",
+      "name": "Context Ledger Receipt",
+      "description": "A per-turn, structured accounting of exactly where the context budget went and what the cache status was.",
+      "why_it_matters": "Turns an invisible cost (silent re-prefill, silent memory loss) into a visible, debuggable signal for the developer running the system."
+    }
+  ],
+  "functional_requirements": [
+    {
+      "id": "FR-1",
+      "component": "Memory Fabric",
+      "priority": "P0",
+      "title": "Append-only Episodic Stream",
+      "description": "Every turn, tool call, and tool result is written once, immutably, to the Episodic Stream with a monotonic sequence id, timestamp, token count, and originating slot id.",
+      "acceptance_criteria": [
+        "No update or delete operation exists on Episodic Stream rows; corrections are new rows referencing the corrected one.",
+        "Write path is non-blocking with respect to the harness's generation loop (async, default)."
+      ]
+    },
+    {
+      "id": "FR-2",
+      "component": "Memory Fabric",
+      "priority": "P0",
+      "title": "Deterministic Symbolic Ledger population",
+      "description": "The Symbolic Ledger is populated only by deterministic extractors (tree-sitter AST parse, structured tool-output parsers such as JSON/CSV/exit-code parsers). No LLM call is permitted in this write path under any configuration.",
+      "acceptance_criteria": [
+        "A code review / static check in CI fails the build if any code path capable of writing to the symbolic_fact table also imports or calls the inference client.",
+        "Each symbolic fact carries an ast_hash or content_hash enabling O(1) staleness detection on re-parse."
+      ]
+    },
+    {
+      "id": "FR-3",
+      "component": "Memory Fabric",
+      "priority": "P0",
+      "title": "Semantic Atlas anchoring",
+      "description": "Every Semantic Atlas entry stores a mandatory anchor_ref pointing to the Symbolic Ledger fact or Episodic Stream event(s) it was derived from, plus the hash of the anchor at write time.",
+      "acceptance_criteria": [
+        "Insert is rejected if anchor_ref is null or points to a non-existent row.",
+        "A background job can compute, for any Semantic Atlas entry, whether its anchor has since changed (is_stale)."
+      ]
+    },
+    {
+      "id": "FR-4",
+      "component": "Memory Fabric",
+      "priority": "P0",
+      "title": "Anchor Set (pinned constraints) survive all compaction",
+      "description": "Anchor Set entries (user corrections, safety constraints, explicit task contracts) are excluded from every eviction tier and are always included, verbatim, in every assembled prompt regardless of budget pressure.",
+      "acceptance_criteria": [
+        "Eviction engine unit tests confirm zero Anchor Set entries are ever selected for eviction at any severity tier.",
+        "If total Anchor Set size alone would exceed the configured context budget, the system raises a visible warning rather than silently dropping an anchor."
+      ]
+    },
+    {
+      "id": "FR-5",
+      "component": "Graduated Eviction Engine",
+      "priority": "P0",
+      "title": "Graduated eviction tiers",
+      "description": "Implement four eviction severities applied in order as budget pressure increases: (1) mask -- replace verbose tool output with a compact reference/pointer, full content still retrievable; (2) reference -- move the episode out of the live window into the Semantic Atlas as a linked summary; (3) archive -- move to cold storage, retrievable only via explicit recall; (4) drop -- permitted only for entries explicitly marked droppable (e.g. duplicate/superseded tool output) and never for anything with unresolved dependents in the Dependency Graph.",
+      "acceptance_criteria": [
+        "Given a synthetic session exceeding budget, the engine applies tiers in order and never skips directly to archive/drop while a lower tier would suffice.",
+        "An evicted-then-recalled episode's content is bit-identical to the original (round-trip integrity)."
+      ]
+    },
+    {
+      "id": "FR-6",
+      "component": "Graduated Eviction Engine",
+      "priority": "P0",
+      "title": "Agent-directed context folding",
+      "description": "Expose fold(description, goal) and unfold(fold_id, result_summary) tools. fold() opens an isolated sub-context (new logical branch in the Dependency Graph, new llama.cpp save point); unfold() collapses it, retaining only result_summary plus a pointer to the full folded trace in cold storage, and instructs the Cache-Coherence Layer to roll the active slot's KV state back to the pre-fold checkpoint.",
+      "acceptance_criteria": [
+        "After unfold(), live context token count reflects only the summary, not the folded subtask's intermediate steps.",
+        "The full folded trace remains retrievable via an explicit recall_fold(fold_id) tool."
+      ]
+    },
+    {
+      "id": "FR-7",
+      "component": "Cache-Coherence Layer",
+      "priority": "P0",
+      "title": "Checkpoint-aligned eviction boundaries",
+      "description": "Before finalizing an eviction plan, the Cache-Coherence Layer queries the target llama.cpp slot's current checkpoint ring and adjusts the proposed cut point to the nearest existing checkpoint boundary at or before it, when the delta is within a configurable tolerance (default 512 tokens).",
+      "acceptance_criteria": [
+        "On a llama.cpp server started with default checkpointing enabled, a measured compaction event shows prompt-eval token count for the subsequent turn materially smaller than the full compacted-context size (partial reuse), logged in the Context Ledger Receipt.",
+        "Falls back gracefully (full re-prefill, logged as such) on servers/models where checkpointing is unavailable or unsupported (e.g. certain SWA/hybrid architectures)."
+      ]
+    },
+    {
+      "id": "FR-8",
+      "component": "Cache-Coherence Layer",
+      "priority": "P1",
+      "title": "Session snapshot and warm restore",
+      "description": "Expose session.snapshot() to force an immediate /slots/{id}/save to disk, and session.restore(session_id) to reload a saved slot before the harness's first turn of a new day/session.",
+      "acceptance_criteria": [
+        "A restored session's first-turn prompt-eval time is measured and shown to be at least an order of magnitude faster than a cold full re-prefill of the same context size on the reference test machine.",
+        "Snapshot files are stored under a configurable path and are pruned by an age/count retention policy."
+      ]
+    },
+    {
+      "id": "FR-9",
+      "component": "Repo Cortex",
+      "priority": "P0",
+      "title": "Incremental structural indexing",
+      "description": "On startup, fully parse the project with tree-sitter into symbols/call-graph/import-graph; thereafter, re-parse only changed files (via filesystem watch or git-diff-driven trigger) and update only the affected graph nodes/edges.",
+      "acceptance_criteria": [
+        "Re-indexing a single changed file in a 5,000+ file repository completes in under 2 seconds on the reference test machine and does not re-parse unrelated files.",
+        "Supports at minimum Python, TypeScript/JavaScript, Rust, and Go grammars at v1."
+      ]
+    },
+    {
+      "id": "FR-10",
+      "component": "Repo Cortex",
+      "priority": "P0",
+      "title": "Token-budgeted repo map",
+      "description": "Expose get_repo_map(token_budget, focus_paths?) returning a ranked, truncated outline of the repository (files, top symbols per file) ordered by a call-graph centrality score, fitted to the requested token budget.",
+      "acceptance_criteria": [
+        "Requesting a smaller token_budget always returns a strict subset/summary of what a larger budget would return (monotonic truncation, not a different ranking).",
+        "focus_paths, when provided, boosts centrality score for symbols reachable from those paths within 2 graph hops."
+      ]
+    },
+    {
+      "id": "FR-11",
+      "component": "Repo Cortex",
+      "priority": "P1",
+      "title": "Blast-radius / impact query",
+      "description": "Expose impact_of_change(symbol_qualified_name) returning the transitive closure of callers/importers up to a configurable depth, each annotated with whether that caller's own symbolic fact hash is currently stale relative to the target symbol's last-known signature.",
+      "acceptance_criteria": [
+        "Given a function signature change, impact_of_change correctly enumerates all direct and transitive callers in the test fixture repository."
+      ]
+    },
+    {
+      "id": "FR-12",
+      "component": "Hybrid Recall Engine",
+      "priority": "P0",
+      "title": "Hybrid retrieval with staleness-aware rerank",
+      "description": "Expose recall(query, k, filters?) combining FTS5 BM25 results, sqlite-vec dense results, and Repo Cortex graph-adjacency results into one candidate set, rerank locally, and mark any Semantic Atlas hit whose anchor hash has changed since the entry was written as [STALE] with the current anchor content attached instead of trusting the stale summary.",
+      "acceptance_criteria": [
+        "A staleness regression test (edit a function after its summary is cached, then query for it) returns the [STALE] flag and the current, correct signature.",
+        "Default local embedding model is configurable and defaults to a small (<1.5GB) local embedding model."
+      ]
+    },
+    {
+      "id": "FR-13",
+      "component": "Idle Consolidator",
+      "priority": "P1",
+      "title": "Idle-triggered consolidation",
+      "description": "Detect idle state (no active generation across tracked slots for a configurable quiet period, default 90s) and run promotion of eligible Episodic Stream entries to Semantic Atlas, re-embedding, and stale-summary regeneration, using a configurably smaller/faster local model than the main session model.",
+      "acceptance_criteria": [
+        "Consolidation never runs concurrently with an active generation request on any tracked slot (verified by a mutual-exclusion test).",
+        "Consolidation is fully interruptible: a new user message immediately preempts and safely checkpoints in-progress consolidation work."
+      ]
+    },
+    {
+      "id": "FR-14",
+      "component": "MCP Gateway",
+      "priority": "P0",
+      "title": "Spec-compliant MCP server surface",
+      "description": "Implement the Sakur4 MCP server against the 2026-07-28 specification: stateless request handling, MRTR for any tool requiring mid-call user input, and ttlMs/cacheScope on tools/resources/prompts list responses so harness clients can cache the tool catalog.",
+      "acceptance_criteria": [
+        "Passes the reference MCP client conformance checks for the targeted spec revision.",
+        "tools/list response is stable and cacheable (identical bytes) across repeated calls when no tools have been added/removed/changed."
+      ]
+    },
+    {
+      "id": "FR-15",
+      "component": "Context Ledger Receipt",
+      "priority": "P1",
+      "title": "Per-turn token and cache accounting",
+      "description": "Publish a context_receipt resource after every assembled prompt, broken down by category (system prompt, anchors, retrieved memory, repo map, raw recent history, tool schemas) plus cache status (warm-restored / partial-reuse / full-re-prefill) and the measured prompt-eval time for that turn.",
+      "acceptance_criteria": [
+        "Sum of category token counts in the receipt matches the actual prompt token count sent to llama.cpp within rounding tolerance.",
+        "Receipt is human-readable when rendered as-is (no additional client-side formatting required)."
+      ]
+    },
+    {
+      "id": "FR-16",
+      "component": "Harness Adapters",
+      "priority": "P1",
+      "title": "Hermes Agent context-engine plugin",
+      "description": "Ship a Hermes Agent plugin implementing Hermes's context-engine plugin interface, delegating compaction decisions to the Graduated Eviction Engine instead of Hermes's default lineage-based compression.",
+      "acceptance_criteria": [
+        "Installable via Hermes's standard plugin mechanism with no modification to Hermes core.",
+        "A session run through the adapter shows the same fold/unfold and staleness behaviors as the raw MCP integration."
+      ]
+    },
+    {
+      "id": "FR-17",
+      "component": "Harness Adapters",
+      "priority": "P1",
+      "title": "OMP (Oh My Pi) extension and skill",
+      "description": "Ship an OMP extension hooking the agent loop's compaction point, plus an OMP skill exposing Repo Cortex queries as natural-language-invokable skills, following OMP's managed/user skill directory convention.",
+      "acceptance_criteria": [
+        "Extension loads under a standard OMP install without modifying OMP core.",
+        "Skill is discoverable via OMP's skill:// surfacing mechanism."
+      ]
+    },
+    {
+      "id": "FR-18",
+      "component": "Harness Adapters",
+      "priority": "P2",
+      "title": "Generic reverse-proxy mode",
+      "description": "For harnesses with no plugin system, provide a mode where Sakur4 sits between the harness and llama.cpp as an OpenAI-compatible reverse proxy, applying context assembly and eviction transparently.",
+      "acceptance_criteria": [
+        "A harness configured to point at Sakur4's proxy URL instead of llama-server directly functions with no other configuration changes."
+      ]
+    },
+    {
+      "id": "FR-19",
+      "component": "Security/Privacy",
+      "priority": "P0",
+      "title": "Fully local operation with no mandatory network egress",
+      "description": "All default code paths (indexing, embedding, retrieval, consolidation, MCP serving) function with zero outbound network calls. Any optional feature requiring network access (e.g. pulling a model) must be explicit opt-in.",
+      "acceptance_criteria": [
+        "Running the full test suite with network access blocked at the OS level produces no failures attributable to network calls in default configuration."
+      ]
+    },
+    {
+      "id": "FR-20",
+      "component": "Security/Privacy",
+      "priority": "P1",
+      "title": "Optional encryption at rest",
+      "description": "Support an optional encrypted-SQLite mode for the Memory Fabric store for users on shared or untrusted machines.",
+      "acceptance_criteria": [
+        "Enabling encryption at setup produces a store unreadable by a plain sqlite3 client without the configured key."
+      ]
+    }
+  ],
+  "mcp_interface_spec": {
+    "protocol_version_target": "2026-07-28",
+    "transport": "Streamable HTTP (stateless core) with MRTR for any tool that may require mid-call user input (e.g. confirming a large drop-tier eviction).",
+    "tools": [
+      {
+        "name": "memory.commit_episode",
+        "description": "Append a turn or tool result to the Episodic Stream.",
+        "input_schema": {
+          "role": "string",
+          "content": "string",
+          "tool_name": "string|null",
+          "slot_id": "string"
+        },
+        "output_schema": {
+          "episode_id": "string",
+          "token_count": "integer"
+        }
+      },
+      {
+        "name": "memory.pin",
+        "description": "Add an entry to the Anchor Set (survives all compaction).",
+        "input_schema": {
+          "content": "string",
+          "kind": "enum[user_correction, safety_constraint, task_contract]"
+        },
+        "output_schema": {
+          "anchor_id": "string"
+        }
+      },
+      {
+        "name": "memory.recall",
+        "description": "Hybrid retrieval across the Memory Fabric with staleness-aware reranking.",
+        "input_schema": {
+          "query": "string",
+          "k": "integer",
+          "filters": "object|null"
+        },
+        "output_schema": {
+          "results": "array",
+          "stale_flags": "array"
+        }
+      },
+      {
+        "name": "memory.fold",
+        "description": "Open an isolated sub-context for a token-intensive subtask.",
+        "input_schema": {
+          "description": "string",
+          "goal": "string"
+        },
+        "output_schema": {
+          "fold_id": "string"
+        }
+      },
+      {
+        "name": "memory.unfold",
+        "description": "Collapse a fold back into the main trajectory, retaining only the summary in the live window.",
+        "input_schema": {
+          "fold_id": "string",
+          "result_summary": "string"
+        },
+        "output_schema": {
+          "ok": "boolean",
+          "tokens_reclaimed": "integer"
+        }
+      },
+      {
+        "name": "memory.recall_fold",
+        "description": "Retrieve the full trace of a previously folded/unfolded subtask.",
+        "input_schema": {
+          "fold_id": "string"
+        },
+        "output_schema": {
+          "trace": "array"
+        }
+      },
+      {
+        "name": "code.get_repo_map",
+        "description": "Get a token-budgeted, centrality-ranked structural outline of the repository.",
+        "input_schema": {
+          "token_budget": "integer",
+          "focus_paths": "array|null"
+        },
+        "output_schema": {
+          "map": "string",
+          "tokens_used": "integer"
+        }
+      },
+      {
+        "name": "code.query_symbol",
+        "description": "Look up a symbol's current deterministic signature/location from the Symbolic Ledger.",
+        "input_schema": {
+          "qualified_name": "string"
+        },
+        "output_schema": {
+          "signature": "string",
+          "file": "string",
+          "line": "integer",
+          "ast_hash": "string"
+        }
+      },
+      {
+        "name": "code.impact_of_change",
+        "description": "Compute the blast radius of a proposed change to a symbol.",
+        "input_schema": {
+          "qualified_name": "string",
+          "depth": "integer"
+        },
+        "output_schema": {
+          "callers": "array"
+        }
+      },
+      {
+        "name": "session.snapshot",
+        "description": "Force an immediate KV-cache save for the current slot.",
+        "input_schema": {
+          "slot_id": "string"
+        },
+        "output_schema": {
+          "snapshot_id": "string",
+          "size_bytes": "integer"
+        }
+      },
+      {
+        "name": "session.restore",
+        "description": "Warm-restore a previously snapshotted session before starting work.",
+        "input_schema": {
+          "session_id": "string"
+        },
+        "output_schema": {
+          "restored": "boolean",
+          "restore_time_ms": "integer"
+        }
+      },
+      {
+        "name": "context.receipt",
+        "description": "Return the most recent Context Ledger Receipt.",
+        "input_schema": {},
+        "output_schema": {
+          "breakdown": "object",
+          "cache_status": "string",
+          "prompt_eval_ms": "integer"
+        }
+      }
+    ],
+    "resources": [
+      {
+        "uri_pattern": "sakur4://repo-map/{project_id}",
+        "description": "Cacheable current repo map, ttlMs set to Repo Cortex's last re-index timestamp validity window."
+      },
+      {
+        "uri_pattern": "sakur4://receipt/latest",
+        "description": "Latest Context Ledger Receipt, uncached (ttlMs=0)."
+      },
+      {
+        "uri_pattern": "sakur4://anchors/{project_id}",
+        "description": "Current Anchor Set for a project, cache-invalidated on any memory.pin call."
+      }
+    ],
+    "prompts": [
+      {
+        "name": "sakur4_system_preamble",
+        "description": "Optional reusable prompt fragment instructing the model how to use fold/unfold and when to call memory.recall proactively; harness adapters may inject this automatically."
+      }
+    ]
+  },
+  "data_model": {
+    "storage_engine": "SQLite (WAL mode) per project, extended with sqlite-vec for dense vectors and FTS5 for lexical search. Chosen over a client-server DB (Postgres/Qdrant) to keep the default install Docker-free and single-file-portable, consistent with the local-first, zero-cloud-dependency goal.",
+    "tables": [
+      {
+        "name": "episodic_stream",
+        "description": "Append-only raw trajectory log; source of truth for everything else.",
+        "columns": [
+          "episode_id (uuid, pk)",
+          "seq (integer, monotonic)",
+          "session_id",
+          "slot_id",
+          "role",
+          "content",
+          "tool_name (nullable)",
+          "token_count",
+          "created_at",
+          "fold_id (nullable, fk -> folds)"
+        ]
+      },
+      {
+        "name": "symbolic_fact",
+        "description": "Deterministic, parser-only facts. Write path must never touch an LLM.",
+        "columns": [
+          "fact_id (uuid, pk)",
+          "kind (enum: function, class, import, tool_output_field)",
+          "qualified_name",
+          "file_path",
+          "line_start",
+          "line_end",
+          "signature",
+          "ast_hash",
+          "updated_at"
+        ]
+      },
+      {
+        "name": "semantic_atlas",
+        "description": "LLM-derived interpretation, mandatorily anchored.",
+        "columns": [
+          "atlas_id (uuid, pk)",
+          "content",
+          "anchor_type (enum: symbolic_fact, episodic_stream)",
+          "anchor_id",
+          "anchor_hash_at_write",
+          "embedding_id (fk -> vectors)",
+          "created_at",
+          "is_stale (computed)"
+        ]
+      },
+      {
+        "name": "anchor_set",
+        "description": "Pinned entries exempt from all eviction.",
+        "columns": [
+          "anchor_id (uuid, pk)",
+          "content",
+          "kind (enum: user_correction, safety_constraint, task_contract)",
+          "created_at",
+          "session_id"
+        ]
+      },
+      {
+        "name": "dependency_graph_edge",
+        "description": "Directed edges for eviction-order and impact analysis; unifies code call-graph edges and memory-dependency edges in one table.",
+        "columns": [
+          "edge_id (pk)",
+          "src_type",
+          "src_id",
+          "dst_type",
+          "dst_id",
+          "edge_kind (enum: calls, imports, derived_from, depends_on)",
+          "weight"
+        ]
+      },
+      {
+        "name": "folds",
+        "description": "Records of fold()/unfold() sub-context operations.",
+        "columns": [
+          "fold_id (uuid, pk)",
+          "session_id",
+          "description",
+          "goal",
+          "opened_checkpoint_id",
+          "closed_checkpoint_id (nullable)",
+          "result_summary (nullable)",
+          "status (enum: open, closed)"
+        ]
+      },
+      {
+        "name": "cache_checkpoint",
+        "description": "Mirror of llama.cpp slot checkpoint/save state tracked by the Cache-Coherence Layer.",
+        "columns": [
+          "checkpoint_id (pk)",
+          "slot_id",
+          "token_position",
+          "kind (enum: internal_checkpoint, slot_save_file)",
+          "file_path (nullable)",
+          "created_at",
+          "size_bytes (nullable)"
+        ]
+      },
+      {
+        "name": "vectors",
+        "description": "sqlite-vec virtual table of dense embeddings for semantic_atlas and symbolic_fact docstrings.",
+        "columns": [
+          "embedding_id (pk)",
+          "vector (float[dim])",
+          "source_table",
+          "source_id"
+        ]
+      }
+    ]
+  },
+  "technology_stack": {
+    "core_service_language": "Rust (sakur4d core: eviction engine, cache-coherence layer, MCP server) for low overhead alongside an already GPU-saturated local machine, with a thin Python or TypeScript SDK for harness adapter authors.",
+    "parsing": "tree-sitter (per-language grammars: Python, TypeScript/JavaScript, Rust, Go at v1; additional grammars pluggable).",
+    "storage": "SQLite (WAL mode) + sqlite-vec extension + FTS5.",
+    "embeddings": "Local ONNX-runtime embedding inference (e.g. fastembed-style runner) defaulting to a small (<1.5GB) general-purpose embedding model; configurable to any locally-served embedding model, including one already exposed by the user's llama.cpp/Ollama stack.",
+    "inference_integration": "Direct HTTP client against llama.cpp server's OpenAI-compatible endpoint plus its slot-management endpoints (/slots/{id}/save, /slots/{id}/restore) and its runtime metrics for checkpoint/cache state.",
+    "mcp_sdk": "Official Tier-1 MCP SDK for the implementation language, targeting the 2026-07-28 specification.",
+    "packaging": "Single static binary for sakur4d where feasible; no mandatory Docker; optional container image provided for users who prefer it."
+  },
+  "non_functional_requirements": {
+    "performance": [
+      "NFR-1: Repo Cortex incremental re-index of a single changed file completes in under 2 seconds on the reference machine (see hardware profile below) for repositories up to 10,000 files.",
+      "NFR-2: memory.recall (hybrid retrieval + rerank) returns in under 300ms for a Memory Fabric containing up to 100,000 episodic entries on the reference machine.",
+      "NFR-3: Cache-Coherence Layer's checkpoint-boundary decision adds no more than 50ms of overhead to a compaction event.",
+      "NFR-4: sakur4d idle (no active session) resource footprint stays under 200MB RSS and negligible CPU."
+    ],
+    "hardware_profile_reference": {
+      "description": "Representative target hardware informing the above budgets, based on common local-inference setups for 27B-35B class models.",
+      "example_configurations": [
+        "Single 24GB-class consumer GPU (e.g. RTX 3090/4090) running a Q4-Q5 quantized 27-35B model at 64-80K context.",
+        "Dual 24GB-class GPUs running a larger MoE model split across both cards with 2 concurrent llama.cpp slots at up to 256K context per slot."
+      ]
+    },
+    "reliability": [
+      "NFR-5: No Sakur4 component crash may corrupt the Episodic Stream; all writes are transactional.",
+      "NFR-6: If sakur4d crashes and restarts mid-session, the harness can resume with at most the last uncommitted turn lost, never a corrupted Memory Fabric.",
+      "NFR-7: The system degrades gracefully when llama.cpp checkpointing/slot-save is unavailable (older server build, unsupported model architecture): full re-prefill fallback, never a hard failure."
+    ],
+    "portability": [
+      "NFR-8: Runs on Linux and macOS at v1 (the two dominant local-inference developer platforms); Windows via WSL2, consistent with harnesses reviewed (Hermes requires WSL2 for some features; OMP runs natively cross-platform).",
+      "NFR-9: No hard dependency on any specific GPU vendor; Sakur4 itself is CPU-only (it talks to llama.cpp over HTTP, it does not itself load model weights)."
+    ],
+    "security_and_privacy": [
+      "NFR-10: Zero mandatory network egress (see FR-19).",
+      "NFR-11: Local-only MCP transport by default (bind to localhost); remote exposure is explicit opt-in with authentication.",
+      "NFR-12: Optional at-rest encryption for the Memory Fabric (see FR-20)."
+    ],
+    "observability": [
+      "NFR-13: Every eviction decision, fold/unfold, and cache-coherence action is logged with enough structured detail to reconstruct why a given turn was slow or a given memory was evicted.",
+      "NFR-14: Context Ledger Receipt history is queryable for at least the current session plus a configurable retention window."
+    ]
+  },
+  "success_metrics_and_evaluation": {
+    "benchmarks": [
+      {
+        "name": "LoCoMo-derived long-conversation recall",
+        "method": "Run the LoCoMo long-conversation-memory benchmark methodology against a 27-35B local model with and without Sakur4's Memory Fabric.",
+        "target": "Meaningful improvement over raw-context-only baseline; directionally competitive with published filesystem-based and specialized-memory reference numbers (reported in the 68-75% range for hosted-model baselines), acknowledging local open-weight models at this size are expected to score lower in absolute terms than the frontier-hosted-model baselines those numbers were measured against."
+      },
+      {
+        "name": "Sakur4 Endurance Benchmark (custom)",
+        "method": "A purpose-built long-horizon coding benchmark: a single continuous session performing 50+ sequential small coding tasks against one repository, deliberately exceeding the configured context budget many times over, measuring task success rate, per-compaction prompt-eval time, and end-to-end wall-clock time, compared against the harness's default compaction.",
+        "target": "No measurable task-success degradation vs. per-task isolated sessions; majority of compaction events resolve via partial-prefix reuse rather than full re-prefill; total wall-clock time materially reduced vs. default compaction over the full run."
+      },
+      {
+        "name": "Code-fact fidelity check",
+        "method": "Inject controlled function-signature changes mid-session and query the agent's recollection of the current signature after multiple compaction cycles.",
+        "target": "Zero stale/fabricated signatures returned; all responses either reflect the current signature or correctly flag uncertainty and re-check the source."
+      },
+      {
+        "name": "Constraint survival under compaction",
+        "method": "Plant an explicit user constraint (e.g. a coding style rule) early in a long session, force many compaction cycles, then probe whether the constraint is still honored late in the session.",
+        "target": "100% survival of Anchor Set-pinned constraints across an arbitrary number of compaction cycles."
+      }
+    ],
+    "leading_indicators_tracked_in_product": [
+      "Percentage of compaction events resolved via partial-prefix reuse vs. full re-prefill (from the Context Ledger Receipt).",
+      "Average and p95 prompt-eval time per turn.",
+      "Semantic Atlas staleness rate at recall time (target: trending toward zero given the Idle Consolidator running).",
+      "Token savings vs. a no-Sakur4 baseline harness on equivalent tasks."
+    ]
+  },
+  "roadmap": {
+    "phase_0_foundations": {
+      "duration_estimate": "2-3 weeks",
+      "deliverables": [
+        "SQLite schema + sqlite-vec/FTS5 wiring (Memory Fabric skeleton).",
+        "Episodic Stream write path + basic memory.commit_episode / memory.recall MCP tools.",
+        "Minimal MCP Gateway compliant with 2026-07-28 spec (stateless core only, no MRTR yet)."
+      ]
+    },
+    "phase_1_symbolic_semantic_core": {
+      "duration_estimate": "3-4 weeks",
+      "deliverables": [
+        "tree-sitter integration for Python + TypeScript; Symbolic Ledger population.",
+        "Semantic Atlas with mandatory anchoring and staleness computation.",
+        "Anchor Set + memory.pin, enforced eviction-immunity.",
+        "Repo Cortex v1: full index + token-budgeted repo map (code.get_repo_map)."
+      ]
+    },
+    "phase_2_eviction_and_cache_coherence": {
+      "duration_estimate": "4-6 weeks (highest-risk phase)",
+      "deliverables": [
+        "Graduated Eviction Engine with the four-tier policy and Dependency Graph walk.",
+        "fold()/unfold() primitives (memory.fold, memory.unfold, memory.recall_fold).",
+        "Cache-Coherence Layer v1: read-only tracking of llama.cpp checkpoint state + session.snapshot/session.restore.",
+        "Cache-Coherence Layer v2: checkpoint-aligned eviction boundary selection (the core novel bet -- see risks)."
+      ]
+    },
+    "phase_3_retrieval_and_consolidation": {
+      "duration_estimate": "3-4 weeks",
+      "deliverables": [
+        "Hybrid Recall Engine with rerank and staleness-flagging.",
+        "Idle Consolidator (Dream Cycle) with configurable auxiliary model.",
+        "Context Ledger Receipt end to end."
+      ]
+    },
+    "phase_4_harness_integration": {
+      "duration_estimate": "2-3 weeks per harness",
+      "deliverables": [
+        "Hermes Agent context-engine plugin.",
+        "OMP extension + skill.",
+        "Generic reverse-proxy adapter for harnesses without a plugin system."
+      ]
+    },
+    "phase_5_hardening_and_benchmarking": {
+      "duration_estimate": "3-4 weeks",
+      "deliverables": [
+        "Sakur4 Endurance Benchmark implementation and published results.",
+        "LoCoMo-derived evaluation run.",
+        "Security review (encryption at rest, localhost-only transport defaults).",
+        "Additional tree-sitter grammars (Rust, Go) and repo-scale stress testing (10K+ file repos)."
+      ]
+    }
+  },
+  "risks_and_mitigations": [
+    {
+      "risk": "llama.cpp's slot save/restore and checkpoint APIs are still evolving (flags have already been renamed/removed once, e.g. --checkpoint-every-n-tokens deleted in favor of -cms/-ctxcp) and behave differently across model architectures (e.g. SWA/hybrid models only support partial-state checkpoints).",
+      "impact": "The Cache-Coherence Layer, the project's central novel contribution, is built against a moving, architecture-dependent target.",
+      "mitigation": "Isolate all llama.cpp-specific integration behind a single adapter interface with capability detection at connect time; ship a full-re-prefill fallback path from day one so the system is always correct, only sometimes not optimally fast; pin tested llama.cpp version ranges and track upstream changes actively."
+    },
+    {
+      "risk": "The deterministic Symbolic Ledger cannot cover every kind of useful memory (e.g. free-form research notes have no AST); over-indexing on the code case could leave non-code use cases under-served.",
+      "impact": "Research/long-form use cases (UC2) get weaker anti-hallucination guarantees than coding use cases.",
+      "mitigation": "Define structured extractors beyond code -- e.g. deterministic parsers for tool output formats (JSON, CSV, HTTP status/headers, diff hunks) -- so the symbolic/semantic split still applies wherever structure exists, and be explicit in documentation about where it does not (free-form prose has no symbolic anchor beyond the raw episodic text itself, which is still preserved verbatim)."
+    },
+    {
+      "risk": "Local, smaller open-weight models (27-35B) may follow fold()/unfold() and memory.recall tool-use conventions less reliably than larger frontier models, given known tool-calling reliability gaps at this scale.",
+      "impact": "The agent-directed half of context management (proactive folding) may under-trigger, leaving more work to the automatic Graduated Eviction Engine.",
+      "mitigation": "Design the system so the automatic (non-agent-directed) eviction path is fully sufficient on its own; treat fold()/unfold() as a pure optimization the agent may or may not use well, not a correctness dependency. Provide a system-prompt fragment (sakur4_system_preamble) and few-shot tool-call examples tuned for smaller instruction-tuned models."
+    },
+    {
+      "risk": "SQLite + sqlite-vec may not scale gracefully to very large monorepos (100K+ files) or very long-lived Memory Fabrics (many months of continuous use).",
+      "impact": "Retrieval latency (NFR-2) or index size could degrade over time.",
+      "mitigation": "Archival-tier compaction (FR-5) actively bounds hot-store growth; document a tested scale ceiling and provide a documented migration path to a client-server vector store (e.g. Qdrant) as an advanced/opt-in backend if a user's scale exceeds it, without changing the MCP tool contract."
+    },
+    {
+      "risk": "Governance-decay-style silent constraint loss could still occur at the Semantic Atlas layer even with Anchor Set protection, if the agent never explicitly pins a constraint via memory.pin.",
+      "impact": "Safety-relevant instructions given conversationally but never pinned could still be evicted.",
+      "mitigation": "Add a lightweight, deterministic (regex/keyword plus optional local classifier) constraint-detection pass on the Episodic Stream write path that proposes auto-pinning candidate safety/constraint statements, subject to user/agent confirmation, rather than relying solely on explicit tool calls."
+    },
+    {
+      "risk": "Building a correct, spec-compliant MCP server against a specification that itself changed materially in the last few months (2026-07-28 revision) risks integration breakage as the spec continues to evolve.",
+      "impact": "Rework cost if MRTR or cache-hint semantics change again before v1 ships.",
+      "mitigation": "Depend on official Tier-1 SDKs rather than a hand-rolled protocol implementation, and track the specification's formal deprecation policy (minimum 12-month wind-down commitments) to plan upgrade windows."
+    }
+  ],
+  "competitive_landscape": [
+    {
+      "name": "Letta (formerly MemGPT)",
+      "positioning": "Full agent runtime with tiered memory; strongest at conversational/general-purpose memory.",
+      "sakur4_differentiation": "Sakur4 is a subsystem, not a runtime replacement, and adds cache-coherence and a hard symbolic/semantic split that Letta's architecture does not provide."
+    },
+    {
+      "name": "Mem0 / OpenMemory MCP",
+      "positioning": "Framework-agnostic memory-as-a-service with an MCP path; strong async/rerank engineering.",
+      "sakur4_differentiation": "Mem0's richer graph tier is a paid cloud feature; Sakur4 targets fully local/free operation and adds code-structural and cache-coherence layers Mem0 does not address."
+    },
+    {
+      "name": "open-mem (OMP, deterministic memory layer)",
+      "positioning": "Pioneered the symbolic/semantic split for code memory specifically.",
+      "sakur4_differentiation": "Sakur4 generalizes the pattern beyond code and integrates it with eviction and cache-coherence; also avoids name confusion by not reusing the 'OMP' abbreviation used by the Oh-My-Pi harness."
+    },
+    {
+      "name": "Aider repo-map and descendants (RepoMapper, mcp-server-tree-sitter, CodeGraph, GitNexus)",
+      "positioning": "Local, structural code intelligence as MCP-servable tools.",
+      "sakur4_differentiation": "Sakur4's Repo Cortex adopts the same local-graph philosophy but wires its output directly into the Symbolic Ledger and eviction Dependency Graph rather than existing as a standalone tool."
+    },
+    {
+      "name": "Hermes Agent / OMP (Oh My Pi) native context management",
+      "positioning": "Both already implement context compression natively (Hermes: 'lineage-based' compression; OMP: built-in compaction).",
+      "sakur4_differentiation": "Sakur4 does not compete with these harnesses; it plugs into their extension points to upgrade the compaction strategy specifically, while leaving loop/tool/skill management to the harness."
+    }
+  ],
+  "open_questions": [
+    "Should the Idle Consolidator's auxiliary model be a strict requirement (bundled small model) or fully user-configurable, given that many users running 27-35B models on 24GB-class GPUs may not have VRAM headroom to keep a second model resident?",
+    "What is the right default eviction budget threshold (percentage of context window) for 27-35B-class models specifically, given they may show context-rot effects at lower absolute token counts than larger frontier models? This should be settled empirically in Phase 5, not assumed.",
+    "Should Sakur4 support remote (non-localhost) MCP exposure in v1 for users running llama.cpp on a separate headless machine on their LAN, or defer this to a later release given the added authentication surface?",
+    "How should the Symbolic Ledger represent facts extracted from non-code structured tool output (e.g. an API response schema) in a way that composes cleanly with the code-symbol representation, rather than as a bolted-on special case?",
+    "What is the acceptable disk footprint budget for retained llama.cpp slot-save snapshots (each reported in the 60-500MB range depending on context length), and what retention/pruning policy should be the default?"
+  ],
+  "appendix_references": [
+    {
+      "title": "State of AI Agent Memory 2026 (Mem0)",
+      "url": "https://mem0.ai/blog/state-of-ai-agent-memory-2026"
+    },
+    {
+      "title": "MCP Memory Server: What It Is & How to Choose (2026)",
+      "url": "https://dev.to/mind_anthony/mcp-memory-server-what-it-is-how-to-choose-2026-3co5"
+    },
+    {
+      "title": "Mem0 vs Letta (MemGPT): AI Agent Memory Compared (2026)",
+      "url": "https://vectorize.io/articles/mem0-vs-letta"
+    },
+    {
+      "title": "Letta company/product research overview",
+      "url": "https://rywalker.com/research/letta"
+    },
+    {
+      "title": "Beyond Compaction: Structured Context Eviction for Long-Horizon Agents (CWL)",
+      "url": "https://arxiv.org/html/2606.11213"
+    },
+    {
+      "title": "Governance Decay: How Context Compaction Silently Erases Safety Constraints in Long-Horizon LLM Agents",
+      "url": "https://arxiv.org/html/2606.22528v2"
+    },
+    {
+      "title": "CommitKV: Lifecycle-Aware KV Cache Compression via Commit Transitions for Multi-Turn Agents",
+      "url": "https://arxiv.org/html/2608.07855v1"
+    },
+    {
+      "title": "Context Engineering for Production AI Agents: KV Cache, Prefix Caching, and Long-Context GPU Economics",
+      "url": "https://www.spheron.network/blog/context-engineering-production-ai-agents-kv-cache-long-context/"
+    },
+    {
+      "title": "llama.cpp server README (slot save/restore, context shift, checkpoint flags)",
+      "url": "https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md"
+    },
+    {
+      "title": "qwen-code issue #5760: compaction defeats llama.cpp prompt cache",
+      "url": "https://github.com/QwenLM/qwen-code/issues/5760"
+    },
+    {
+      "title": "Full Prompt Re-Processing: llama.cpp Cache Fixes That Work (checkpoint ring internals)",
+      "url": "https://particula.tech/blog/prompt-reprocessing-swa-hybrid-models-kv-cache"
+    },
+    {
+      "title": "hearth: KV-cache persisting proxy for llama.cpp",
+      "url": "https://pypi.org/project/hearth-llm/"
+    },
+    {
+      "title": "Hermes Agent (NousResearch) repository",
+      "url": "https://github.com/nousresearch/hermes-agent"
+    },
+    {
+      "title": "Hermes Agent architecture review (nine-part harness model, lineage-based compression)",
+      "url": "https://arize.com/?p=28841"
+    },
+    {
+      "title": "oh-omp / OMP (Oh My Pi) coding agent toolkit",
+      "url": "https://github.com/open-horizon-labs/oh-omp"
+    },
+    {
+      "title": "open-mem/omp: The Deterministic Memory Layer for AI Coding Agents (symbolic/semantic split)",
+      "url": "https://github.com/open-mem/omp"
+    },
+    {
+      "title": "Detecting and Correcting Hallucinations in LLM-Generated Code via Deterministic AST Analysis",
+      "url": "https://arxiv.org/abs/2601.19106"
+    },
+    {
+      "title": "Repository Map Pattern: AST + PageRank for Dynamic Code",
+      "url": "https://agentpatterns.ai/context-engineering/repository-map-pattern/"
+    },
+    {
+      "title": "Code Intelligence Tools for AI Agents Compared (2026 category overview)",
+      "url": "https://rywalker.com/research/code-intelligence-tools"
+    },
+    {
+      "title": "Repository Intelligence in AI Coding Tools (2026)",
+      "url": "https://www.buildmvpfast.com/blog/repository-intelligence-ai-coding-codebase-understanding-2026"
+    },
+    {
+      "title": "Context Rot: How Increasing Input Tokens Impacts LLM Performance (Chroma Research)",
+      "url": "https://www.trychroma.com/research/context-rot"
+    },
+    {
+      "title": "Best Local Embedding Models for RAG (2026)",
+      "url": "https://d-central.tech/local-embedding-models/"
+    },
+    {
+      "title": "The 2026-07-28 Model Context Protocol Specification",
+      "url": "https://blog.modelcontextprotocol.io/posts/2026-07-28/"
+    },
+    {
+      "title": "Understanding MCP features: Tools, Resources, Prompts, Sampling, Roots, and Elicitation",
+      "url": "https://workos.com/blog/mcp-features-guide"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+[package]
+name = "sakur4d"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Sakur4 daemon: MCP gateway + sidecar for the Sakur4 memory/context OS."
+
+[[bin]]
+name = "sakur4d"
+path = "src/main.rs"
+
+[dependencies]
+sakur4-core.workspace = true
+
+tokio.workspace = true
+tokio-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+
+rmcp.workspace = true
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+http = "1"
+schemars.workspace = true
+
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+sakur4-testkit.workspace = true
