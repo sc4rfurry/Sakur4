@@ -341,11 +341,6 @@ pub struct ToolOutputParser;
 impl ToolOutputParser {
     /// Parse with whichever parser recognises the input.
     pub fn parse_any(tool_name: Option<&str>, content: &str) -> ToolOutputFacts {
-        eprintln!(
-            "DBG parse_any len={} first20={:?}",
-            content.len(),
-            content.chars().take(20).collect::<String>()
-        );
         // Tool-name hints first: a `git diff` result is unambiguously a diff even
         // if it happens to look like a header block.
         if let Some(name) = tool_name {
