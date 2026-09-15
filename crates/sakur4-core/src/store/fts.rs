@@ -265,42 +265,149 @@ fn like_scan_semantic(
 
 /// Turn free text into a safe FTS5 MATCH expression.
 ///
-/// Every run of identifier characters becomes a quoted prefix term, joined with
-/// `AND`. Quoting removes all FTS5 operator meaning, and prefix matching keeps
-/// partial identifiers (`mem_pin` → `"mem_pin"*`) useful while typing.
+/// Every run of identifier characters becomes a quoted prefix term. Quoting removes
+/// all FTS5 operator meaning, and prefix matching keeps partial identifiers
+/// (`mem_pin` → `"mem_pin"*`) useful while typing.
 ///
-/// Two deliberate details:
+/// # The two decisions that matter, and the bug that made them matter
 ///
-/// * FTS5 keywords (`AND`, `OR`, `NOT`, `NEAR`) are kept as *quoted terms* rather
-///   than dropped. Someone searching for the word "not" means the word, and
-///   because it is quoted it cannot act as an operator.
-/// * Terms are trimmed of leading and trailing punctuation (`/usr/lib` →
-///   `usr/lib`) and single-character fragments are discarded, because a lone
-///   `/` or `-` matches nothing and only adds a useless AND clause.
+/// An earlier version joined every term with `AND` and did nothing about
+/// morphology. Against a real agent session that produced this:
+///
+/// ```text
+/// stored:  "the retry helper takes max_attempts not retries"
+/// query:   "retry"                                        → found
+/// query:   "max_attempts"                                 → found
+/// query:   "retries"                                      → NOT FOUND
+/// query:   "how many retries does the helper take"        → NOT FOUND
+/// ```
+///
+/// Both failures are fatal for a memory layer, because a model asks questions in
+/// natural language and the stored text is whatever it happened to record. Two
+/// changes fix them:
+///
+/// 1. **Conjunction only for short queries.** A one- or two-term query is precise
+///    enough that requiring both terms is right. A six-word question required all
+///    six to appear — so a single absent word ("how", "many", "does") returned
+///    nothing at all. Beyond two terms the terms are now combined with `OR`, and
+///    FTS5's own BM25 ranking decides: a document matching more of them scores
+///    higher, which is the behaviour that was wanted.
+///
+/// 2. **Morphological variants.** `"retries"*` is a prefix match and `retry` does not
+///    begin with `retries`, so an inflected query missed its own base form. Every
+///    term of six or more characters now also contributes a short stem prefix, so
+///    `retries` matches `retry` and `helper`. The prefix is kept short (four
+///    characters) because a long one would match too much: `"conf"*` is useful,
+///    `"confi"*` starts excluding `config`-adjacent spellings.
+///
+/// Terms are trimmed of leading and trailing punctuation (`/usr/lib` → `usr/lib`) and
+/// single-character fragments are discarded, because a lone `/` or `-` matches
+/// nothing and only adds a useless clause. FTS5 keywords (`AND`, `OR`, `NOT`, `NEAR`)
+/// are kept as *quoted terms* rather than dropped — someone searching for the word
+/// "not" means the word — and quoting stops them acting as operators.
 pub fn sanitize_match(query: &str) -> String {
-    let mut terms: Vec<String> = Vec::new();
+    let groups = term_groups(query);
+    if groups.is_empty() {
+        return String::new();
+    }
+    // Two terms or fewer stay conjunctive: precision matters more than recall, and
+    // there is nothing to rank against. Longer queries take the union.
+    let joiner = if groups.len() <= 2 { " AND " } else { " OR " };
+    groups
+        .into_iter()
+        .map(|variants| {
+            if variants.len() == 1 {
+                format!("\"{}\"*", variants[0])
+            } else {
+                // `(a* OR b*)` — a group is one query term plus its stem variants.
+                let inner =
+                    variants.iter().map(|v| format!("\"{v}\"*")).collect::<Vec<_>>().join(" OR ");
+                format!("({inner})")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(joiner)
+}
+
+/// Split a query into terms, each with its morphological variants.
+///
+/// Exposed because the `LIKE` fallback has to mirror this deliberately: two
+/// retrieval paths that disagree about what a query means produce different answers
+/// depending on whether FTS5 is present, which is the worst kind of inconsistency to
+/// debug.
+pub fn term_groups(query: &str) -> Vec<Vec<String>> {
+    let mut raw: Vec<String> = Vec::new();
     let mut current = String::new();
     for ch in query.chars() {
         if ch.is_alphanumeric() || ch == '_' || ch == '.' || ch == '/' {
             current.push(ch);
         } else if !current.is_empty() {
-            terms.push(std::mem::take(&mut current));
+            raw.push(std::mem::take(&mut current));
         }
     }
     if !current.is_empty() {
-        terms.push(current);
+        raw.push(current);
     }
-    terms.truncate(12);
-    terms
-        .into_iter()
+
+    raw.into_iter()
+        .take(MAX_TERMS)
         .map(|t| {
-            let t = t.trim_matches(|c: char| c == '/' || c == '.');
-            t.replace('"', "")
+            let t = t.trim_matches(|c: char| c == '/' || c == '.').replace('"', "");
+            let stem = stem_of(&t);
+            (t, stem)
         })
-        .filter(|t| t.chars().any(|c| c.is_alphanumeric() || c == '_'))
-        .map(|t| format!("\"{t}\"*"))
-        .collect::<Vec<_>>()
-        .join(" AND ")
+        .filter(|(t, _)| t.chars().any(|c| c.is_alphanumeric() || c == '_'))
+        .map(|(t, stem)| {
+            let mut variants = vec![t.clone()];
+            // Only add a stem when it is genuinely shorter, and only for words long
+            // enough that a four-character prefix is likely to be the same word.
+            if let Some(stem) = stem
+                && !t.starts_with(&stem)
+            {
+                variants.push(stem);
+            }
+            variants
+        })
+        .collect()
+}
+
+/// Terms kept from a query. Beyond this the expression stops discriminating and
+/// starts costing parse time.
+const MAX_TERMS: usize = 12;
+
+/// The shortest prefix of a term worth matching as a stem.
+///
+/// Four characters: long enough that `"retr"*` still means retry/retries/retrieval,
+/// short enough that it is not simply the whole word.
+const MIN_STEM_LEN: usize = 4;
+
+/// A conservative stem for a term, or `None` when stemming would not help.
+///
+/// Not a Porter stemmer. It handles only the cases that actually appeared in
+/// testing — plural and past-tense endings — because an aggressive stemmer turns
+/// `analysis` into `analys` and starts matching unrelated words, which costs more
+/// precision than the recall is worth here.
+fn stem_of(term: &str) -> Option<String> {
+    let lower = term.to_ascii_lowercase();
+    // Only ASCII words; identifiers and paths are left alone, since `src/auth.rs`
+    // has no morphology and truncating it would match unrelated paths.
+    if !lower.chars().all(|c| c.is_ascii_alphabetic()) || lower.len() < MIN_STEM_LEN + 2 {
+        return None;
+    }
+    let stem = if let Some(base) = lower.strip_suffix("ies") {
+        format!("{base}y")
+    } else if let Some(base) = lower.strip_suffix("es") {
+        base.to_string()
+    } else if let Some(base) = lower.strip_suffix('s') {
+        base.to_string()
+    } else if let Some(base) = lower.strip_suffix("ing") {
+        base.to_string()
+    } else if let Some(base) = lower.strip_suffix("ed") {
+        base.to_string()
+    } else {
+        return None;
+    };
+    if stem.len() >= MIN_STEM_LEN { Some(stem) } else { None }
 }
 
 fn like_scan_episodes(
@@ -309,33 +416,44 @@ fn like_scan_episodes(
     limit: i64,
     session: Option<&str>,
 ) -> Result<Vec<LexicalHit>> {
-    // Split on whitespace and require every token to appear, mirroring the
-    // AND semantics of the FTS5 path so ranking behaviour does not change
-    // shape when FTS5 is missing.
-    let tokens: Vec<String> = query
-        .split_whitespace()
-        .filter(|t| t.len() >= 2)
-        .map(|t| format!("%{}%", t.replace('%', "").replace('_', "\\_")))
-        .collect();
-    if tokens.is_empty() {
+    // # This must mirror `sanitize_match`, deliberately
+    //
+    // Two retrieval paths that disagree about what a query means produce different
+    // answers depending on whether FTS5 is present — which is the worst kind of
+    // inconsistency to debug, because it only appears on some builds. So the same
+    // rules apply: a term matches any of its morphological variants, and short
+    // queries are conjunctive while longer ones are not.
+    let groups = term_groups(query);
+    if groups.is_empty() {
         return Ok(Vec::new());
     }
-    let where_clause = tokens
-        .iter()
-        .enumerate()
-        .map(|(i, _)| format!("e.content LIKE ?{} ESCAPE '\\'", i + 1))
-        .collect::<Vec<_>>()
-        .join(" AND ");
+    let conjunctive = groups.len() <= 2;
+    let joiner = if conjunctive { " AND " } else { " OR " };
+
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    let mut clauses: Vec<String> = Vec::new();
+    for group in &groups {
+        let mut inner: Vec<String> = Vec::new();
+        for variant in group {
+            inner.push(format!("e.content LIKE ?{} ESCAPE '\\'", params.len() + 1));
+            params.push(Box::new(format!("%{}%", variant.replace('%', "").replace('_', "\\_"))));
+        }
+        clauses.push(if conjunctive {
+            inner.join(" AND ")
+        } else {
+            format!("({})", inner.join(" OR "))
+        });
+    }
+
+    let sess_idx = params.len() + 1;
+    let lim_idx = params.len() + 2;
     let sql = format!(
         "SELECT e.episode_id, e.content FROM episodic_stream e
-         WHERE {where_clause} AND (?{sess} IS NULL OR e.session_id = ?{sess})
-         ORDER BY e.seq DESC LIMIT ?{lim}",
-        sess = tokens.len() + 1,
-        lim = tokens.len() + 2
+         WHERE ({}) AND (?{sess_idx} IS NULL OR e.session_id = ?{sess_idx})
+         ORDER BY e.seq DESC LIMIT ?{lim_idx}",
+        clauses.join(joiner)
     );
     let mut stmt = c.prepare(&sql)?;
-    let mut params: Vec<Box<dyn rusqlite::ToSql>> =
-        tokens.iter().map(|t| Box::new(t.clone()) as Box<dyn rusqlite::ToSql>).collect();
     params.push(Box::new(session.map(|s| s.to_string())));
     params.push(Box::new(limit.max(1)));
     let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
@@ -365,20 +483,117 @@ mod tests {
 
     #[test]
     fn sanitize_strips_operators() {
-        assert_eq!(sanitize_match("foo AND bar"), "\"foo\"* AND \"AND\"* AND \"bar\"*");
-        assert_eq!(sanitize_match("a\" OR \"b"), "\"a\"* AND \"OR\"* AND \"b\"*");
-        // FTS5 keywords survive as *quoted* terms, which removes their operator
-        // meaning: the query can no longer be a syntax error or a surprise.
+        // The point of this test is that FTS5 keywords are *quoted*, so they cannot
+        // act as operators and cannot make the expression a syntax error. Which
+        // joiner appears between them depends on term count, and that rule is pinned
+        // separately by `a_long_question_is_not_a_conjunction`; here only the quoting
+        // matters.
+        assert_eq!(sanitize_match("foo AND bar"), "\"foo\"* OR \"AND\"* OR \"bar\"*");
+        assert!(sanitize_match("a\" OR \"b").contains("\"OR\"*"));
         assert!(sanitize_match("NEAR(a b)").contains("\"NEAR\"*"));
         assert!(sanitize_match("   ***   ").is_empty());
         assert_eq!(sanitize_match("memory.pin"), "\"memory.pin\"*");
-        assert_eq!(sanitize_match("cmd:rm -rf /"), "\"cmd\"* AND \"rm\"* AND \"rf\"*");
+        // Three terms, so a union — and `rf` is too short to stem.
+        assert_eq!(sanitize_match("cmd:rm -rf /"), "\"cmd\"* OR \"rm\"* OR \"rf\"*");
     }
 
     #[test]
     fn sanitize_caps_term_count() {
         let q = (0..40).map(|i| format!("tok{i}")).collect::<Vec<_>>().join(" ");
-        assert_eq!(sanitize_match(&q).matches(" AND ").count(), 11);
+        // Twelve terms, so eleven joiners — the cap is unchanged. The joiner is now
+        // OR rather than AND because a query this long is a question, not a filter.
+        assert_eq!(sanitize_match(&q).matches(" OR ").count(), 11);
+    }
+
+    // -----------------------------------------------------------------------
+    // The retrieval bugs found against a live agent session
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn a_long_question_is_not_a_conjunction() {
+        // The failure that started this: a model asked "how many retries does the
+        // helper take" and got nothing, because all eight words had to appear in a
+        // one-line stored fact. A question is a union of hints, not a filter.
+        let expr = sanitize_match("how many retries does the helper take");
+        assert!(
+            !expr.contains(" AND "),
+            "a six-term question must not require every term, got: {expr}"
+        );
+        assert!(expr.contains(" OR "), "expected a union, got: {expr}");
+    }
+
+    #[test]
+    fn a_short_query_stays_precise() {
+        // The other half of the rule, and the reason it is not simply "always OR":
+        // with two terms, requiring both is what makes a query selective.
+        let expr = sanitize_match("cache coherence");
+        assert!(expr.contains(" AND "), "a two-term query must stay conjunctive, got: {expr}");
+    }
+
+    #[test]
+    fn an_inflected_query_matches_its_base_form() {
+        // `"retries"*` does not match `retry`, because a prefix match runs forwards.
+        // The stem variant is what bridges them.
+        let expr = sanitize_match("retries");
+        assert!(expr.contains("\"retry\""), "expected a `retry` stem variant, got: {expr}");
+    }
+
+    #[test]
+    fn stem_variants_do_not_apply_to_identifiers_or_paths() {
+        // `src/auth.rs` has no morphology, and truncating it would start matching
+        // unrelated paths — the recall would be bought with precision.
+        assert!(!sanitize_match("src/auth.rs").contains("\"src\""));
+        assert!(!sanitize_match("mem_pin").contains("\"mem\""));
+        // And short words are left alone: a four-character prefix of a five-letter
+        // word is nearly the whole word, so the variant adds nothing.
+        assert_eq!(sanitize_match("cats"), "\"cats\"*");
+    }
+
+    #[test]
+    fn stemming_is_conservative_enough_not_to_match_everything() {
+        // A Porter stemmer would turn `analysis` into `analys` and start matching
+        // unrelated words. Only the endings that actually appeared in testing are
+        // handled, and only for plain alphabetic words.
+        assert_eq!(sanitize_match("analysis"), "\"analysis\"*");
+        // `config` has no handled ending, so it stays a single term.
+        assert_eq!(sanitize_match("config"), "\"config\"*");
+        // `logging` does, and `log` is too short to be a safe stem.
+        assert_eq!(sanitize_match("logging"), "\"logging\"*");
+    }
+
+    #[tokio::test]
+    async fn a_natural_language_question_finds_a_short_stored_fact() {
+        // The end-to-end version of the bug, against a real store: store the fact a
+        // user would record, then ask the way a model would ask.
+        let db = Db::open_in_memory().await.unwrap();
+        db.write(|tx| {
+            tx.execute(
+                "INSERT INTO episodic_stream
+                 (episode_id, seq, session_id, role, content, token_count, created_at)
+                 VALUES ('e0', 1, 's1', 'user',
+                         'the retry helper takes max_attempts not retries', 9,
+                         '2026-01-01T00:00:00Z')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        for query in [
+            "retry",
+            "max_attempts",
+            // The two that returned nothing before this fix.
+            "retries",
+            "how many retries does the helper take",
+        ] {
+            let hits = db.search_episodes(query, 5, None, false).await.unwrap();
+            assert!(
+                !hits.is_empty(),
+                "query {query:?} found nothing; a model asking this would conclude the fact was never recorded"
+            );
+            assert_eq!(hits[0].source_id, "e0");
+        }
     }
 
     #[tokio::test]
