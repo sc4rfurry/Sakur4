@@ -47,6 +47,7 @@ Skill** — one daemon, three ways in.
 - [Configuration](#configuration)
 - [CLI reference](#cli-reference)
 - [Troubleshooting](#troubleshooting)
+- [Benchmark: with vs without](#benchmark-what-changes-with-it-and-without-it)
 - [Verification](#verification)
 - [Design decisions](#design-decisions)
 - [How this compares](#how-this-compares)
@@ -624,6 +625,34 @@ Cold archival runs during `dream`. Snapshots are pruned by count under
 `SAKUR4_SNAPSHOT_DIR`.
 
 </details>
+
+---
+
+## Benchmark: what changes with it, and without it
+
+The honest answer, measured over 205 turns against a real repository — the same session
+run twice, once the way a harness does today and once through Sakur4:
+
+| | without | with | change |
+|---|---|---|---|
+| total tokens sent | 2,807,158 | 3,634,256 | **+29%** |
+| compactions | 6 | 25 | +317% |
+| prefix kept reusable | 0 | 519,504 | — |
+| **recall accuracy** | **17%** | **92%** | **+75 pts** |
+| **pinned constraint survived** | **lost at compaction 1** | **survived all 25** | — |
+
+**It costs more tokens and buys correctness with them.** Anchors and retrieval account
+for 0.3% of the difference; the rest is compacting to a 55% target rather than letting
+history overflow. Whether that trade is worth it depends on whether losing a constraint
+costs you more than the tokens do.
+
+```bash
+node docs/bench/ab.mjs --repo .                              # embedded backend
+node docs/bench/ab.mjs --repo . --backend http://host:8080   # real prefill numbers
+```
+
+Full method — including three bugs the benchmark itself had, recorded rather than
+quietly fixed — is in [docs/bench](docs/bench/README.md).
 
 ---
 
