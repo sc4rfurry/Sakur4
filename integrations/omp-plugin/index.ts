@@ -211,6 +211,14 @@ class Client {
   private daemon: Daemon | null;
   private probed = false;
   private warned = false;
+  /**
+   * The project id the daemon derived from the project root, read once.
+   *
+   * `undefined` means "not looked up yet" and `null` means "looked up and there is
+   * none", which is why this is not simply a nullable string: without the
+   * distinction, every failed lookup would re-spawn a subprocess on every turn.
+   */
+  private cachedProjectId: string | null | undefined = undefined;
 
   constructor(config: Config) {
     this.config = config;
@@ -328,6 +336,139 @@ class Client {
       } catch {
         return null;
       }
+    }
+    return null;
+  }
+
+  /**
+   * The project id the daemon derived, read once and cached.
+   *
+   * # Why it is read rather than computed
+   *
+   * The daemon hashes the project root into a `proj_…` id, and a harness cannot
+   * reproduce that hash. Resources are scoped by it (`sakur4://anchors/{project}`),
+   * so without resolving it the plugin cannot address a project-scoped resource at
+   * all — which is a large part of why anchors were never read from the live path.
+   *
+   * Cached because it cannot change for a given store and project root, and because
+   * resolving it costs a subprocess.
+   */
+  private projectId(): string | null {
+    if (this.cachedProjectId !== undefined) return this.cachedProjectId;
+    this.cachedProjectId = null;
+
+    const daemon = this.available();
+    if (!daemon) return null;
+
+    const frames = [
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "omp-sakur4", version: "0.1.0" },
+        },
+      },
+      { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
+      { jsonrpc: "2.0", id: 2, method: "resources/list", params: {} },
+    ];
+    const result = spawnSync(
+      daemon.command,
+      [...this.globalArgs(), "serve", "--transport", "stdio", "--no-dream"],
+      {
+        encoding: "utf8",
+        shell: false,
+        input: `${frames.map((f) => JSON.stringify(f)).join("\n")}\n`,
+        timeout: 120_000,
+        maxBuffer: 64 * 1024 * 1024,
+      },
+    );
+    if (result.error || !result.stdout) return null;
+
+    for (const line of result.stdout.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("{")) continue;
+      let parsed: any;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        continue;
+      }
+      if (parsed.id !== 2) continue;
+      for (const res of parsed.result?.resources ?? []) {
+        const match = /^sakur4:\/\/(?:anchors|repo-map|status)\/(proj_\w+)$/.exec(res?.uri ?? "");
+        if (match) {
+          this.cachedProjectId = match[1];
+          diagnose("resolved project id", { project: match[1] });
+          return this.cachedProjectId;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Read one of the daemon's MCP resources, returning its text.
+   *
+   * # Why resources and not a tool
+   *
+   * Anchors are exposed as a resource rather than a tool because they are session
+   * state the harness should read every turn, not something the model decides to ask
+   * for. Routing them through a tool would put the guarantee back behind the model's
+   * judgement — and the failure this fixes is precisely that a short constraint
+   * matches almost no query, so a model would rarely think to ask for it.
+   */
+  resource(kind: "anchors" | "status" | "repo-map"): string | null {
+    const daemon = this.available();
+    if (!daemon) return null;
+
+    const project = this.projectId();
+    if (!project) return null;
+    const uri = `sakur4://${kind}/${project}`;
+
+    const frames = [
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "omp-sakur4", version: "0.1.0" },
+        },
+      },
+      { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
+      { jsonrpc: "2.0", id: 2, method: "resources/read", params: { uri } },
+    ];
+    const result = spawnSync(
+      daemon.command,
+      [...this.globalArgs(), "serve", "--transport", "stdio", "--no-dream"],
+      {
+        encoding: "utf8",
+        shell: false,
+        input: `${frames.map((f) => JSON.stringify(f)).join("\n")}\n`,
+        timeout: 120_000,
+        maxBuffer: 64 * 1024 * 1024,
+      },
+    );
+    if (result.error || !result.stdout) return null;
+
+    for (const line of result.stdout.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("{")) continue;
+      let parsed: any;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        continue;
+      }
+      if (parsed.id !== 2) continue;
+      for (const part of parsed.result?.contents ?? []) {
+        if (typeof part?.text === "string") return part.text;
+      }
+      return null;
     }
     return null;
   }
@@ -923,37 +1064,84 @@ export default function sakur4(pi: ExtensionAPI): void {
   });
 
   /**
-   * Retrieve relevant memory for the prompt and prepend it.
+   * Inject the Anchor Set, then prepend retrieved memory.
    *
-   * # Why this is bounded and why it reports its own cost
+   * # Why anchors come first, and why they are not optional
+   *
+   * Sakur4's headline guarantee is that pinned constraints "are rendered verbatim
+   * into every prompt and are exempt from every eviction tier" — so the user is told
+   * a rule they pin will still be in front of the model on turn 200.
+   *
+   * This extension did not do that. It injected a `memory.recall` result keyed on the
+   * user's current message, and nothing else. Anchors appeared only inside
+   * `session_before_compact` — so a constraint reached the model when the session
+   * compacted, and otherwise only if the user's message happened to resemble it. A
+   * short rule like "never force-push to main" matches almost no query, so in
+   * practice it was absent from most turns.
+   *
+   * The guarantee was true of the engine (anchors really are exempt from eviction)
+   * and false of the *live path*, which is the only place a user can observe it.
+   *
+   * So anchors are now fetched from their own resource every turn, bounded, and
+   * placed ahead of retrieval. They are small — a typical Anchor Set is tens of
+   * tokens against a retrieval block capped at `recallBudget` — and they are the one
+   * category that must never be omitted for cost.
+   *
+   * # Why retrieval is bounded and reports its own cost
    *
    * Retrieval that runs every turn is a context tax, and an unbounded one is how a
-   * memory layer makes a session worse. Two guards: the daemon's `--k` limits the
-   * result count, and the injected block is capped here. The block's own token cost
-   * is recorded so the usage reported on the next turn can exclude it — otherwise
-   * Sakur4's footprint would be attributed to the model and the receipt would lie.
+   * memory layer makes a session worse. The daemon's `--k` limits the result count
+   * and the block is capped here. The block's own token cost is recorded so the usage
+   * reported on the next turn can exclude it — otherwise Sakur4's footprint would be
+   * attributed to the model and the receipt would lie.
    */
   pi.on("context", async (event, ctx) => {
-    if (!config.retrieve || !client.available()) return;
+    if (!client.available()) return;
 
-    const prompt = lastUserText(event.messages);
-    if (!prompt || prompt.length < 12) return;
+    const blocks: string[] = [];
+    let anchorTokens = 0;
 
-    const result = client.tool("memory.recall", {
-      query: prompt.slice(0, 600),
-      k: 4,
-      session_id: config.session,
-    });
-    const rendered = typeof result?.rendered === "string" ? result.rendered.trim() : "";
-    if (!rendered) return;
+    // The Anchor Set. Always, regardless of what the user asked.
+    const anchorText = client.resource("anchors");
+    if (anchorText && !/is empty/i.test(anchorText)) {
+      anchorTokens = Math.ceil(anchorText.length / 4);
+      blocks.push(
+        `## Pinned constraints — stated earlier in this session, still in force\n\n` +
+          `${anchorText}\n\n` +
+          `These were pinned by the user and are exempt from eviction. Do not contradict them.`,
+      );
+    }
 
-    const capped =
-      rendered.length > config.recallBudget * 4
-        ? `${rendered.slice(0, config.recallBudget * 4)}\n…[truncated]`
-        : rendered;
+    // Then retrieval, which is relevance-dependent and therefore optional.
+    let retrievalTokens = 0;
+    if (config.retrieve) {
+      const prompt = lastUserText(event.messages);
+      if (prompt && prompt.length >= 12) {
+        const result = client.tool("memory.recall", {
+          query: prompt.slice(0, 600),
+          k: 4,
+          session_id: config.session,
+        });
+        const rendered = typeof result?.rendered === "string" ? result.rendered.trim() : "";
+        if (rendered) {
+          const capped =
+            rendered.length > config.recallBudget * 4
+              ? `${rendered.slice(0, config.recallBudget * 4)}\n…[truncated]`
+              : rendered;
+          retrievalTokens = Math.ceil(capped.length / 4);
+          blocks.push(`## Related earlier work\n\n${capped}`);
+        }
+      }
+    }
 
-    lastRetrievalTokens = Math.ceil(capped.length / 4);
-    ctx.ui.setStatus("sakur4", `sakur4: +${lastRetrievalTokens}t recalled`);
+    if (blocks.length === 0) return;
+
+    const body = blocks.join("\n\n");
+    lastRetrievalTokens = anchorTokens + retrievalTokens;
+    ctx.ui.setStatus(
+      "sakur4",
+      `sakur4: +${lastRetrievalTokens}t (${anchorTokens} anchors)`,
+    );
 
     return {
       messages: [
@@ -963,7 +1151,9 @@ export default function sakur4(pi: ExtensionAPI): void {
           content: [
             {
               type: "text" as const,
-              text: `<sakur4-memory tokens="${lastRetrievalTokens}">\n${capped}\n</sakur4-memory>`,
+              text:
+                `<sakur4-memory anchors="${anchorTokens}" recalled="${retrievalTokens}">\n` +
+                `${body}\n</sakur4-memory>`,
             },
           ],
           timestamp: Date.now(),
