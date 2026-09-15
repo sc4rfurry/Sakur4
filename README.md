@@ -633,18 +633,22 @@ Cold archival runs during `dream`. Snapshots are pruned by count under
 The honest answer, measured over 205 turns against a real repository — the same session
 run twice, once the way a harness does today and once through Sakur4:
 
-| | without | with | change |
-|---|---|---|---|
-| total tokens sent | 2,807,158 | 3,634,256 | **+29%** |
-| compactions | 6 | 25 | +317% |
-| prefix kept reusable | 0 | 519,504 | — |
-| **recall accuracy** | **17%** | **92%** | **+75 pts** |
-| **pinned constraint survived** | **lost at compaction 1** | **survived all 25** | — |
+Measured against a real llama.cpp server (a 27B model, 81,920-token window):
 
-**It costs more tokens and buys correctness with them.** Anchors and retrieval account
-for 0.3% of the difference; the rest is compacting to a 55% target rather than letting
-history overflow. Whether that trade is worth it depends on whether losing a constraint
-costs you more than the tokens do.
+| | without | with Sakur4 | change |
+|---|---|---|---|
+| tokens per turn | 31,580 | 31,980 | **+1.3%** |
+| prefix kept reusable | 0 | 47,425 | — |
+| **recall accuracy** | **50%** | **92%** | **+42 pts** |
+| **pinned constraint survived** | **lost at compaction 2** | **survived** | — |
+
+**+1.3% more tokens, for 42 points of recall and a constraint that no longer gets
+destroyed.** At that magnitude it is not a trade at all.
+
+The engine picks its eviction tuning from what the backend can do: `cache-first` when a
+checkpoint ring exists and a preserved prefix is genuinely reusable, `window-first` when
+there is no checkpoint to align to and window room is the scarcer resource. Your server
+selects `window-first` automatically — `doctor` reports which is active and why.
 
 ```bash
 node docs/bench/ab.mjs --repo .                              # embedded backend

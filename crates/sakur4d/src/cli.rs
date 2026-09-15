@@ -527,7 +527,8 @@ async fn doctor(cli: &Cli, refresh: bool) -> Result<()> {
     println!("  embedder         {}", status.embedder);
     println!("  recall paths     {}", status.recall_backends.join(", "));
     println!(
-        "  eviction         trigger at {:.0}% of the window, target {:.0}%, keep {} recent tokens",
+        "  eviction         {} · trigger {:.0}% · target {:.0}% · keep {} recent",
+        engine.eviction().policy().profile.as_str(),
         engine.eviction().policy().trigger_ratio * 100.0,
         engine.eviction().policy().target_ratio * 100.0,
         engine.eviction().policy().keep_recent_tokens

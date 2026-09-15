@@ -104,6 +104,26 @@ pub struct EvictionPolicy {
     pub max_tier_step: u8,
     /// Ask the Cache-Coherence Layer where the boundary should actually fall.
     pub cache_align: bool,
+    /// Set when the user named a profile explicitly, in which case the engine
+    /// applies no profile of its own.
+    ///
+    /// Not serialised as part of the tuning: it records *provenance*, not a value,
+    /// and a policy loaded from a config file that happens to contain it should
+    /// still behave as though it were set.
+    #[serde(default)]
+    pub profile_explicit: bool,
+    /// The profile whose ratios this policy currently carries.
+    ///
+    /// Stored rather than recomputed, because it is the answer to "why are these
+    /// numbers what they are" and `doctor` prints it. A policy that reports its
+    /// ratios without saying which tuning chose them makes an automatic decision
+    /// look like a hardcoded one.
+    #[serde(default = "default_profile")]
+    pub profile: EvictionProfile,
+}
+
+fn default_profile() -> EvictionProfile {
+    EvictionProfile::CacheFirst
 }
 
 impl Default for EvictionPolicy {
@@ -129,10 +149,130 @@ impl Default for EvictionPolicy {
             allow_drop: false,
             max_tier_step: 1,
             cache_align: true,
+            // The default is not "chosen"; the engine picks a profile from the
+            // backend's capabilities unless the user names one.
+            profile_explicit: false,
+            // Matches the ratios above, so a policy that is never profiled still
+            // reports a truthful name rather than a misleading default.
+            profile: EvictionProfile::CacheFirst,
         }
     }
 }
 
+/// Which tuning to use, chosen from what the backend can actually do.
+///
+/// # Why this exists
+///
+/// The policy above is tuned around a specific bargain: keep a **large working set**
+/// (evict down only to 55%) so that a checkpoint-aligned boundary has room to exist,
+/// and in exchange the server reuses a large cached prefix.
+///
+/// That bargain is only available on a backend that exposes checkpoints. Measured
+/// against a real llama.cpp build with none (`docs/verification/`), the cost is paid
+/// and the benefit is not:
+///
+/// ```text
+///   without Sakur4   13,693 tokens/turn   (sheds to 30% of history)
+///   with  Sakur4     17,728 tokens/turn   (+29%, evicts only to 55%)
+/// ```
+///
+/// The entire +29% was the target ratio. Anchors and retrieval accounted for 0.3%.
+/// So on a backend with no checkpoint source, the window-first profile sheds like a
+/// naive harness does — because it has no cache-alignment reason not to — and the
+/// overhead disappears while the memory layer is untouched.
+///
+/// This is the difference between a policy that is right in general and one that is
+/// right for the server in front of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EvictionProfile {
+    /// Keep a large working set so a checkpoint-aligned boundary has room.
+    ///
+    /// For backends that expose a checkpoint ring, where a preserved prefix is
+    /// actually reusable. Costs roughly 29% more tokens per turn than `window-first`
+    /// against a backend that cannot align.
+    CacheFirst,
+    /// Shed to a small working set, keeping only the recent tail and the anchors.
+    ///
+    /// For backends with no checkpoint source, where cache alignment is unavailable
+    /// and a large working set therefore buys nothing. Trades the (unavailable)
+    /// prefill reuse for window room, which on a fixed 80K local window is the
+    /// scarcer resource.
+    WindowFirst,
+    /// Deliberately balanced, for a user who wants neither extreme.
+    Balanced,
+}
+
+impl EvictionProfile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EvictionProfile::CacheFirst => "cache-first",
+            EvictionProfile::WindowFirst => "window-first",
+            EvictionProfile::Balanced => "balanced",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "cache-first" | "cache" | "coherent" => Some(EvictionProfile::CacheFirst),
+            "window-first" | "window" | "tight" => Some(EvictionProfile::WindowFirst),
+            "balanced" | "default" => Some(EvictionProfile::Balanced),
+            _ => None,
+        }
+    }
+
+    /// The right profile for a backend, given whether it can align a boundary.
+    ///
+    /// A checkpoint source is the whole reason `CacheFirst` exists, so its absence
+    /// selects the other one — automatically, because requiring a user to know this
+    /// would mean most users never find out.
+    pub fn for_capabilities(can_align: bool) -> Self {
+        if can_align { EvictionProfile::CacheFirst } else { EvictionProfile::WindowFirst }
+    }
+
+    /// Apply this profile's ratios to a policy, leaving every other knob alone.
+    ///
+    /// `cache_align` is set too: on `WindowFirst` there is no checkpoint to align to,
+    /// and leaving it on would make the engine spend a plan looking for one.
+    pub fn apply(self, policy: &mut EvictionPolicy) {
+        policy.profile = self;
+        match self {
+            EvictionProfile::CacheFirst => {
+                policy.trigger_ratio = 0.75;
+                policy.target_ratio = 0.55;
+                policy.keep_prefix_tokens = 0;
+                policy.cache_prefix_reserve_tokens = 4096;
+                policy.keep_recent_tokens = 4096;
+                policy.cache_align = true;
+            }
+            EvictionProfile::WindowFirst => {
+                // Trigger earlier, because context rot degrades a local model's
+                // reliability before the window is full (PP-3) — and shed further,
+                // because `docs/bench` measured the eviction target, not the memory
+                // layer, as the source of Sakur4's token overhead.
+                policy.trigger_ratio = 0.70;
+                policy.target_ratio = 0.30;
+                policy.keep_prefix_tokens = 0;
+                // No checkpoint to align to, so the reserve is dead weight: keeping
+                // 4K tokens verbatim for a reuse the server will not confirm only
+                // costs window space.
+                policy.cache_prefix_reserve_tokens = 0;
+                policy.cache_prefix_max_tokens = 0;
+                // The recent tail is the part a model actually needs verbatim.
+                policy.keep_recent_tokens = 4096;
+                policy.cache_align = false;
+            }
+            EvictionProfile::Balanced => {
+                policy.trigger_ratio = 0.75;
+                policy.target_ratio = 0.45;
+                policy.keep_prefix_tokens = 0;
+                policy.cache_prefix_reserve_tokens = 2048;
+                policy.keep_recent_tokens = 4096;
+                policy.cache_align = true;
+            }
+        }
+    }
+}
 /// How much pressure exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1675,5 +1815,99 @@ mod tests {
         let plan = engine.plan("s1", "0", 32_768, &big_prompt(40_000)).await.unwrap();
         assert!(plan.coherence.is_none());
         assert!(!plan.is_cache_cheap());
+    }
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    #[test]
+    fn a_backend_without_checkpoints_gets_the_window_first_profile() {
+        // The decision that came out of measuring a real llama.cpp build: with no
+        // checkpoint source, CacheFirst paid 29% more tokens per turn and bought
+        // nothing, because the server reuses prefixes by longest common prefix
+        // regardless and no checkpoint existed to align a boundary to.
+        let profile = EvictionProfile::for_capabilities(false);
+        assert_eq!(profile, EvictionProfile::WindowFirst);
+
+        let mut policy = EvictionPolicy::default();
+        assert_eq!(policy.profile, EvictionProfile::CacheFirst);
+        profile.apply(&mut policy);
+
+        assert_eq!(policy.target_ratio, 0.30, "must shed to a small working set");
+        assert!(
+            policy.target_ratio < EvictionPolicy::default().target_ratio,
+            "window-first must keep less than the cache-first default, or it saves nothing"
+        );
+        assert!(!policy.cache_align, "there is no checkpoint to align to");
+        assert_eq!(
+            policy.cache_prefix_reserve_tokens, 0,
+            "a reserve kept for a reuse the server will not confirm is pure cost"
+        );
+        assert_eq!(policy.cache_prefix_max_tokens, 0);
+        assert_eq!(policy.profile, EvictionProfile::WindowFirst, "the name must follow the ratios");
+    }
+
+    #[test]
+    fn a_backend_with_checkpoints_keeps_the_cache_first_profile() {
+        let profile = EvictionProfile::for_capabilities(true);
+        assert_eq!(profile, EvictionProfile::CacheFirst);
+
+        let mut policy = EvictionPolicy::default();
+        profile.apply(&mut policy);
+        assert_eq!(policy.target_ratio, 0.55);
+        assert!(policy.cache_align);
+        assert!(
+            policy.cache_prefix_reserve_tokens > 0,
+            "the reserve is the whole point when a checkpoint can be met"
+        );
+    }
+
+    #[test]
+    fn every_profile_reports_the_name_matching_its_ratios() {
+        // A policy that reports ratios without naming the tuning that chose them
+        // makes an automatic decision look hardcoded, and `doctor` prints this.
+        for profile in
+            [EvictionProfile::CacheFirst, EvictionProfile::WindowFirst, EvictionProfile::Balanced]
+        {
+            let mut policy = EvictionPolicy::default();
+            profile.apply(&mut policy);
+            assert_eq!(policy.profile, profile);
+            assert!(policy.trigger_ratio > policy.target_ratio, "{profile:?} would never shed");
+            assert!(
+                (0.0..=1.0).contains(&policy.trigger_ratio)
+                    && (0.0..=1.0).contains(&policy.target_ratio),
+                "{profile:?} produced ratios outside [0,1]"
+            );
+        }
+    }
+
+    #[test]
+    fn profiles_parse_from_the_names_a_user_would_type() {
+        for (input, expected) in [
+            ("cache-first", EvictionProfile::CacheFirst),
+            ("window-first", EvictionProfile::WindowFirst),
+            ("balanced", EvictionProfile::Balanced),
+            ("  WINDOW  ", EvictionProfile::WindowFirst),
+            ("tight", EvictionProfile::WindowFirst),
+        ] {
+            assert_eq!(EvictionProfile::parse(input), Some(expected), "failed on {input:?}");
+        }
+        assert_eq!(EvictionProfile::parse("nonsense"), None);
+    }
+
+    #[test]
+    fn window_first_never_keeps_more_than_the_others() {
+        // The ordering is the guarantee: a user picking the tighter profile must not
+        // silently get a looser one. If this inverts, the automatic selection has
+        // started doing the opposite of what it claims.
+        let ratio = |p: EvictionProfile| {
+            let mut policy = EvictionPolicy::default();
+            p.apply(&mut policy);
+            policy.target_ratio
+        };
+        assert!(ratio(EvictionProfile::WindowFirst) < ratio(EvictionProfile::Balanced));
+        assert!(ratio(EvictionProfile::Balanced) < ratio(EvictionProfile::CacheFirst));
     }
 }

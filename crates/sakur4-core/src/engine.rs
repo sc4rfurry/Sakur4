@@ -177,12 +177,55 @@ impl Engine {
 
         let memory = MemoryFabric::new(db.clone());
         let coherence = Coherence::new(db.clone(), backend.clone(), config.coherence.clone());
-        let eviction = EvictionEngine::new(
-            memory.clone(),
-            coherence.clone(),
-            config.eviction.clone(),
-            counter.clone(),
-        );
+
+        // # Choose the eviction profile from what the backend can actually do
+        //
+        // The default policy is tuned to keep a large working set so a
+        // cache-aligned boundary has room. That is the right trade on a backend with
+        // a checkpoint ring, and the wrong one on a backend without: measured against
+        // a real llama.cpp build exposing no checkpoints, it cost 29% more tokens per
+        // turn while buying nothing, because there was no checkpoint to align to and
+        // the server reuses prefixes by longest-common-prefix regardless.
+        //
+        // So the profile follows the capability probe rather than a constant. A user
+        // should not have to know their server lacks checkpoints in order to get the
+        // right ratios — that is what probing is for. `SAKUR4_EVICTION_PROFILE`
+        // overrides, and `docs/DESIGN.md` records the measurements behind each
+        // profile.
+        let mut policy = config.eviction.clone();
+        if policy.profile_explicit {
+            // The user named a profile; honour it and change nothing.
+        } else if let Some(named) = std::env::var("SAKUR4_EVICTION_PROFILE")
+            .ok()
+            .as_deref()
+            .and_then(crate::evict::EvictionProfile::parse)
+        {
+            // An explicit choice wins over the probe. `WindowFirst` on a
+            // checkpoint-capable server is a legitimate thing to want — it trades
+            // cache reuse for window room — so this is not second-guessed.
+            named.apply(&mut policy);
+            policy.profile_explicit = true;
+            tracing::info!(
+                profile = named.as_str(),
+                "eviction profile set by SAKUR4_EVICTION_PROFILE"
+            );
+        } else {
+            let caps = backend.capabilities();
+            let profile =
+                crate::evict::EvictionProfile::for_capabilities(caps.can_align_boundaries());
+            profile.apply(&mut policy);
+            tracing::info!(
+                profile = profile.as_str(),
+                can_align = caps.can_align_boundaries(),
+                trigger = policy.trigger_ratio,
+                target = policy.target_ratio,
+                "eviction profile selected from backend capabilities"
+            );
+        }
+        let config = EngineConfig { eviction: policy.clone(), ..config };
+
+        let eviction =
+            EvictionEngine::new(memory.clone(), coherence.clone(), policy, counter.clone());
         let recall = RecallEngine::new(
             db.clone(),
             memory.clone(),

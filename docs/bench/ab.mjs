@@ -271,9 +271,9 @@ function buildScript(targetTokensPerTurn) {
 // Arm B — what a harness does without Sakur4
 // ===========================================================================
 
-function runArmWithout(script) {
+function runArmWithout(script, windowTokens) {
   const history = [];
-  const budget = Math.floor(WINDOW * 0.75);
+  const budget = Math.floor(windowTokens * 0.75);
   const stats = {
     arm: "without",
     peakContext: 0,
@@ -433,7 +433,7 @@ async function call(tool, args) {
 
 const mcp = (_store, tool, args) => call(tool, args);
 
-async function runArmWith(script, store) {
+async function runArmWith(script, store, windowTokens) {
   const stats = {
     arm: "with",
     peakContext: 0,
@@ -483,7 +483,7 @@ async function runArmWith(script, store) {
     });
     liveTokens += r?.token_count ?? tokens(turn.text);
 
-    const budget = Math.floor(WINDOW * 0.75);
+    const budget = Math.floor(windowTokens * 0.75);
     let context = liveTokens + stats.anchorTokens + ASSEMBLY_OVERHEAD;
     if (context > budget) {
       stats.compactions++;
@@ -567,25 +567,52 @@ async function main() {
   console.log("");
 
   const script = buildScript(TOKENS_PER_TURN);
-  console.log(`running ${script.length} turns per arm…`);
-
-  const without = runArmWithout(script);
 
   mkdirSync(WORKDIR, { recursive: true });
   const store = join(WORKDIR, "arm-with.db");
   rmSync(store, { force: true });
 
+  // The daemon starts first, because both arms must compact against the same window.
   const port = 8961 + (process.pid % 200);
   const up = await startDaemon(store, port);
   if (!up) {
     console.error("the daemon did not start; cannot run the 'with Sakur4' arm");
     process.exit(1);
   }
+
+  // # Ask the daemon what window it resolved, rather than assuming
+  //
+  // An earlier version used the `--window` default for both arms while the daemon
+  // correctly resolved the server's real context length. Against an 81,920-token
+  // server that meant the "without" arm compacted against 32,768 and the "with" arm
+  // against 81,920 — the arms were solving different problems, and the resulting
+  // +125% was an artefact of that mismatch rather than a property of either. The
+  // daemon's own answer now wins, and both arms share it.
+  let effectiveWindow = WINDOW;
+  const status = await call("sakur4.status", {});
+  const resolved = Number(status?.context_window ?? 0);
+  if (resolved > 0) effectiveWindow = resolved;
+  if (effectiveWindow !== WINDOW) {
+    console.log(`window        ${effectiveWindow} tokens (resolved by the daemon, not --window)`);
+  }
+  console.log(`running ${script.length} turns per arm…`);
+
+  let without;
   let withSakur4;
   try {
-    withSakur4 = await runArmWith(script, store);
+    without = runArmWithout(script, effectiveWindow);
+    withSakur4 = await runArmWith(script, store, effectiveWindow);
   } finally {
     stopDaemon();
+  }
+
+  if (without.compactions === 0 || withSakur4.compactions === 0) {
+    console.error("");
+    console.error("REFUSING TO REPORT: one arm never compacted, so this run compared two");
+    console.error("unbounded transcripts. Raise --turns or --tokens-per-turn.");
+    console.error(`  without: ${without.compactions} compactions`);
+    console.error(`  with:    ${withSakur4.compactions} compactions`);
+    process.exit(1);
   }
 
   const preservedWith = withSakur4.prefillAvoided;
