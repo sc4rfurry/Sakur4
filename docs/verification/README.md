@@ -112,6 +112,62 @@ alignment unknown`** — we kept a prefix, the backend exposes no checkpoint to 
 against, and LCP-based reuse is expected but unverified. That is what the evidence
 supports and no more.
 
+## Non-functional requirements, measured
+
+The PRD's own performance targets, run on the development machine rather than the
+PRD's reference hardware (which this box is not).
+
+| NFR | Target | Measured | Verdict |
+|---|---|---|---|
+| **NFR-1** incremental re-index, 10,000 files | < 2 s | **1.55 s** (full index 14.5 s, store 78.6 MB) | pass, **tight** |
+| **NFR-2** `memory.recall` at 100,000 entries | < 300 ms | **88 ms** worst p95 | pass |
+| **NFR-3** boundary decision overhead | < 50 ms | **71 ms** including process start and store open | **inconclusive** |
+| **NFR-4** idle RSS | < 200 MB | **7.7 MB** | pass |
+| **NFR-5/6** transactional writes, crash-safe resume | no corruption | `a_restart_preserves_the_store_and_resumes` | pass |
+| **NFR-7** graceful degradation with no checkpoint API | never a hard failure | confirmed against the real server above | pass |
+
+NFR-2 at full scale, by query class. The distribution matters more than the mean: a
+term present in every episode exercises the ranker, while a unique token exercises only
+the index, and an average would hide whichever is slow.
+
+```
+  query class            min     median      p95      max
+  ubiquitous term          59ms        62ms       65ms       65ms
+  mid-frequency term       61ms        68ms       88ms       88ms
+  unique token              2ms         2ms        2ms        2ms
+  unique marker             2ms         2ms        5ms        5ms
+  two-term phrase           3ms         3ms       78ms       78ms
+  absent term               1ms         1ms        2ms        2ms
+```
+
+**NFR-3 is not properly measured.** The 71 ms is a whole `sakur4d plan` invocation —
+process spawn, store open, engine construction, and the decision. The requirement is
+about the decision's overhead *inside a running session*, which needs an in-process
+benchmark rather than a CLI invocation. The honest reading is that the budget is not
+obviously exceeded, not that it is met.
+
+```bash
+node docs/verification/nfr2-recall.mjs --n 100000     # ~5 minutes of seeding
+```
+
+## The distribution problem
+
+Nothing here is installable by anyone but its author, and that is the largest remaining
+gap. Every piece of the release machinery is built and verified — it has simply never
+run, because there is nowhere to push it.
+
+| | State |
+|---|---|
+| git remote | **none configured** |
+| GitHub repository | **does not exist** |
+| crates.io | **not published** |
+| `gh` authentication | **not logged in** |
+| release tag | `v0.1.0` exists locally, unpushed |
+| `repository` in `Cargo.toml` | `https://github.com/sakur4/sakur4` — a **placeholder** |
+
+This is configuration rather than engineering. But until it is done, "production ready"
+is not a claim that can be made about something nobody can install.
+
 ## What is *not* established
 
 Stated so nobody mistakes this for more than it is.
