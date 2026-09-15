@@ -13,7 +13,6 @@ Skill** — one daemon, three ways in.
 
 <br>
 
-[![CI](https://github.com/sakur4/sakur4/actions/workflows/ci.yml/badge.svg)](https://github.com/sakur4/sakur4/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/sakur4/sakur4?color=22d3ee&label=release)](https://github.com/sakur4/sakur4/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.94%2B-orange.svg)](https://www.rust-lang.org)
@@ -748,9 +747,14 @@ Stated plainly, because the alternative is finding out later.
 
 **Not yet true**
 
-- **No real llama.cpp server has been contacted.** The adapter is tested against a fake
-  server speaking the documented routes over real HTTP, so the *client* is exercised —
-  but first contact with a real build is still first contact.
+- ~~**No real llama.cpp server has been contacted.**~~ **Now verified** against a
+  live a 27B model on build `the current build` — see
+  [docs/verification](docs/verification/README.md). That build exposes **no checkpoint
+  API** (save/erase return 501, no checkpoint ring), so Sakur4 correctly reports
+  `no checkpoint source detected`. Prefix reuse nonetheless works there: a 2,219-token
+  preserved prefix followed by new content is reused in full, at ~0.9 ms/token saved.
+  The practical consequence is that Sakur4's receipt is **pessimistic** on such a
+  backend — it reports `full-re-prefill` where reuse is real but unverifiable.
 - **No live agent session through Hermes.** Its transport is verified
   (`hermes mcp test sakur4` discovers all 17 tools) and the OMP tools were driven
   end-to-end by a live model, but Hermes' own tool selection is untested.
@@ -773,7 +777,7 @@ Stated plainly, because the alternative is finding out later.
 
 - No MCP conformance run against a reference client, no LoCoMo, no Endurance Benchmark.
 - NFR latency and memory numbers are unmeasured on reference hardware — the development
-  box has a GTX 1050 with 4 GB, which cannot host the target workload at all. That is
+  box has a a GPU with 4 GB, which cannot host the target workload at all. That is
   why the embedded and fake backends exist.
 - `cargo deny` / `cargo audit` are not in CI. Review `Cargo.lock` changes by hand.
 
