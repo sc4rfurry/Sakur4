@@ -179,7 +179,9 @@ The first release. Everything below is new.
   limit to observe `session_before_compact` is separate work.
 - **Hermes has not been driven by a live model.** Its transport is verified
   (`hermes mcp test sakur4` discovers all 17 tools); its tool selection is not.
-- **Optional encryption at rest (FR-20) is not implemented.**
+- **Optional encryption at rest (FR-20) is implemented but off by default.**
+  Build with `--features encryption`. The default build links plain SQLite, so a store
+  is readable by anyone with file access unless the feature was enabled.
 - **`cargo deny` and `cargo audit` are not wired into CI.** Review `Cargo.lock`
   changes in a pull request.
 

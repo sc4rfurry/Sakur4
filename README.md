@@ -798,8 +798,9 @@ Stated plainly, because the alternative is finding out later.
 
 **Deliberately absent**
 
-- **Encryption at rest (FR-20).** The store holds a verbatim transcript; treat it as
-  exactly as sensitive as the sessions it recorded.
+- **Encryption at rest (FR-20) exists but is off by default.** Build with
+  `--features encryption`; the store is otherwise readable by anyone with file access,
+  and it holds a verbatim transcript. See [SECURITY.md](SECURITY.md).
 - **Authentication on the transports.** Localhost binding *is* the control. `--bind
   0.0.0.0` exposes the entire Memory Fabric, including writes, to anyone who can reach
   the port.
