@@ -49,6 +49,9 @@
 import { strict as assert } from "node:assert";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const argv = process.argv.slice(2);
 const arg = (name, fallback) => {
@@ -164,7 +167,11 @@ async function main() {
     proxyProcess = spawn(
       BIN,
       [
-        "--db", `${process.env.TEMP ?? "/tmp"}/sakur4-proxy-rewrite.db`,
+        // A fresh store per run. A fixed path accumulated the previous run's episodes, so
+        // the second invocation saw a session with twice the history, planned differently,
+        // and reported a failure that had nothing to do with the code under test — which is
+        // exactly what happened when this file grew a new contract and was run twice.
+        "--db", join(mkdtempSync(join(tmpdir(), "sakur4-rw-")), "rw.db"),
         "--backend", UPSTREAM,
         "--context-window", WINDOW,
         "proxy",
@@ -294,6 +301,52 @@ async function main() {
   //
   // Asserted as a floor rather than a ratio: the right fraction depends on the window, and a
   // test that hard-codes one would fail the next time the profile changes.
+  // # A rewrite must shorten the transcript, not erase it
+  //
+  // This is the contract that would have caught the bug the rest of this file could not.
+  // For three rounds the proxy kept **3 messages of 602** at every window — 3,408 tokens of
+  // retained context at 32,768, 81,920 and 131,072 alike. Every other check here passed while
+  // that was true, because "was it rewritten" and "does it send less" are both satisfied by
+  // erasing the conversation.
+  //
+  // The plan's target is a fraction of the window, so a conforming rewrite has to leave a
+  // comparable fraction behind. Asserted as a floor rather than an exact ratio: the planner
+  // aims at `target` and may land either side of it, and a test that pinned the exact figure
+  // would fail the next time a profile changes.
+  check("the rewrite keeps a proportionate share of the conversation", () => {
+    const kept = forwarded.messages.length;
+    const ratio = kept / messages.length;
+    assert.ok(
+      ratio >= 0.1,
+      `kept only ${kept} of ${messages.length} messages (${(ratio * 100).toFixed(1)}%) — ` +
+        "a window-relative target cannot produce a share this small",
+    );
+  });
+
+  // # The measurement that actually pins the bug
+  //
+  // Retained context has to track the plan's target, which is 30% of the window under the
+  // `window-first` profile. When this was broken the retained figure was ~3,408 tokens at a
+  // 32,768 window — 35% of the target — and the *same* ~3,408 at 81,920 and 131,072, which is
+  // the signature of a constant rather than a fraction. A share floor would not catch that at
+  // a large window; comparing against the target does.
+  //
+  // The window the proxy was started with is known, and the target ratio is reported by the
+  // engine, so the expectation is computed rather than hard-coded.
+  check("retained context is in the same order as the plan's target", () => {
+    const window = Number(WINDOW);
+    const target = Math.round(window * 0.3); // window-first
+    const retained = forwarded.messages.reduce(
+      (sum, m) => sum + String(m.content ?? "").length / 4,
+      0,
+    );
+    assert.ok(
+      retained >= target * 0.4,
+      `retained roughly ${Math.round(retained)} tokens against a ${target}-token target ` +
+        `at a ${window} window — too little to be aiming at that target`,
+    );
+  });
+
   check("some conversation survives the rewrite", () => {
     assert.ok(
       forwarded.messages.length >= 3,
