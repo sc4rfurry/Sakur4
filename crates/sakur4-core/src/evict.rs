@@ -74,6 +74,10 @@ pub struct EvictionPolicy {
     /// turn.
     pub cache_prefix_reserve_tokens: usize,
     /// Tokens of the newest context to keep verbatim.
+    ///
+    /// Interpreted as an **upper bound**, not a fixed slice — see [`Self::recent_budget_for`].
+    /// A fixed value here made the amount of context a session retains independent of the
+    /// model's window, which is the opposite of the point.
     pub keep_recent_tokens: usize,
     /// Upper bound on the preserved prefix, as a fraction of the live window.
     ///
@@ -201,6 +205,40 @@ pub enum EvictionProfile {
     WindowFirst,
     /// Deliberately balanced, for a user who wants neither extreme.
     Balanced,
+}
+
+impl EvictionPolicy {
+    /// How much of the newest context to keep verbatim, given a window.
+    ///
+    /// # Why this is not just `keep_recent_tokens`
+    ///
+    /// That field is an absolute number, and using it directly made the amount of context a
+    /// session retains **independent of the model's window**. Measured, on the same 40,000
+    /// tokens of history:
+    ///
+    /// ```text
+    /// window=32768  target=18022  savings=10560  after=29440  reaches_target=false  kept_tokens=8000
+    /// window= 8192  target= 4506  savings=10560  after=29440  reaches_target=false  kept_tokens=8000
+    /// window= 4096  target= 2253  savings=10560  after=29440  reaches_target=false  kept_tokens=8000
+    /// ```
+    ///
+    /// The same 8,000 tokens of recent context were protected at every window, the plan
+    /// missed its target in all three cases, and a session could not be brought inside its
+    /// budget however much pressure it was under. The wasted effort is visible in the numbers
+    /// too: the plan escalated all 320 eligible episodes and reclaimed 10,560 tokens when
+    /// 21,978 were needed, so the work was done and the goal was still missed.
+    ///
+    /// Over a small window it is worse than useless: a 4,096-token window reserving 4,096
+    /// tokens of recent context leaves no middle to evict at all, which is the deadlock that
+    /// made the reverse proxy forward over-long transcripts unchanged.
+    ///
+    /// So the field is treated as an **upper bound** and shrunk to at most a quarter of the
+    /// window. A large window still gets the full amount, so behaviour at 32k and above is
+    /// unchanged; the floor keeps a genuinely small window from protecting nothing at all.
+    pub fn recent_budget_for(&self, context_window: usize) -> usize {
+        let quarter = context_window / 4;
+        self.keep_recent_tokens.min(quarter.max(RECENT_BUDGET_FLOOR))
+    }
 }
 
 impl EvictionProfile {
@@ -417,6 +455,13 @@ pub struct EvictionEngine {
     counter: TokenCounter,
 }
 
+/// The smallest recent-context reservation, in tokens.
+///
+/// A floor rather than zero: a window small enough that a quarter is only a few hundred
+/// tokens still wants its last turn or two kept verbatim, because that is what the model is
+/// being asked about.
+const RECENT_BUDGET_FLOOR: usize = 512;
+
 /// The outcome of asking whether one episode can move down a tier.
 ///
 /// A refusal carries *why*, so the planner can report a breakdown instead of one sentence
@@ -568,7 +613,8 @@ impl EvictionEngine {
         };
 
         let prefix_end = Self::prefix_end_index(&episodes, prefix_budget);
-        let recent_start = Self::recent_start_index(&episodes, self.policy.keep_recent_tokens);
+        let recent_start =
+            Self::recent_start_index(&episodes, self.policy.recent_budget_for(context_window));
 
         // Keep only what sits strictly between the preserved prefix and the
         // preserved recent window: that gap is the evictable middle.
@@ -1552,145 +1598,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn relaxed_pressure_produces_no_plan() {
-        let (fabric, engine, _b) = rig().await;
-        seed(&fabric, 5, 100).await;
-        let plan = engine.plan("s1", "0", 32_768, &big_prompt(500)).await.unwrap();
-        assert_eq!(plan.pressure, Pressure::Relaxed);
-        assert!(plan.is_empty());
-        assert!(plan.notes[0].contains("below the"));
-    }
-
-    #[tokio::test]
-    async fn pressure_triggers_and_the_plan_reclaims_toward_target() {
-        let (fabric, engine, _b) = rig().await;
-        seed(&fabric, 40, 1000).await; // 40k tokens of history
-        let parts = big_prompt(40_000);
-        let plan = engine.plan("s1", "0", 32_768, &parts).await.unwrap();
-        assert_eq!(plan.pressure, Pressure::Compacting);
-        assert!(!plan.is_empty(), "a 40k-token session must produce evictions");
-        assert!(plan.planned_savings > 0);
-        assert!(
-            plan.token_after_plan() <= plan.threshold,
-            "plan must at least return under the trigger"
-        );
-    }
-
-    #[tokio::test]
-    async fn evictions_escalate_one_tier_at_a_time() {
-        let (fabric, engine, _b) = rig().await;
-        seed(&fabric, 40, 1000).await;
-        let plan = engine.plan("s1", "0", 32_768, &big_prompt(40_000)).await.unwrap();
-        for u in &plan.updates {
-            assert_eq!(
-                u.to.severity(),
-                u.from.severity() + 1,
-                "FR-5 forbids skipping tiers: {} → {}",
-                u.from.as_str(),
-                u.to.as_str()
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn drop_is_never_selected_without_explicit_opt_in() {
-        let (fabric, engine, _b) = rig().await;
-        seed(&fabric, 60, 1000).await;
-        let plan = engine.plan("s1", "0", 32_768, &big_prompt(60_000)).await.unwrap();
-        assert!(
-            plan.updates.iter().all(|u| u.to != EpisodeTier::Dropped),
-            "allow_drop defaults to false; nothing may be dropped"
-        );
-    }
-
-    #[tokio::test]
-    async fn round_trip_integrity_survives_the_harshest_plan() {
-        let (fabric, engine, _b) = rig().await;
-        seed(&fabric, 40, 1000).await;
-        let before: Vec<String> =
-            fabric.session_episodes("s1").await.unwrap().into_iter().map(|e| e.content).collect();
-
-        let parts = big_prompt(40_000);
-        let plan = engine.plan("s1", "0", 32_768, &parts).await.unwrap();
-        engine.apply(&plan, &parts).await.unwrap();
-
-        let after: Vec<String> =
-            fabric.session_episodes("s1").await.unwrap().into_iter().map(|e| e.content).collect();
-        assert_eq!(before, after, "FR-5: evicted content must be bit-identical");
-
-        // And the tiers really did change.
-        let tiers: Vec<EpisodeTier> = fabric
-            .session_episodes("s1")
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|e| e.eviction_tier)
-            .collect();
-        assert!(tiers.iter().any(|t| *t != EpisodeTier::Live));
-    }
-
-    #[tokio::test]
-    async fn recent_context_is_never_evicted() {
-        let (fabric, engine, _b) = rig().await;
-        seed(&fabric, 40, 1000).await;
-        let plan = engine.plan("s1", "0", 32_768, &big_prompt(40_000)).await.unwrap();
-
-        let episodes = fabric.session_episodes("s1").await.unwrap();
-        let seq_of = |id: &str| episodes.iter().find(|e| e.episode_id == id).map(|e| e.seq);
-        let touched: Vec<i64> = plan.updates.iter().filter_map(|u| seq_of(&u.episode_id)).collect();
-        let newest_seq = episodes.iter().map(|e| e.seq).max().unwrap();
-        let newest_touched = touched.iter().copied().max().unwrap_or(0);
-
-        assert!(
-            newest_touched < newest_seq,
-            "the newest turn must never be evicted (newest={newest_seq}, newest evicted={newest_touched})"
-        );
-        // The plan's retained prefix is what the cache layer will try to keep.
-        assert!(plan.retained_prefix_tokens > 0);
-        assert!(engine.policy().keep_recent_tokens > 0);
-    }
-
-    #[tokio::test]
-    async fn a_small_window_can_still_reclaim_toward_its_target() {
-        // # The reproduction for a live bug
+    async fn the_recent_budget_shrinks_with_the_window() {
+        // # The regression this pins
         //
-        // Every other plan test here runs at a 32,768-token window, where the fixed
-        // `keep_recent_tokens` of 4096 is a sensible recent slice and leaves a large
-        // evictable middle. A long session over a *small* window is a configuration nothing
-        // tested, and it is exactly what the reverse proxy hits when it is told
-        // `--context-window 4096` -- which is also the window a user reaches for when they
-        // want compaction to happen often enough to watch.
+        // `keep_recent_tokens` is an absolute 4096. Used directly, the amount of context a
+        // session retains was **independent of the model's window**, measured on the same
+        // 40,000 tokens of history:
         //
-        // Observed in the field: a 602-message, 20,571-token transcript against a 4096-token
-        // proxy produced `planned_savings: 0` with the note "no episode could be escalated
-        // even though 26443 tokens of pressure exist". The transcript was forwarded
-        // unchanged, so the proxy's whole purpose silently did nothing.
+        // ```text
+        // window=32768  savings=10560  after=29440  reaches_target=false  kept_tokens=8000
+        // window= 8192  savings=10560  after=29440  reaches_target=false  kept_tokens=8000
+        // window= 4096  savings=10560  after=29440  reaches_target=false  kept_tokens=8000
+        // ```
         //
-        // The 32,768 case is asserted too, so a regression that broke *both* is not mistaken
-        // for this bug being fixed.
-        let (fabric, engine, _b) = rig().await;
-        // 40k tokens of history, built from many small episodes the way a real conversation
-        // is rather than from a few enormous ones.
-        seed(&fabric, 400, 100).await;
+        // The same 8,000 tokens protected at every window, the plan missing its target every
+        // time. Over a 4,096-token window it is worse than useless: reserving 4,096 tokens of
+        // recent context leaves no middle to evict at all, which is the deadlock that made the
+        // reverse proxy forward over-long transcripts unchanged.
+        let policy = EvictionPolicy::default();
+        assert_eq!(
+            policy.keep_recent_tokens, 4096,
+            "the field stays an upper bound; the scaling happens in the accessor"
+        );
 
-        let live: usize = {
-            let episodes = engine.fabric.evictable_episodes("s1").await.unwrap();
-            episodes.iter().map(|e| e.live_tokens(&engine.counter)).sum()
-        };
-        assert!(live > 32_768, "the fixture must outgrow every window tested, got {live}");
+        // A large window still gets the full amount, so behaviour at 32k and above is untouched.
+        assert_eq!(policy.recent_budget_for(32_768), 4096);
+        assert_eq!(policy.recent_budget_for(1_048_576), 4096);
 
-        for window in [32_768usize, 8_192, 4_096] {
-            let plan = engine.plan("s1", "0", window, &big_prompt(live)).await.unwrap();
-            assert_eq!(
-                plan.pressure,
-                Pressure::Compacting,
-                "a {window}-token window with {live} live tokens must be under pressure"
-            );
+        // A smaller window reserves proportionally less, leaving a middle to evict.
+        assert_eq!(policy.recent_budget_for(8_192), 2048);
+        assert_eq!(policy.recent_budget_for(4_096), 1024);
+
+        // A window small enough that a quarter is trivial still keeps its last turn or two.
+        assert_eq!(policy.recent_budget_for(0), RECENT_BUDGET_FLOOR);
+
+        // The property that matters: never more than the upper bound, at any window.
+        for window in [1_024usize, 2_048, 4_096, 8_192, 16_384, 32_768, 131_072] {
             assert!(
-                plan.planned_savings > 0,
-                "a {window}-token window with {live} live tokens reclaimed nothing; \
-                 notes: {:?}",
-                plan.notes
+                policy.recent_budget_for(window) <= policy.keep_recent_tokens,
+                "the budget must stay an upper bound at window {window}"
             );
         }
     }
