@@ -217,6 +217,51 @@ jobs:
         run: python integrations/hermes-plugin/verify_engine.py
 
   # ---------------------------------------------------------------------------
+  # One command that runs everything, so a contributor and CI check the same thing.
+  #
+  # The jobs above each cover a slice, and their separation is deliberate: a platform
+  # matrix, an MSRV build, and an encryption feature that cannot share a build with the
+  # default one. This job exists so there is also a single answer to "does it all still
+  # work", which is the question a person actually asks — and so that a check added to
+  # `verify.mjs` cannot be silently missing from CI.
+  #
+  # `--require-all` is the point: it turns a skip into a failure. Without it, a runner
+  # missing a dependency would report a clean run having verified nothing.
+  # ---------------------------------------------------------------------------
+  consolidated:
+    name: verify.mjs (--require-all)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install the encryption feature's crypto provider
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev python3
+
+      # The verifier runs the live-server and harness checks only when asked. On CI there is
+      # no llama.cpp and no OMP, so those groups must be told to stand down rather than
+      # being quietly skipped by `--require-all`, which would defeat its purpose.
+      - name: Verify everything CI can reach
+        run: |
+          node verify.mjs \
+            --only rust,encryption,hermes,bench,harness \
+            --require-all \
+            --json /tmp/verify.json
+
+      - name: Upload the result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-report
+          path: /tmp/verify.json
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
   # Documentation: warn-free rustdoc, and doctests actually executed.
   # ---------------------------------------------------------------------------
   docs:
