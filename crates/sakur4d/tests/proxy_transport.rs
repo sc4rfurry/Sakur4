@@ -123,6 +123,28 @@ fn chat_body(messages: serde_json::Value) -> String {
     .to_string()
 }
 
+/// Wait until the upstream has recorded `n` requests, then return them.
+///
+/// # Why this is not an immediate assertion
+///
+/// The upstream records a request inside its handler, so from the client's side the HTTP
+/// call can return before that push is visible. Asserting straight away is a race: it passed
+/// in isolation and failed once more tests ran in parallel and the timing shifted.
+///
+/// A deadline makes the test wait for the thing it asserts about, rather than for a duration
+/// someone guessed. If the request never arrives the assertion still fails — and reports the
+/// recorded count, so the failure stays diagnosable instead of reading as a timeout.
+fn upstream_requests(seen: &Seen, n: usize) -> Vec<SeenRequest> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let recorded = seen.requests.lock().unwrap().clone();
+        if recorded.len() >= n || std::time::Instant::now() >= deadline {
+            return recorded;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 // ===========================================================================
 // Transparency
 // ===========================================================================
@@ -210,7 +232,8 @@ async fn every_other_endpoint_is_forwarded_too() {
         assert_eq!(response.status(), 200, "{method} {path} was not forwarded");
     }
 
-    let paths: Vec<String> = seen.requests.lock().unwrap().iter().map(|r| r.path.clone()).collect();
+    let requests = upstream_requests(&seen, 6);
+    let paths: Vec<String> = requests.iter().map(|r| r.path.clone()).collect();
     for expected in
         ["/v1/models", "/health", "/tokenize", "/v1/embeddings", "/v1/responses", "/props"]
     {
@@ -319,5 +342,97 @@ async fn observe_only_never_rewrites_even_a_long_transcript() {
         got["messages"].as_array().map(|a| a.len()),
         Some(messages.len()),
         "observe-only must forward the transcript unchanged, however long it is"
+    );
+}
+// ===========================================================================
+// The finding from pointing a real harness at this
+// ===========================================================================
+
+#[tokio::test]
+async fn a_harness_system_prompt_is_never_evicted() {
+    // # Found by running OMP through the proxy against a real llama.cpp
+    //
+    // A single enormous *user* message produced no rewrite, and the reason is worth a test
+    // rather than a note: the eviction engine protects system messages, and a harness sends
+    // a very large one on every turn — tool schemas, conventions, the lot. So the largest
+    // thing in a real request is also the one thing eviction will not touch.
+    //
+    // That is deliberate. The system prompt is the harness's contract with the model, and
+    // removing it produces a request the model cannot answer sensibly — worse than an
+    // over-long one. But it means **a transcript has to grow past two turns before the proxy
+    // can do anything**, which is surprising enough to pin down.
+    let (upstream, seen) = spawn_upstream().await;
+    let proxy = spawn_proxy(&upstream, true).await;
+
+    let system = "S".repeat(8_000); // comfortably past the 2048-token window alone
+    let body = chat_body(serde_json::json!([
+        {"role": "system", "content": system},
+        {"role": "user", "content": "hi"}
+    ]));
+
+    reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .expect("forward");
+
+    let requests = seen.requests.lock().unwrap().clone();
+    let got: serde_json::Value = serde_json::from_str(&requests[0].body).expect("parse");
+    let messages = got["messages"].as_array().expect("messages");
+
+    assert_eq!(messages[0]["role"], "system");
+    assert_eq!(
+        messages[0]["content"].as_str().map(str::len),
+        Some(system.len()),
+        "the harness's system prompt must reach the model verbatim, however large it is"
+    );
+}
+
+#[tokio::test]
+async fn every_turn_of_a_multi_turn_session_is_recorded() {
+    // The proxy's value in observe-only mode is that it builds a memory of the session, so a
+    // turn going unrecorded is the failure that matters. Three turns are sent, each
+    // extending the last, exactly as a stateless client re-sends its whole transcript.
+    let (upstream, seen) = spawn_upstream().await;
+    let proxy = spawn_proxy(&upstream, true).await;
+    let client = reqwest::Client::new();
+
+    let mut history = vec![serde_json::json!({"role": "user", "content": "first turn about auth"})];
+    let mut sent = 0;
+
+    // The harness sends what it has, *then* appends the reply — so the first turn goes out
+    // alone and each later turn carries everything before it.
+    for reply in ["second turn about retries", "third turn about caching"] {
+        sent += 1;
+        let response = client
+            .post(format!("{proxy}/v1/chat/completions"))
+            .body(chat_body(serde_json::Value::Array(history.clone())))
+            .send()
+            .await
+            .expect("forward");
+        assert_eq!(response.status(), 200, "turn {sent}");
+
+        history.push(serde_json::json!({"role": "assistant", "content": "acknowledged"}));
+        history.push(serde_json::json!({"role": "user", "content": reply}));
+    }
+    sent += 1;
+    let response = client
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(chat_body(serde_json::Value::Array(history.clone())))
+        .send()
+        .await
+        .expect("forward");
+    assert_eq!(response.status(), 200, "turn {sent}");
+
+    // Three requests reached the upstream, each carrying the history the harness re-sent —
+    // which is what makes the deduplication in `remember` necessary rather than merely tidy.
+    let requests = upstream_requests(&seen, sent);
+    assert_eq!(requests.len(), sent, "the upstream must see one request per turn");
+    let last: serde_json::Value = serde_json::from_str(&requests[sent - 1].body).expect("parse");
+    assert_eq!(
+        last["messages"].as_array().map(|a| a.len()),
+        Some(5),
+        "the final turn carries the whole conversation"
     );
 }
