@@ -71,33 +71,49 @@ without one nothing resolves at all.
 
 ## Where it stopped
 
-A one-shot session in an isolated profile could not be made to reach the local server:
+A one-shot session in an isolated profile never reaches the local server:
 
 ```console
 $ HERMES_HOME=/tmp/hermes-test-home hermes -z "Reply with exactly: HERMES_OK"
 HTTP 401: The API Key appears to be invalid or may have expired.
 ```
 
-That message is **OpenRouter's wording** — Hermes fell back to a cloud provider rather
-than routing to the configured local one. The local server itself is fine, and this was
-checked directly rather than assumed:
+That message is **OpenRouter's wording**, so the request is going to a cloud provider that
+was never configured for this profile. Four things were ruled out by measurement rather
+than by reading:
+
+**The local server is fine.** It answers 200 with *and* without an `Authorization` header:
 
 ```console
 $ curl -s -X POST http://your-llama-server:8080/v1/chat/completions \
-       -H 'Authorization: Bearer local-only' -d '{...}'
-HTTP 200
-$ curl -s -X POST http://your-llama-server:8080/v1/chat/completions -d '{...}'
-HTTP 200
+       -H 'Authorization: Bearer local-only' -d '{...}'      → HTTP 200
+$ curl -s -X POST http://your-llama-server:8080/v1/chat/completions -d '{...}'  → HTTP 200
 ```
 
-Both with and without an `Authorization` header, so the credential is not the problem.
-`hermes doctor` reports "✓ API key or custom endpoint configured" with no complaint about
-the custom provider, and `agent.log` records nothing for the failing session. The routing
-decision happens somewhere that neither `doctor` nor the log surfaces.
+**The config parses.** `load_config()` returns the custom provider, the engine name, and
+the default model exactly as written.
 
-Continuing would have meant either enabling the debug logger and reading Hermes' provider
-resolution, or changing a **live** profile — and neither is worth doing blind to someone
-else's working install.
+**The request is not reaching the configured endpoint at all.** The provider was pointed
+at a listener this repository controls —
+[`docs/verification/capture-request.ps1`](../../docs/verification/capture-request.ps1) —
+and the capture file was never written. Nothing arrived. So the failure is upstream of any
+HTTP call to the local provider: Hermes is choosing a different model than the one the
+config names.
+
+**The engine is not involved.** It registers and loads (above), and the failure is
+identical whether `context.engine` is `sakur4` or unset.
+
+### The most likely cause
+
+`state.auth` in Hermes is driven by `modelRoles` and per-model auth entries, not only by
+the top-level `model.default`. The user's own config carries `modelRoles`
+(`default: infron/qwen/qwen3.8-27b:free`) and a large `custom_providers` list, and this
+isolated profile was built by adding to a config that already had them. A model string an
+error message cannot resolve falls back — and the fallback's credential is the expired one.
+
+Confirming it means reading `hermes_cli/auth.py`'s `state.auth` resolution or running with
+only `modelRoles` set. Both are a few minutes **on a profile whose routing already works**,
+which is why that is the recommended next step rather than more work here.
 
 ## What this does and does not mean
 
@@ -105,15 +121,24 @@ else's working install.
 passes 27 contracts against it. The integration is correct.
 
 **Not verified:** a Hermes session driving a model with this engine active. So the
-tool-selection question — does the engine behave well *inside a turn* — remains open here,
-exactly as it does for OMP's model-initiated tool use.
+in-turn behaviour question remains open here, exactly as model-initiated tool use remains
+open for OMP.
 
-**Not a defect in Sakur4.** Every failure above is in provider routing, which is Hermes'
-own configuration, and the same engine passes its contracts against the same daemon.
+**Not a defect in Sakur4.** Every failure is in provider selection, which is Hermes'
+configuration; the request never reaches Sakur4 or the model server, and the same engine
+passes its contracts against the same daemon.
 
 ## To finish it
 
-On a profile whose provider routing already works — the live one, or a copy of it:
+The recommended route is not more work in an isolated profile. It is a few minutes **on a
+profile whose routing already works**, which is the user's own:
+
+1. Confirm the model actually selected: `hermes status`, or send one prompt with
+   `hermes -z "ping"` and check which provider answers.
+2. Add `context: { engine: sakur4 }` to `config.yaml` and run the same prompt again.
+3. If the engine is engaged and the answer changes, the injection path is proven.
+
+The engine side needs nothing further. On a profile where provider selection works:
 
 ```bash
 # 1. A daemon the engine can reach.

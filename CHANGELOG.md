@@ -17,6 +17,44 @@ home on crates.io rather than as a stability promise, and may change within a
 
 ### Added
 
+**Hermes ContextEngine (`integrations/hermes-plugin/`)**
+
+- Replaces Hermes' summarising context engine with Sakur4's eviction engine, and closes a
+  loop MCP alone could not: `update_from_response` receives the provider's token accounting
+  on every call, including cache reads, so prompt-cache behaviour is measured automatically
+  rather than reported by hand.
+- Injects the Anchor Set into every request via `select_context`, after the system prompt so
+  the cacheable head is not moved.
+- Exposes `sakur4_recall` through `get_tool_schemas`/`handle_tool_call`, and implements
+  `__deepcopy__` because Hermes copies the engine for sub-agents.
+- 27 contracts verified against a live daemon by `verify_engine.py`.
+
+**OpenAI-compatible reverse proxy (FR-18, `sakur4d proxy`)**
+
+- For a harness with no MCP client, no plugin system and no Agent Skills reader: point it at
+  the proxy instead of `llama-server` and nothing else changes. Everything unrecognised is
+  forwarded, so a route this build has never heard of gets the upstream's own answer rather
+  than a 404.
+- Trims an over-long transcript on the way through, leaving a marker where the removed turns
+  were, and records the provider's token accounting from the response it already had to read.
+- `--observe-only` forwards unchanged and only records, which is how to measure on real
+  traffic before letting it act.
+
+**Encryption at rest (FR-20)**
+
+- `--features encryption` swaps the bundled SQLite for SQLCipher; `Db::open_encrypted`
+  issues `PRAGMA key` before the file is read. Keys are 64 hex characters — a raw 256-bit
+  key rather than a passphrase, so there is no derivation step to attack — and a short key
+  is refused rather than stretched.
+- The acceptance criterion is tested: a store opened with a key cannot be read by a plain
+  connection, and the file does not begin with the SQLite header.
+
+**`verify.mjs`**
+
+- One entry point for every check, across Rust, Python, Node and three harnesses. It reports
+  **skipped separately from passed**, because a run that skipped its live-server checks is
+  not a green run, and `--require-all` turns a skip into a failure.
+
 **Oh My Pi extension (`integrations/omp-plugin/`)**
 
 - Nine native tools (`sakur4_commit`, `sakur4_pin`, `sakur4_recall`,
@@ -44,27 +82,43 @@ home on crates.io rather than as a stability promise, and may change within a
   and speaks MCP over stdio for the operations that exist only as tools. No shell is
   involved, so recorded content may contain anything.
 
+
 ### Changed
 
-- `sakur4d commit` gained `--tool`, so a tool result's parser can be selected by
-  name and its structured output becomes deterministic facts.
-- **The stdio server no longer prints a startup banner to stderr.** A harness that
-  captures stderr collected one per session — noise that is not a diagnostic and
-  that nobody asked for. Pass `--banner` when running the server by hand.
-- **The OMP extension searches many more locations** for `sakur4d`: `~/.local/bin`,
-  scoop and chocolatey shims on Windows, homebrew prefixes on macOS, and a source
-  checkout's `target/release` and `target/debug`. Its failure message now lists
-  every path searched, because the previous one did not say where to look — which
-  is unhelpful in exactly the case that matters, a correct install the search
-  missed.
+- **The eviction profile is chosen from what the backend can do.** The default policy kept a
+  large working set so a checkpoint-aligned boundary had room — the right trade on a backend
+  with a checkpoint ring, and the wrong one on a backend without. Measured against a real
+  llama.cpp exposing no checkpoints, that cost 29% more tokens per turn and bought nothing.
+  A backend with no checkpoint source now selects `window-first` (trigger 70%, target 30%),
+  which brought the overhead to +1.3% while keeping 42 points of recall. `doctor` reports
+  which profile is active, and `SAKUR4_EVICTION_PROFILE` overrides it.
+- **Anchor injection in the OMP extension.** Its `context` hook called `memory.recall` and
+  nothing else, so a pinned constraint reached the model only if the user's message happened
+  to resemble it — which a short rule like "never force-push to main" never does. Anchors are
+  now read from their own resource every turn. The guarantee was true of the engine and false
+  of the live path, which is the only place a user can observe it.
+- **Retrieval no longer fails on natural-language queries.** `sanitize_match` joined every
+  term with `AND`, so a six-word question required all six to appear in a one-line fact; it
+  now unions beyond two terms and lets BM25 rank. Inflected queries also missed their base
+  form, so terms of six or more characters contribute a conservative stem variant. Measured:
+  `"retries"` and `"how many retries does the helper take"` previously returned nothing and
+  now find the fact, while an unrelated query still returns nothing.
+- **The stdio server no longer prints a startup banner to stderr.** A harness capturing
+  stderr collected one per session; `--banner` opts back in.
+- **`--context-window` now has an effect.** The embedded backend simulates a slot and reports
+  a fixed 32,768, and the engine asked the backend first — so a user's explicit setting lost
+  to a number that describes nothing.
 
 ### Fixed
 
-- A debug `eprintln!` left in `ToolOutputParser::parse_any` printed a line per parse
-  to stderr. It survived because the stdio tests asserted that *stdout* carried only
-  protocol frames while leaving stderr inherited. A new test,
-  `stderr_stays_quiet_during_a_normal_session`, asserts that a normal session writes
-  nothing at all to stderr.
+- A debug `eprintln!` in `ToolOutputParser::parse_any` printed a line per parse to stderr.
+  Pinned by a test asserting a normal session writes nothing there at all.
+- The proxy re-committed a harness's whole transcript every turn, so a stateless client's 242
+  messages became 2,420 episodes over ten turns. A bounded set of content hashes now skips
+  what has been seen.
+- The Hermes engine matched plan updates on fields that do not exist, so compaction returned
+  the messages unchanged while reporting success.
+
 
 ## [0.1.0] - 2026-09-12
 
@@ -163,7 +217,7 @@ The first release. Everything below is new.
 
 ### Verified
 
-- 224 tests (222 unit and integration, 2 doctests), including integration tests
+- 257 tests, including integration tests
   that spawn the real binary and speak JSON-RPC over its pipes, and contract tests
   for the cache-coherence claim.
 - `hermes mcp test sakur4` connects and discovers all 17 tools against Hermes Agent
