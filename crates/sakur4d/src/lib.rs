@@ -43,4 +43,6 @@
 
 pub mod cli;
 pub mod gateway;
+/// FR-18: an OpenAI-compatible reverse proxy for harnesses with no plugin system.
+pub mod proxy;
 pub mod tools;

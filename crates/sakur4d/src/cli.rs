@@ -100,6 +100,28 @@ pub enum Command {
         banner: bool,
     },
 
+    /// Run as an OpenAI-compatible reverse proxy in front of the inference server (FR-18).
+    ///
+    /// For a harness that has neither MCP nor a plugin system: point it at this address
+    /// instead of at `llama-server` and nothing else changes. Requests are forwarded
+    /// untouched; a transcript that exceeds the window is trimmed by the eviction engine
+    /// on the way through, and the provider's own token accounting is recorded.
+    Proxy {
+        /// Address to listen on. Point the harness here.
+        #[arg(long, default_value = "127.0.0.1:8090")]
+        bind: String,
+        /// The real inference server, e.g. `http://127.0.0.1:8080`.
+        #[arg(long, default_value = "http://127.0.0.1:8080")]
+        upstream: String,
+        /// Session id reported to the Memory Fabric.
+        #[arg(long)]
+        session: Option<String>,
+        /// Forward requests unchanged, recording only. Useful for measuring before
+        /// changing anything, and for comparing the two behaviours on the same traffic.
+        #[arg(long)]
+        observe_only: bool,
+    },
+
     /// Print ready-to-paste MCP configuration for a harness.
     Config {
         /// `hermes`, `claude`, `claude-code`, `generic-http`, or `generic-stdio`.
@@ -329,6 +351,9 @@ pub async fn run(cli: Cli) -> Result<()> {
             };
             let engine = open_engine(&cli).await?;
             crate::gateway::serve(engine, resolved, !no_dream, quiet_secs, banner).await
+        }
+        Command::Proxy { bind, upstream, session, observe_only } => {
+            proxy(&cli, &bind, &upstream, session, observe_only).await
         }
         Command::Config { harness, binary, db } => config(&cli, &harness, binary, db),
         Command::Doctor { refresh } => doctor(&cli, refresh).await,
@@ -887,3 +912,38 @@ pub(crate) async fn assemble_parts(engine: &Engine, session: &str) -> Result<Pro
 }
 
 pub mod demo;
+
+/// Run the OpenAI-compatible reverse proxy (FR-18).
+async fn proxy(
+    cli: &Cli,
+    bind: &str,
+    upstream: &str,
+    session: Option<String>,
+    observe_only: bool,
+) -> Result<()> {
+    let engine = open_engine(cli).await?;
+    let config = crate::proxy::ProxyConfig {
+        upstream: upstream.to_string(),
+        session_id: session.unwrap_or_else(|| "proxy".to_string()),
+        manage_context: !observe_only,
+        ..Default::default()
+    };
+
+    eprintln!("sakur4d {} — reverse proxy", env!("CARGO_PKG_VERSION"));
+    eprintln!("  listening   http://{bind}");
+    eprintln!("  upstream    {upstream}");
+    eprintln!("  session     {}", config.session_id);
+    eprintln!(
+        "  mode        {}",
+        if observe_only {
+            "observe only — requests are forwarded unchanged"
+        } else {
+            "managing context — over-long transcripts are trimmed"
+        }
+    );
+    eprintln!();
+    eprintln!("Point the harness at http://{bind}/v1 instead of {upstream}/v1.");
+    eprintln!();
+
+    crate::proxy::serve(engine, bind, config).await
+}
