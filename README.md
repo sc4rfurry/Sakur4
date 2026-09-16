@@ -37,7 +37,9 @@ Skill** — one daemon, three ways in.
 - [Connect your harness](#connect-your-harness)
   - [MCP clients](#1--mcp--any-client)
   - [Oh My Pi](#2--oh-my-pi--native-extension)
-  - [Agent Skills hosts](#3--agent-skill--no-mcp-no-extension)
+  - [Hermes](#3--hermes--a-contextengine-not-just-tools)
+  - [Agent Skills hosts](#4--agent-skill--no-mcp-no-extension)
+  - [Anything else — reverse proxy](#5--anything-else--an-openai-compatible-reverse-proxy)
 
 </td><td valign="top" width="50%">
 
@@ -240,7 +242,7 @@ $ hermes mcp test sakur4
 
 ### 2 · Oh My Pi — native extension
 
-OMP 18.1.17 has **no MCP client**. It needs a native TypeScript extension instead — which
+OMP has **no MCP client**. It needs a native TypeScript extension instead — which
 turns out to be an advantage, because an extension can see inside the agent loop and
 therefore reach hooks a tool provider cannot.
 
@@ -249,6 +251,58 @@ node integrations/omp-plugin/install.mjs
 ```
 
 Then restart OMP and ask it to list its `sakur4_` tools — there should be nine.
+
+### 3 · Hermes — a ContextEngine, not just tools
+
+Hermes has its own compaction path, so exposing MCP tools is not enough: its summariser
+still runs. `integrations/hermes-plugin/` replaces it, which also closes a loop MCP alone
+cannot — `update_from_response` receives the provider's token accounting on every call, so
+prompt-cache behaviour is measured automatically instead of reported by hand.
+
+```bash
+cp -r integrations/hermes-plugin "$LOCALAPPDATA/hermes/plugins/sakur4"
+# then set `context.engine: sakur4` in ~/.hermes/config.yaml
+```
+
+Verified by 28 contracts against a live daemon. See
+[integrations/hermes-plugin](integrations/hermes-plugin/README.md).
+
+### 4 · Agent Skill — no MCP, no extension
+
+`skills/sakur4/` is a portable [Agent Skills](https://agentskills.io/specification)
+package: a `SKILL.md` plus a **dependency-free** Node CLI over the daemon.
+
+```bash
+node integrations/omp-plugin/install.mjs --skill-only   # → ~/.agents/skills/
+```
+
+`~/.agents/skills/` is the standard location, so OMP, Claude Code, Codex and pi all pick
+it up with no further configuration. Progressive disclosure means only the description
+sits in context until a task matches.
+
+The CLI locates `sakur4d` across install layouts, defaults the store to
+`~/.sakur4/sakur4.db`, and spawns with `shell: false` — so recorded content may contain
+quotes, newlines or backticks intact. That matters when the primary use is committing the
+user's words verbatim.
+
+### 5 · Anything else — an OpenAI-compatible reverse proxy
+
+A harness with none of the above still works. Point it at the proxy instead of at
+`llama-server` and nothing else changes:
+
+```bash
+sakur4d proxy --bind 127.0.0.1:8090 --upstream http://127.0.0.1:8080
+# harness base URL: http://127.0.0.1:8090/v1
+```
+
+Requests are forwarded untouched — every unrecognised route included, so a harness calling
+an endpoint this build has never heard of gets the upstream's own answer rather than a 404
+from Sakur4. A transcript that exceeds the window is trimmed on the way through, with a
+marker left in place of the removed turns, and the provider's token accounting is recorded
+from the response the proxy already had to read.
+
+`--observe-only` forwards everything unchanged and only records, which is the safe way to
+see what it *would* have done on your real traffic before letting it act.
 
 | Hook | What Sakur4 does with it |
 |---|---|
@@ -274,25 +328,6 @@ copies instead.
 fix, and it is the difference between a plugin that looks installed and one that works.
 
 </details>
-
-### 3 · Agent Skill — no MCP, no extension
-
-`skills/sakur4/` is a portable [Agent Skills](https://agentskills.io/specification)
-package: a `SKILL.md` plus `scripts/sakur4.mjs`, a **dependency-free** Node CLI over the
-daemon.
-
-```bash
-node integrations/omp-plugin/install.mjs --skill-only   # → ~/.agents/skills/
-```
-
-`~/.agents/skills/` is the standard location, so OMP, Claude Code, Codex and pi all pick
-it up with no further configuration. Progressive disclosure means only the description
-sits in context until a task matches.
-
-The CLI locates `sakur4d` across install layouts, defaults the store to
-`~/.sakur4/sakur4.db`, and spawns with `shell: false` — so recorded content may contain
-quotes, newlines or backticks intact. That matters when the primary use is committing the
-user's own words verbatim.
 
 ---
 
@@ -513,6 +548,8 @@ sakur4d --backend http://127.0.0.1:8080 doctor
 
 ```text
 serve                     Run the MCP gateway (stdio or HTTP; --banner for stderr diagnostics)
+proxy                     Run the OpenAI-compatible reverse proxy (FR-18)
+                          --upstream <url>  --bind <addr>  --observe-only
 config <harness>          Print ready-to-paste integration config
 doctor                    What backend and cache capabilities were detected
 demo                      Guided end-to-end walkthrough
