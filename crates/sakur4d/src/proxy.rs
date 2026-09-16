@@ -373,17 +373,24 @@ async fn rewrite_request(state: &ProxyState, body: &[u8]) -> Option<Bytes> {
         return None;
     }
 
-    // # Apply the tier changes even when this step reclaims nothing
+    // # Apply the tier changes, then trim the messages those tiers moved
     //
-    // The ladder from `live` to `referenced` takes several steps, and the first one can be
+    // The ladder from `live` to `referenced` takes several steps, and the first can be
     // token-neutral: `masked` renders a header plus a 160-character preview, which for a short
-    // message is *longer* than the message. Requiring savings here meant the plan was
-    // discarded, the tiers never advanced, and the engine sat at 26,422 tokens of pressure
-    // reporting "504 would not reclaim anything at this tier" on every turn forever.
+    // message is *longer* than the message. So `planned_savings` can be zero while the plan
+    // has still moved hundreds of episodes out of `live`.
     //
-    // Applying a token-neutral step is what lets the next plan continue from a lower tier and
-    // reach one that does reclaim. The transcript is still left alone this turn — there is
-    // nothing worth removing yet — so the request goes upstream unmodified either way.
+    // This code used to return early on `planned_savings == 0`, on the reasoning that the
+    // transcript should be left alone until savings appear. That reasoning held only for a
+    // session that grows a turn at a time — where a later plan picks up the ladder where this
+    // one left it. For a single large request it was fatal: the plan advanced 903 episodes,
+    // reported zero savings, the early return discarded the result, and **the whole transcript
+    // went upstream untouched**. Measured: 1,002 messages and 34,571 tokens forwarded verbatim
+    // against a 32,768-token window with a 22,938-token trigger.
+    //
+    // A message whose episode has left `live` should not be in the window, whatever the plan
+    // thinks it saved. Whether this turn's steps reclaimed anything is the planner's business;
+    // whether the transcript still contains evicted content is this function's.
     let _ = state.engine.eviction().apply(&plan, &parts).await;
 
     if plan.planned_savings == 0 {
@@ -391,7 +398,6 @@ async fn rewrite_request(state: &ProxyState, body: &[u8]) -> Option<Bytes> {
             advanced = plan.updates.len(),
             "proxy advanced the eviction ladder without reclaiming yet"
         );
-        return None;
     }
 
     let rewritten = drop_evicted(state, &messages, &evicted, plan.target).await;
@@ -481,10 +487,22 @@ async fn drop_evicted(
     let mut doomed: std::collections::HashSet<String> = std::collections::HashSet::new();
     for episode_id in evicted {
         if let Ok(row) = state.engine.memory().episode(episode_id).await {
-            let rendered = row.render();
-            if rendered.len() < row.content.len() {
-                doomed.insert(row.content.trim().to_string());
-            }
+            // # Tier membership decides, not rendered size
+            //
+            // This guard used to require `row.render().len() < row.content.len()`, on the
+            // reasoning that a message should only leave the window if its replacement is
+            // literally shorter. That is the same mistake the *planner* made and had to have
+            // fixed: `Masked` renders a header plus a 160-character preview, which for a short
+            // message is longer than the message. So the guard was false for every episode at
+            // the first rung, `doomed` was always empty, and the proxy forwarded the whole
+            // transcript — 1,002 messages and 34,571 tokens untouched against a 22,938-token
+            // trigger, while the log cheerfully reported `advanced=903`.
+            //
+            // The ladder is the decision. `Referenced` and below represent content that is
+            // deliberately no longer in the window, and the whole point of the tiers is that a
+            // step can be token-neutral while still being the right step. Measuring the
+            // replacement's size is the planner's job, and it does it with `live_tokens`.
+            doomed.insert(row.content.trim().to_string());
         }
     }
     if doomed.is_empty() {
@@ -554,6 +572,20 @@ async fn drop_evicted(
             }
             retained += cost(&messages[index]);
         }
+        // # The numbers that decide the trim
+        //
+        // Logged because the clamp should hold `target_tokens` and demonstrably does not at a
+        // small window: a growing session settles at 35% of target there and 95% at a large
+        // one. Printing the inputs turns that from an investigation into a reading.
+        tracing::info!(
+            messages = messages.len(),
+            doomed = doomed.len(),
+            plan_cut,
+            bounded,
+            retained,
+            target_tokens,
+            "proxy chose a cut"
+        );
         bounded
     };
 
