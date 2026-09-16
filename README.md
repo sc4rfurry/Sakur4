@@ -723,17 +723,33 @@ That suite found two bugs no amount of self-testing would have:
 2. A `WARN`-level log line written to **stdout** corrupted the JSON-RPC channel over
    stdio. A client that reads stdout as frames cannot recover from that.
 
+One command runs everything, and reports **skipped separately from passed** — a run that
+skipped its live-server checks is not a green run:
+
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features   # RUSTFLAGS=-D warnings
-cargo test --workspace --all-targets
-cargo doc --workspace --no-deps                         # RUSTDOCFLAGS=-D warnings
+node verify.mjs                              # everything this machine can run
+node verify.mjs --upstream http://host:8080  # add the live llama.cpp checks
+node verify.mjs --quick                      # skip the slow benchmarks
+node verify.mjs --only rust,hermes           # a subset, by group or check id
+node verify.mjs --list                       # what exists, and what each group needs
 ```
 
-CI runs all four on **Linux, macOS and Windows**, plus a release-profile build (LTO and
-`codegen-units = 1`, so a release-only link error cannot hide), an MSRV build at the
-declared 1.94, and a `cargo publish` dry run that builds the extracted archive in
-isolation.
+A full local run against a real llama.cpp: **12 passed, 0 failed, 1 skipped**, where the
+skip names its reason rather than hiding — SQLCipher needs OpenSSL development files this
+machine does not have.
+
+| Group | Needs | CI |
+|---|---|---|
+| `rust` | nothing | Linux, macOS, Windows |
+| `encryption` | OpenSSL development files | Linux only — see `crates/sakur4-core/Cargo.toml` |
+| `hermes` | python + a built daemon | Linux, with a stubbed Hermes |
+| `bench` | a repository to index | partly |
+| `live` | `--upstream` | **no — no server in CI** |
+| `harness` | OMP or the Hermes CLI | **no — not installed in CI** |
+
+Underneath, CI also runs a release-profile build (LTO and `codegen-units = 1`, so a
+release-only link error cannot hide), an MSRV build at the declared 1.94, and a
+`cargo publish` dry run that builds the extracted archive in isolation.
 
 ---
 
