@@ -40,83 +40,72 @@ many of each. It is now a counted breakdown, which is what produced the answer i
 
 The diagnostic improvement is arguably worth more than the fix.
 
-## Open: the retained size does not depend on the window
+## Open: retained context is ~35% of the planner's target
 
-Measured by growing one transcript turn by turn and reading the upstream's reported
-`prompt_tokens` after each step.
-
-```
-window  32768:  12806 → 3406 → 3408        (trimmed, then flat)
-window  81920:  19411 → 39211 → 3412 → 3414
-window 131072:  26006 → 52406 → 3408
-```
-
-**It settles at ~3,408 tokens at every window.** Three different windows, the same number to
-within six tokens. A target that is a fraction of the window cannot produce that, so whatever
-is bounding the result is not the target.
-
-Note also *when* it fires: at 131,072 the transcript reached 52,406 tokens and was still
-untouched, then collapsed to 3,408 on the next step. So the trim is a cliff, not a gradient —
-one turn of history costs ~52,000 tokens and the next costs 3,408.
-
-### What the plan says, measured
-
-Instrumenting the planner directly, on 40,000 tokens of history at three windows:
+Measured by growing one transcript turn by turn and reading the upstream's own
+`prompt_tokens`. Clean runs, one proxy at a time, everything else killed:
 
 ```
-window=32768  target=18022  savings=10560  after=29440  reaches_target=false  kept_tokens=8000
-window= 8192  target= 4506  savings=10560  after=29440  reaches_target=false  kept_tokens=8000
-window= 4096  target= 2253  savings=10560  after=29440  reaches_target=false  kept_tokens=8000
+window 32768 (target 9830):   12806 → 3406 → 3408 → 3408
+window 81920 (target 24576):  26006 → 23406 → 23407 → 23408
 ```
 
-`target` scales correctly (18,022 / 4,506 / 2,253). `savings`, `after` and `kept_tokens` are
-**identical** at all three. The planner escalates every eligible episode, reclaims 10,560
-tokens when 21,978 were needed, misses its target, and reports so honestly through
-`reaches_target()`.
+At the 81,920 window it lands at 23,408 against a 24,576 target — **95%, which is correct and
+scales**. At 32,768 it lands at 3,408 against 9,830 — **35%, which is not**.
 
-### Fixed this round: `keep_recent_tokens` was absolute
+So the scaling defect is real but narrower than it first appeared: it is worst at small
+windows and disappears at large ones. The earlier "same 3,408 at every window" reading came
+from runs contaminated by leftovers — a stale proxy from a `spawn EPERM` invocation, and a
+verification script that reused one fixed store path so the second run saw twice the history.
+Both are fixed; the numbers above are from a clean state.
 
-The cause of the *constant* part is now identified and fixed. `keep_recent_tokens` is 4096 and
-was used directly, so the same ~8,000 tokens of recent context were protected regardless of
-the window. Over a 4,096-token window that reserves the entire budget, leaving no middle to
-evict — which is the deadlock that made the proxy forward over-long transcripts untouched.
+### What is now asserted
 
-`EvictionPolicy::recent_budget_for(window)` now treats it as an upper bound and shrinks it to
-at most a quarter of the window, with a 512-token floor. Behaviour at 32k and above is
-unchanged. Pinned by `the_recent_budget_shrinks_with_the_window`, and the retained set does
-now scale at the planner level (8,000 → 6,000 → 5,000 tokens kept).
+Two contracts in `docs/verification/proxy-rewrite.mjs` measure this and would have caught the
+original erasure:
 
-### Still open: the proxy rewrites to ~3,408 regardless
+- `the rewrite keeps a proportionate share of the conversation` — a floor on the share of
+  messages kept.
+- `retained context is in the same order as the plan's target` — compares retained tokens
+  against `window × 0.3`, computed rather than hard-coded.
 
-The planner-level fix did not change the field result, so the binding constraint is elsewhere.
-The numbers to reconcile: the proxy reports `live_tokens: 43,712` for a transcript whose text
-the server tokenizes at 20,571 — a factor of about two — and `needed` is computed from the
-former. If `live_tokens` double-counts, the planner is aiming at a target derived from roughly
-twice the real transcript, which would explain both the cliff and the constant.
+The second is the one that matters: a share floor passes at a large window where the first
+bug hid, and comparing against the target does not.
 
-**That is the next measurement**: compare `plan.live_tokens` against the server's own
-`prompt_tokens` for the same request. One number, and it settles whether the input to the
-planner is wrong or the planner's application of it is.
+### What was tried and did not work
 
-### A fix attempted and reverted
+**Filling `parts.timeline` from the fabric's rendered session timeline.** This was wrong on
+its face — the proxy sends the harness's raw `messages`, and the rendered timeline never
+reaches the model — and it measured 43,712 tokens for a transcript the server tokenizes at
+20,571, a factor of two from per-episode rendering chrome. Fixing it to measure the transcript
+as sent is correct and stayed; it did **not** change the retained figure.
 
-Bounding the proxy's cut so the retained tail is worth at least `target` produced a retained
-prompt of **108 tokens** — worse than the bug it was meant to fix. The backward walk measured
-plain message text while the plan's target is in rendered-timeline tokens, and the two are not
-comparable. Reverted rather than debugged in place: the planner already aims at the target, and
-a second, differently-measured bound fighting it is how a fix becomes two bugs. The reasoning is
-recorded in the code so the next attempt does not repeat it.
+**Clamping the cut so the surviving suffix is worth the target.** The code is in place and
+should hold 9,830 tokens at a 32,768 window. It does not, and one run produced 11,460 — which
+is close to the target and suggests the clamp can work. That run has not been reproduced, so
+it is recorded as unreproduced rather than as a fix.
+
+**A previous version of the same clamp** produced 108 retained tokens, because it accumulated a
+running total and reassigned the cut on every iteration. The current version walks from the
+newest message and takes the first index whose surviving suffix meets the budget. The
+difference between "should hold the target" and "settles at 35% of it" is the next thing to
+measure, and it is now a five-minute experiment: the contracts report both numbers.
 
 ## What is verified
 
-- **The deadlock is fixed.** 8 of 8 contracts in `docs/verification/proxy-rewrite.mjs`, wired
-  into `verify.mjs` so it runs every time.
-- **The structure is right.** The system prompt and newest turn survive; exactly one marker
-  replaces what went, after the system prompt; the rewrite sends less.
-- **Proportionality is asserted**: `some conversation survives the rewrite`.
+- **The deadlock is fixed.** 10 of 10 contracts in `docs/verification/proxy-rewrite.mjs`, wired
+  into `verify.mjs`.
+- **The structure is right.** The system prompt and newest turn survive verbatim; exactly one
+  marker replaces what went and sits after the system prompt; the rewrite sends less.
+- **The transcript is shortened, not erased.** Measured on a realistic transcript: 602
+  messages in, 238 out.
+- **The recent budget scales with the window**, pinned by `the_recent_budget_shrinks_with_the_window`.
 - **Plans are covered at 4,096 / 8,192 / 32,768 windows.** Every previous plan test used
   32,768, which is why none of them saw any of this.
-- **The recent budget scales with the window**, pinned by its own test.
+- **Repeated runs are reproducible.** `proxy-rewrite.mjs` used one fixed store path and
+  accumulated the previous run's episodes, so a second invocation planned against twice the
+  history and reported a failure about the test rather than the code. Each run now gets a
+  fresh store.
 
 ## Reproducing
 
@@ -126,6 +115,7 @@ sakur4d --db /tmp/rw.db --backend http://host:8080 --context-window 81920 -v \
         proxy --bind 127.0.0.1:8096 --upstream http://host:8080 --session rw &
 node docs/verification/grow-session.mjs --proxy http://127.0.0.1:8096
 
-# Contract test
+# Contract test — run twice; the result must be identical
+node docs/verification/proxy-rewrite.mjs --bin ~/.cargo/bin/sakur4d --window 32768
 node docs/verification/proxy-rewrite.mjs --bin ~/.cargo/bin/sakur4d --window 32768
 ```

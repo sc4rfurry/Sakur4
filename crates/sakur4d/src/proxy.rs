@@ -323,27 +323,42 @@ async fn rewrite_request(state: &ProxyState, body: &[u8]) -> Option<Bytes> {
         tracing::debug!("proxy: transcript unchanged since the last turn");
     }
 
-    // Assemble what the prompt would be, so the engine plans against the same numbers the
-    // receipt reports. A prompt assembled differently from the one measured is how a
-    // receipt ends up disagreeing with reality — and `assemble_parts` in `tools.rs` is the
-    // reference implementation, so this deliberately mirrors it.
+    // # Measure the transcript that is actually being sent
     //
-    // The incoming messages are committed above, so the timeline already contains this
-    // turn; the budget decision therefore sees the request it is about to forward rather
-    // than the previous one.
+    // The planner decides pressure from `parts.timeline_tokens()`, and that number has to
+    // describe **this request** or the decision is made about something else.
+    //
+    // The first version filled `timeline` from the fabric's rendered session timeline, on the
+    // reasoning that `assemble_parts` in `tools.rs` does exactly that. That is right for the
+    // MCP path — there, the rendered timeline *is* the prompt. It is wrong here, because the
+    // proxy sends the harness's raw `messages` array and the fabric rendering never goes
+    // anywhere near the model.
+    //
+    // The two differ by roughly a factor of two, and the reason is per-episode chrome: the
+    // timeline renders a role label, a separator and an episode id for every entry, so 602
+    // messages measured 43,712 tokens through the timeline and 20,571 through the server's own
+    // tokenizer. The planner was therefore told the request was over twice its real size,
+    // aimed its target at that inflated figure, and evicted almost the whole conversation —
+    // which is why a session settled at the same ~3,408 tokens whatever the window.
+    //
+    // So the timeline is filled with the transcript as it will be sent. Same text in, same
+    // tokenizer, same number the receipts report.
+    let transcript_text = messages
+        .iter()
+        .map(|m| {
+            let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("assistant");
+            format!("{role}: {}", content_text(m))
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
     let window = state.engine.context_window().await;
     let anchors = state.engine.memory().anchors(Some(&state.config.session_id)).await.ok()?;
     let anchor_block = anchors.iter().map(|a| a.render()).collect::<Vec<_>>().join("\n");
-    let timeline = state
-        .engine
-        .memory()
-        .timeline(&state.config.session_id, 1_000_000, state.engine.tokens(), false)
-        .await
-        .ok()?;
     let parts = PromptParts::new()
         .with_system("You are a local coding agent.")
         .with_anchors(anchor_block)
-        .with_timeline(timeline.rendered);
+        .with_timeline(transcript_text);
 
     let plan =
         state.engine.eviction().plan(&state.config.session_id, "0", window, &parts).await.ok()?;
@@ -379,7 +394,7 @@ async fn rewrite_request(state: &ProxyState, body: &[u8]) -> Option<Bytes> {
         return None;
     }
 
-    let rewritten = drop_evicted(state, &messages, &evicted).await;
+    let rewritten = drop_evicted(state, &messages, &evicted, plan.target).await;
     if rewritten.len() == messages.len() {
         // The plan named episodes that do not correspond to messages in this request — the
         // transcript has moved on since they were committed. Leaving the body alone is
@@ -460,6 +475,7 @@ async fn drop_evicted(
     state: &ProxyState,
     messages: &[serde_json::Value],
     evicted: &std::collections::HashSet<String>,
+    target_tokens: usize,
 ) -> Vec<serde_json::Value> {
     // The text of every episode whose new rendering is genuinely smaller than its content.
     let mut doomed: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -488,20 +504,20 @@ async fn drop_evicted(
     // everything after it stays. Cutting at the oldest instead would delete the entire
     // conversation on any turn where the plan happened to name an early episode.
     //
-    // # Not bounded here, deliberately
+    // # The cut is bounded so the transcript cannot be erased
     //
-    // An attempt to also require the cut to leave `target` tokens behind produced a retained
-    // prompt of **108 tokens** — worse than the bug it was meant to fix — because the backward
-    // walk measured plain message text while the plan's target is in rendered-timeline tokens,
-    // and the two are not comparable. It was reverted rather than debugged in place: the
-    // planner already aims at the target, and a second, differently-measured bound fighting it
-    // is how a fix becomes two bugs.
+    // Two rounds of measurement went into this line. A growing session settled at the same
+    // ~3,408 tokens of retained context at a 32,768, an 81,920 and a 131,072 window alike, and
+    // at the largest of those it went from 52,406 tokens untouched to 3,408 in a single step.
+    // The planner's own target cannot produce that, so the cut is clamped here as well.
     //
-    // What the measurement did establish is recorded in docs/verification/proxy-rewrite-bug.md:
-    // with the engine's cut alone, a session settles at the same retained size whatever the
-    // window, which the engine's own window-relative target cannot explain. That is the open
-    // defect, and it belongs in the planner rather than here.
-    let cut = messages
+    // An earlier attempt at this clamp produced a retained prompt of 108 tokens, worse than
+    // the bug. It failed because it accumulated a *running total* and kept reassigning the cut
+    // on every iteration, so the answer depended on where the sum happened to cross rather
+    // than on the first index that satisfies the budget. This walks from the newest message
+    // backwards and takes the **first** index whose surviving suffix is worth the target, then
+    // stops.
+    let plan_cut = messages
         .iter()
         .enumerate()
         .filter(|(index, message)| {
@@ -516,6 +532,30 @@ async fn drop_evicted(
         .next_back()
         .map(|newest| newest + 1)
         .unwrap_or(0);
+
+    // Tokens each message contributes, measured with the engine's counter so the number is
+    // the same one the planner and the receipts use.
+    let cost =
+        |message: &serde_json::Value| state.engine.tokens().count(&content_text(message)).get();
+
+    let cut = {
+        let mut retained = cost(&messages[last]);
+        // The system prompt is never removed, so it always counts towards what survives.
+        if !messages.is_empty()
+            && messages[0].get("role").and_then(|r| r.as_str()) == Some("system")
+        {
+            retained += cost(&messages[0]);
+        }
+        let mut bounded = plan_cut;
+        for index in (0..plan_cut).rev() {
+            bounded = index;
+            if retained >= target_tokens {
+                break;
+            }
+            retained += cost(&messages[index]);
+        }
+        bounded
+    };
 
     messages
         .iter()
