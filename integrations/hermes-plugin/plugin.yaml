@@ -1,0 +1,15 @@
+name: sakur4
+version: "0.1.0"
+description: >-
+  Replaces Hermes' summarising context engine with Sakur4's Graduated Eviction Engine.
+  Compaction evicts deterministically — token counts, recency, graph in-degree, explicit
+  droppability — and preserves a prompt prefix while doing it, so a provider that reuses
+  prefixes is not re-billed for a rewritten transcript. Pinned constraints are injected
+  into every request and are exempt from eviction structurally, and the provider's own
+  token accounting is forwarded to Sakur4 on every call so prompt-cache behaviour is
+  measured automatically rather than reported by hand. Falls back to leaving the context
+  unchanged whenever the daemon is unreachable, so a missing sidecar never breaks a
+  session.
+author: "Sakur4 contributors"
+license: "Apache-2.0"
+hooks: []
