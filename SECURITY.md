@@ -27,11 +27,19 @@ non-loopback address with `--bind 0.0.0.0:...` exposes the entire Memory Fabric,
 including the ability to write to it, to anyone who can reach the port. Do not do
 it on a network you do not control.
 
-**Optional encryption at rest is not implemented.** FR-20 in the PRD asks for it
-and the `sqlcipher` feature of `libsqlite3-sys` is available, but it is not wired
-up. On a shared or untrusted machine, the store is readable by anyone with file
-access to it. If that matters to you, it matters today, and there is no
-configuration flag that fixes it yet.
+**Optional encryption at rest is implemented, and off by default.** FR-20 asked for it
+and it now exists: build with `--features encryption` and open the store through
+`Db::open_encrypted`, which issues SQLCipher's `PRAGMA key` before the file is read. The
+key must be 64 hex characters — a raw 256-bit key rather than a passphrase, so there is
+no PBKDF2 step to attack — and `sakur4d gen-key` generates one. A store written by an
+encrypted build is unreadable by a plain SQLite client, which
+`crates/sakur4-core/tests/encryption_at_rest.rs` asserts by opening one without the key.
+
+It is not on by default and the default build links plain SQLite, so **a store is
+readable by anyone with file access unless you enabled the feature.** If that matters to
+you, it matters today, and the switch is a build flag rather than a configuration
+option. The feature notes in `crates/sakur4-core/Cargo.toml` record the OpenSSL
+requirement on each platform, and CI verifies the feature on Linux.
 
 **Snapshots are as sensitive as the store.** `session.snapshot` writes a slot-save
 file — the model's entire KV state for that context — to disk. The size is
