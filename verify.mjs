@@ -516,6 +516,27 @@ function liveChecks() {
       preserves ? "a preserved prefix is reused in full" : lastLines(rr.output, 6),
     );
   }
+
+  // The reverse proxy's rewrite path, driven with a real multi-turn transcript. This is the
+  // check that found a live bug — with a 4096-token window the engine declines to reclaim
+  // 26,443 tokens of pressure, so the proxy forwards everything unchanged. It is wired in
+  // rather than left as a script so the bug stays visible instead of being a document.
+  const rewrite = join(ROOT, "docs", "verification", "proxy-rewrite.mjs");
+  const binary = daemonBinary();
+  if (existsSync(rewrite) && binary) {
+    const rw = run(
+      process.execPath,
+      [rewrite, "--bin", binary, "--upstream", UPSTREAM, "--turns", "300"],
+      { timeout: 1_800_000 },
+    );
+    const ok = /VERDICT: PASS/.test(rw.output);
+    record(
+      "live",
+      "proxy rewrites an over-window transcript",
+      ok ? PASS : FAIL,
+      ok ? "the transcript was trimmed and a marker left" : lastLines(rw.output, 8),
+    );
+  }
 }
 
 /** Harness integrations that need the harness itself. */
