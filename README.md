@@ -655,6 +655,12 @@ node docs/bench/ab.mjs --repo .                              # embedded backend
 node docs/bench/ab.mjs --repo . --backend http://host:8080   # real prefill numbers
 ```
 
+A **live-model** companion — whether a real model actually benefits, rather than whether
+the engine works — is in [docs/bench/live-model.md](docs/bench/live-model.md). Controlled
+A/B/C against a local a 27B model through OMP: plugin-on answered a question only memory
+could answer; plugin-off with the *same store* said UNKNOWN; plugin-on with an empty store
+said UNKNOWN.
+
 Full method — including three bugs the benchmark itself had, recorded rather than
 quietly fixed — is in [docs/bench](docs/bench/README.md).
 

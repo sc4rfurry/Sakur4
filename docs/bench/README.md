@@ -117,6 +117,20 @@ A benchmark that lies quietly is worse than none, so:
 All four are visible in the script's comments rather than quietly patched, because the
 next person to trust a number from here should know how the previous ones failed.
 
+## A live-model companion
+
+The benchmark above drives a scripted workload, which isolates the context and memory
+layer but says nothing about whether a *model* benefits. That is a separate experiment
+with its own cost profile, recorded in [live-model.md](live-model.md):
+
+| arm | plugin | store | answer to a question only memory could answer |
+|---|---|---|---|
+| A | active | populated | **correct** |
+| B | disabled | populated (same store) | UNKNOWN |
+| C | active | empty | UNKNOWN |
+
+Arm B is the control that makes it meaningful: same store, plugin off, wrong answer.
+
 ## Reproducing
 
 ```bash
