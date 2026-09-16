@@ -8,8 +8,12 @@
 
 Sakur4 is a memory and context layer that makes it cheap instead.
 
-Ships as an **MCP server**, a **native Oh My Pi extension**, and a **portable Agent
-Skill** — one daemon, three ways in.
+Ships five ways in, so a harness needs no particular capability to be reached: an **MCP
+server** for anything that speaks MCP, a **native Oh My Pi extension** for the harness that
+does not, a **Hermes ContextEngine** that replaces its summariser rather than only exposing
+tools, a **portable Agent Skill** for anything reading `~/.agents/skills/`, and an
+**OpenAI-compatible reverse proxy** for a harness with none of those. One daemon behind all
+five.
 
 <br>
 
@@ -17,7 +21,7 @@ Skill** — one daemon, three ways in.
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.94%2B-orange.svg)](https://www.rust-lang.org)
 [![MCP](https://img.shields.io/badge/MCP-2026--07--28-8b5cf6.svg)](https://modelcontextprotocol.io)
-[![Tests](https://img.shields.io/badge/tests-224%20passing-34d399.svg)](#verification)
+[![Tests](https://img.shields.io/badge/tests-257%20passing-34d399.svg)](#verification)
 [![Dependencies](https://img.shields.io/badge/runtime%20deps-none%20for%20the%20plugin-34d399.svg)](#design-decisions)
 
 </div>
