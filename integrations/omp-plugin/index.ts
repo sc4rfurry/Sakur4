@@ -620,6 +620,10 @@ export default function sakur4(pi: ExtensionAPI): void {
    *  usage we report on the next turn. Reporting usage that includes our own
    *  injection would make Sakur4's cost look like the model's. */
   let lastRetrievalTokens = 0;
+  /** How many times the model itself called a Sakur4 tool this session. */
+  let toolCalls = 0;
+  /** How many times memory was injected into a request. */
+  let retrievalCount = 0;
 
   // -------------------------------------------------------------------------
   // Tools
@@ -657,6 +661,7 @@ export default function sakur4(pi: ExtensionAPI): void {
       additionalProperties: false,
     },
     async execute(_id, params: any) {
+      noteToolCall("sakur4_commit");
       if (!client.available()) return unavailable("commit");
       const args = ["commit", config.session, String(params.content), "--role", String(params.role)];
       if (params.toolName) args.push("--tool", String(params.toolName));
@@ -688,6 +693,7 @@ export default function sakur4(pi: ExtensionAPI): void {
       additionalProperties: false,
     },
     async execute(_id, params: any) {
+      noteToolCall("sakur4_pin");
       if (!client.available()) return unavailable("pin");
       const result = client.run([
         "pin",
@@ -721,6 +727,7 @@ export default function sakur4(pi: ExtensionAPI): void {
       additionalProperties: false,
     },
     async execute(_id, params: any) {
+      noteToolCall("sakur4_recall");
       if (!client.available()) return unavailable("recall");
       const result = client.run([
         "recall",
@@ -749,6 +756,7 @@ export default function sakur4(pi: ExtensionAPI): void {
       additionalProperties: false,
     },
     async execute(_id, params: any) {
+      noteToolCall("sakur4_symbol");
       if (!client.available()) return unavailable("symbol");
       const result = client.tool("code.query_symbol", {
         qualified_name: String(params.qualifiedName),
@@ -784,6 +792,7 @@ export default function sakur4(pi: ExtensionAPI): void {
       additionalProperties: false,
     },
     async execute(_id, params: any) {
+      noteToolCall("sakur4_impact");
       if (!client.available()) return unavailable("impact");
       const result = client.tool("code.impact_of_change", {
         qualified_name: String(params.qualifiedName),
@@ -813,6 +822,7 @@ export default function sakur4(pi: ExtensionAPI): void {
       additionalProperties: false,
     },
     async execute(_id, params: any) {
+      noteToolCall("sakur4_fold");
       if (!client.available()) return unavailable("fold");
       const result = client.tool("memory.fold", {
         description: String(params.description),
@@ -844,6 +854,7 @@ export default function sakur4(pi: ExtensionAPI): void {
       additionalProperties: false,
     },
     async execute(_id, params: any) {
+      noteToolCall("sakur4_unfold");
       if (!client.available()) return unavailable("unfold");
       const result = client.tool("memory.unfold", {
         fold_id: String(params.foldId),
@@ -871,6 +882,7 @@ export default function sakur4(pi: ExtensionAPI): void {
       additionalProperties: false,
     },
     async execute() {
+      noteToolCall("sakur4_receipt");
       if (!client.available()) return unavailable("receipt");
       const result = client.run(["receipt", config.session]);
       if (!result) return unavailable("receipt");
@@ -885,6 +897,7 @@ export default function sakur4(pi: ExtensionAPI): void {
       "Report the resolved inference backend, the cache capabilities Sakur4 detected, and counts for each memory store. Worth calling once at the start of a long session.",
     parameters: { type: "object", properties: {}, additionalProperties: false },
     async execute() {
+      noteToolCall("sakur4_status");
       const daemon = client.recheck();
       if (!daemon) return unavailable("status");
       const result = client.tool("sakur4.status", {});
@@ -1016,6 +1029,30 @@ export default function sakur4(pi: ExtensionAPI): void {
   // Lifecycle
   // -------------------------------------------------------------------------
 
+  /**
+   * Record that the model chose to call a Sakur4 tool.
+   *
+   * # Why this counter exists
+   *
+   * A live A/B showed the model answering a question that only memory could answer, but
+   * could not say *how*: the retrieval hook injects relevant memory before every turn, so
+   * "the model called `sakur4_recall`" and "the hook supplied the fact and the model read
+   * it" produce the same observable output. Both are good outcomes; they are not the same
+   * claim, and reporting one as the other would be dishonest.
+   *
+   * With this, a session that logs `toolCalls > 0` proves the model reached for the tools
+   * of its own accord. A session with `toolCalls == 0` proves it did not — and that the
+   * injected context was sufficient, which is a different and equally useful finding.
+   *
+   * A plain counter rather than a log line, because in the common case nothing should be
+   * logged: a tool call is normal operation, not an event. `SAKUR4_PLUGIN_LOG` still
+   * records it for anyone who wants the trace.
+   */
+  const noteToolCall = (tool: string): void => {
+    toolCalls += 1;
+    diagnose("model called a sakur4 tool", { tool, total: toolCalls });
+  };
+
   pi.on("session_start", async (_event, ctx) => {
     turns = 0;
     preambleSent = false;
@@ -1138,6 +1175,7 @@ export default function sakur4(pi: ExtensionAPI): void {
 
     const body = blocks.join("\n\n");
     lastRetrievalTokens = anchorTokens + retrievalTokens;
+    retrievalCount += 1;
     ctx.ui.setStatus(
       "sakur4",
       `sakur4: +${lastRetrievalTokens}t (${anchorTokens} anchors)`,
@@ -1358,6 +1396,10 @@ export default function sakur4(pi: ExtensionAPI): void {
 
   /** Flush state and report what the session cost. */
   pi.on("session_shutdown", async (_event, ctx) => {
+    // Always recorded, so a session can be classified after the fact: did the model reach
+    // for the tools, or did it work entirely from what the context hook injected? Those
+    // are different findings and the transcript alone cannot tell them apart.
+    diagnose("session summary", { toolCalls, retrievals: retrievalCount });
     if (!client.available()) return;
     const stats = client.tool("memory.staleness", {});
     if (stats && numberOr(stats.stale, 0) > 0) {

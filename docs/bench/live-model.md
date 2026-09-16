@@ -47,20 +47,32 @@ that fix. The bug was in the live path only: the engine kept anchors out of evic
 correctly, and the README's claim that pinned content is "rendered verbatim into every
 prompt" was true of the engine and false of the only place a user can see it.
 
-## A tool-use question this does *not* answer
+## Does the model *use* the tools? Now answered: no, not when the hook suffices
 
 Asking the model to "search your Sakur4 memory … use the `sakur4_recall` tool" for a
-uniquely-named fact returned it correctly in 50.1s. But that fact was **also** reachable by
-the retrieval hook, which matches the prompt against memory before the turn.
+uniquely-named fact returned it correctly in 50.1s. That run could not distinguish the
+model **choosing** to call the tool from the retrieval hook **injecting** the fact.
 
-So that run does not distinguish:
+The extension now counts both, so a session can be classified after the fact:
 
-- the model **decided** to call `sakur4_recall` and used the result, from
-- the retrieval hook **injected** the fact and the model read it.
+```
+session summary {"toolCalls":0,"retrievals":1}
+```
 
-Both are good outcomes and they are not the same claim. Distinguishing them needs
-tool-call instrumentation in the extension, which does not exist yet. Recorded here rather
-than reported as "the model uses the tools."
+**The model did not call the tool.** It answered correctly from what the context hook had
+already injected. Both paths produce the same user-visible result, and they are not the
+same finding:
+
+- `retrievals > 0, toolCalls == 0` — the hook supplied the context and the model used it.
+  **This is the intended design.** The point of injecting is that the model should not have
+  to know it needs to search.
+- `toolCalls > 0` — the model decided on its own that memory was missing something. That
+  is what `sakur4_recall` exists for, and it is the case the hook cannot cover, because the
+  hook only injects what the *current prompt* resembles.
+
+One prompt is not a behavioural study. What it does establish is that the answers in the
+table above came from injection rather than from tool use — which is the honest reading of
+the earlier result, and the reason the counter was added at all.
 
 ## Cost, which is why the arms are short
 
@@ -111,6 +123,6 @@ SAKUR4_DB=/tmp/empty.db omp -p "…" --model local/Qwen3.8-27B --thinking off --
   behaves differently at turn 100, after several compactions, is untested — OMP's own
   compaction can be forced with a deliberately small window, and that is the next
   experiment worth running.
-- **Tool use is unproven** — see above.
+- **Model-initiated tool use is unproven.** In the one case measured it did not call the tool, because injection had already answered the question. Whether it calls `sakur4_recall` when the hook *cannot* help is untested.
 - **Hermes has never been driven by a live model**, only its transport and its
   ContextEngine interface. The OMP extension is the only harness with a live-model result.
