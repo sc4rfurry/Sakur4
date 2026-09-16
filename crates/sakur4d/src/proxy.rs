@@ -348,10 +348,6 @@ async fn rewrite_request(state: &ProxyState, body: &[u8]) -> Option<Bytes> {
     let plan =
         state.engine.eviction().plan(&state.config.session_id, "0", window, &parts).await.ok()?;
 
-    if plan.planned_savings == 0 {
-        return None;
-    }
-
     let evicted: std::collections::HashSet<String> = plan
         .updates
         .iter()
@@ -362,9 +358,26 @@ async fn rewrite_request(state: &ProxyState, body: &[u8]) -> Option<Bytes> {
         return None;
     }
 
-    // Apply, so the next request sees the post-eviction state rather than planning the
-    // same eviction again.
+    // # Apply the tier changes even when this step reclaims nothing
+    //
+    // The ladder from `live` to `referenced` takes several steps, and the first one can be
+    // token-neutral: `masked` renders a header plus a 160-character preview, which for a short
+    // message is *longer* than the message. Requiring savings here meant the plan was
+    // discarded, the tiers never advanced, and the engine sat at 26,422 tokens of pressure
+    // reporting "504 would not reclaim anything at this tier" on every turn forever.
+    //
+    // Applying a token-neutral step is what lets the next plan continue from a lower tier and
+    // reach one that does reclaim. The transcript is still left alone this turn — there is
+    // nothing worth removing yet — so the request goes upstream unmodified either way.
     let _ = state.engine.eviction().apply(&plan, &parts).await;
+
+    if plan.planned_savings == 0 {
+        tracing::info!(
+            advanced = plan.updates.len(),
+            "proxy advanced the eviction ladder without reclaiming yet"
+        );
+        return None;
+    }
 
     let rewritten = drop_evicted(state, &messages, &evicted).await;
     if rewritten.len() == messages.len() {
@@ -421,30 +434,41 @@ async fn rewrite_request(state: &ProxyState, body: &[u8]) -> Option<Bytes> {
     serde_json::to_vec(&out).ok().map(Bytes::from)
 }
 
-/// Remove messages whose episodes the plan evicted.
+/// Remove messages whose episodes the plan moved to a tier that *renders smaller*.
 ///
 /// # Why the match is on content
 ///
-/// The plan identifies what to evict by `episode_id`; the request carries messages. The
-/// only thing connecting them is the text the episode was created from, so the proxy asks
-/// the fabric for each evicted episode and compares. Matching by *position* would be
-/// wrong: the transcript in the request is the harness's view, the episodes are this
-/// session's accumulated view, and they drift apart whenever a harness retries, trims its
-/// own history, or resumes a stored session.
+/// The plan identifies what to evict by `episode_id`; the request carries messages. The only
+/// thing connecting them is the text the episode was created from, so the proxy asks the
+/// fabric for each moved episode and compares. Matching by *position* would be wrong: the
+/// transcript in the request is the harness's view, the episodes are this session's
+/// accumulated view, and the two drift apart whenever a harness retries, trims its own
+/// history, or resumes a stored session.
 ///
-/// A message is dropped only when its text is the whole of an evicted episode's text. A
-/// prefix match would delete a user turn that merely begins with the same words as
-/// something else.
+/// A message is dropped only when its text is the whole of a moved episode's text. A prefix
+/// match would delete a user turn that merely begins with the same words as something else.
+///
+/// # Why "moved" is not enough
+///
+/// The first rung, `Masked`, renders a header plus a 160-character preview — which for a
+/// short message is **longer** than the message. Treating every move as evictable therefore
+/// deleted 599 of 602 messages while reclaiming nothing at all: the transcript lost its
+/// history and the prompt did not get smaller. Requiring an actual reduction is the same
+/// rule the planner applies to its own proposals, applied at the point where messages
+/// actually leave.
 async fn drop_evicted(
     state: &ProxyState,
     messages: &[serde_json::Value],
     evicted: &std::collections::HashSet<String>,
 ) -> Vec<serde_json::Value> {
-    // What each evicted episode actually said.
+    // The text of every episode whose new rendering is genuinely smaller than its content.
     let mut doomed: std::collections::HashSet<String> = std::collections::HashSet::new();
     for episode_id in evicted {
         if let Ok(row) = state.engine.memory().episode(episode_id).await {
-            doomed.insert(row.content.trim().to_string());
+            let rendered = row.render();
+            if rendered.len() < row.content.len() {
+                doomed.insert(row.content.trim().to_string());
+            }
         }
     }
     if doomed.is_empty() {
@@ -452,22 +476,52 @@ async fn drop_evicted(
     }
 
     let last = messages.len().saturating_sub(1);
+
+    // # Only a contiguous run *up to* the newest eviction may leave
+    //
+    // The plan's tier updates are per-episode and can name episodes scattered through the
+    // session. Removing exactly those would punch holes in the middle of a conversation —
+    // turn 3 and turn 40 gone, turns 4..39 present — which reads to a model as an incoherent
+    // transcript rather than a shortened one.
+    //
+    // The *newest* evicted message sets the cut, and everything before it leaves while
+    // everything after it stays. Cutting at the oldest instead would delete the entire
+    // conversation on any turn where the plan happened to name an early episode, which is
+    // exactly what happened: 599 of 602 messages went while the plan had only asked to move
+    // a few.
+    //
+    // This is also what the design is for. Eviction happens at a *boundary*: the head is
+    // preserved so the provider's cached prefix stays valid, and the tail is preserved
+    // because it is what the model is being asked about. The episode ids only decide where
+    // the boundary goes.
+    let cut = messages
+        .iter()
+        .enumerate()
+        .filter(|(index, message)| {
+            let role = message.get("role").and_then(|r| r.as_str()).unwrap_or("");
+            if role == "system" || *index == last {
+                return false;
+            }
+            let text = content_text(message);
+            !text.is_empty() && doomed.contains(text.trim())
+        })
+        .map(|(index, _)| index)
+        .next_back()
+        .map(|newest| newest + 1)
+        .unwrap_or(0);
+
     messages
         .iter()
         .enumerate()
         .filter(|(index, message)| {
             let role = message.get("role").and_then(|r| r.as_str()).unwrap_or("");
-            // The system prompt is the harness's contract with the model, and the newest
-            // turn is what it is asking about. Neither is ever dropped, whatever the plan
-            // says — losing either produces a request the model cannot answer sensibly.
+            // The system prompt is the harness's contract with the model, and the newest turn
+            // is what it is asking about. Neither is ever dropped, whatever the plan says —
+            // losing either produces a request the model cannot answer sensibly.
             if role == "system" || *index == last {
                 return true;
             }
-            let text = content_text(message);
-            if text.is_empty() {
-                return true;
-            }
-            !doomed.contains(text.trim())
+            *index >= cut
         })
         .map(|(_, message)| message.clone())
         .collect()

@@ -417,6 +417,15 @@ pub struct EvictionEngine {
     counter: TokenCounter,
 }
 
+/// The outcome of asking whether one episode can move down a tier.
+///
+/// A refusal carries *why*, so the planner can report a breakdown instead of one sentence
+/// covering several unrelated causes. See the note in `plan` for what that cost.
+enum Escalation {
+    Proposed(TierUpdate),
+    /// A static description of the guard that declined, counted per reason.
+    Refused(&'static str),
+}
 impl EvictionEngine {
     pub fn new(
         fabric: MemoryFabric,
@@ -600,22 +609,51 @@ impl EvictionEngine {
         let mut savings = 0usize;
         let mut selected: Vec<&Candidate> = Vec::new();
 
+        // # Why refusals are counted rather than discarded
+        //
+        // A single sentence — "every candidate is either at the tier floor or protected by an
+        // unresolved dependency" — is what a user sees when a plan reclaims nothing, and it
+        // names two possibilities without saying which, or how many of each. Diagnosing a
+        // real report of exactly this cost a round of reading the planner: the sentence was
+        // true, and useless.
+        //
+        // Counting per reason turns the same event into "400 at the tier floor, 0 protected
+        // by a dependency, 0 would not reclaim anything", which localises the problem
+        // immediately. The counts are cheap and only ever appear on the failure path.
+        let mut refusals: Vec<(&'static str, usize)> = Vec::new();
+        let mut note_refusal =
+            |reason: &'static str| match refusals.iter_mut().find(|(r, _)| *r == reason) {
+                Some((_, count)) => *count += 1,
+                None => refusals.push((reason, 1)),
+            };
+
         for c in &candidates {
             if savings >= needed {
                 break;
             }
-            let Some(update) = self.propose_escalation(c, needed - savings).await? else {
-                continue;
-            };
-            savings += update.tokens_before.saturating_sub(update.tokens_after);
-            updates.push(update);
-            selected.push(c);
+            match self.propose_escalation(c, needed - savings).await? {
+                Escalation::Proposed(update) => {
+                    savings += update.tokens_before.saturating_sub(update.tokens_after);
+                    updates.push(update);
+                    selected.push(c);
+                }
+                Escalation::Refused(reason) => note_refusal(reason),
+            }
         }
 
         if updates.is_empty() && needed > 0 {
+            let breakdown = if refusals.is_empty() {
+                "no candidate reached the escalation check at all".to_string()
+            } else {
+                refusals
+                    .iter()
+                    .map(|(reason, count)| format!("{count} {reason}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
             notes.push(format!(
                 "no episode could be escalated even though {needed} tokens of pressure exist; \
-                 every candidate is either at the tier floor or protected by an unresolved dependency"
+                 {breakdown}"
             ));
         }
 
@@ -1172,31 +1210,27 @@ impl EvictionEngine {
     }
 
     /// The next tier for a candidate, or `None` when it may not move.
-    async fn propose_escalation(
-        &self,
-        c: &Candidate,
-        still_needed: usize,
-    ) -> Result<Option<TierUpdate>> {
+    async fn propose_escalation(&self, c: &Candidate, still_needed: usize) -> Result<Escalation> {
         let Some(next) = c.current_tier.escalate() else {
-            return Ok(None);
+            return Ok(Escalation::Refused("are already at the tier floor"));
         };
 
         // FR-5: `Drop` only for explicitly droppable entries with no unresolved
         // dependents.
         if next == EpisodeTier::Dropped {
             if !self.policy.allow_drop {
-                return Ok(None);
+                return Ok(Escalation::Refused("reached Drop while allow_drop is off"));
             }
             if !c.droppable {
-                return Ok(None);
+                return Ok(Escalation::Refused("are not marked droppable"));
             }
             if c.dependents > 0 {
-                return Ok(None);
+                return Ok(Escalation::Refused("have a dependent that is still live"));
             }
             let node = NodeRef::episode(&c.episode_id);
             let graph = self.fabric.graph_around(&node, 256).await?;
             if graph.has_dependents(&node) {
-                return Ok(None);
+                return Ok(Escalation::Refused("are held by the graph"));
             }
         }
 
@@ -1208,7 +1242,7 @@ impl EvictionEngine {
             && c.tokens > still_needed.saturating_mul(8).max(8192)
             && next != EpisodeTier::Masked
         {
-            return Ok(None);
+            return Ok(Escalation::Refused("would overshoot the remaining need"));
         }
 
         let episode = self.fabric.episode(&c.episode_id).await?;
@@ -1217,12 +1251,25 @@ impl EvictionEngine {
         preview.eviction_tier = next;
         let tokens_after = preview.live_tokens(&self.counter);
 
-        // Never accept an escalation that does not actually reclaim tokens.
-        if tokens_after >= tokens_before {
-            return Ok(None);
+        // # Never accept a *terminal* escalation that does not reclaim tokens
+        //
+        // The original rule refused any step where `tokens_after >= tokens_before`, and it
+        // deadlocked the ladder. `Masked` renders a header plus a 160-character preview, so
+        // for a short episode the "masked stub" is LONGER than the content it replaces: a
+        // 34-token message becomes an 80-token stub. Every candidate was refused at the first
+        // rung, nothing ever reached `Referenced` — which renders to a single line — and a
+        // session could sit at 26,422 tokens of pressure while the planner reported "504 would
+        // not reclaim anything at this tier" on every turn, for as long as it ran.
+        //
+        // A step that reclaims nothing is still worth taking when a later rung will. The
+        // ladder is finite — `escalate()` returns `None` at the end — so this cannot loop, and
+        // the next plan continues from the new tier. What must still be refused is a step at
+        // the final rung, which genuinely cannot lead anywhere.
+        if tokens_after >= tokens_before && next.escalate().is_none() {
+            return Ok(Escalation::Refused("would not reclaim anything at this tier"));
         }
 
-        Ok(Some(TierUpdate {
+        Ok(Escalation::Proposed(TierUpdate {
             episode_id: c.episode_id.clone(),
             from: c.current_tier,
             to: next,
@@ -1601,6 +1648,51 @@ mod tests {
         // The plan's retained prefix is what the cache layer will try to keep.
         assert!(plan.retained_prefix_tokens > 0);
         assert!(engine.policy().keep_recent_tokens > 0);
+    }
+
+    #[tokio::test]
+    async fn a_small_window_can_still_reclaim_toward_its_target() {
+        // # The reproduction for a live bug
+        //
+        // Every other plan test here runs at a 32,768-token window, where the fixed
+        // `keep_recent_tokens` of 4096 is a sensible recent slice and leaves a large
+        // evictable middle. A long session over a *small* window is a configuration nothing
+        // tested, and it is exactly what the reverse proxy hits when it is told
+        // `--context-window 4096` -- which is also the window a user reaches for when they
+        // want compaction to happen often enough to watch.
+        //
+        // Observed in the field: a 602-message, 20,571-token transcript against a 4096-token
+        // proxy produced `planned_savings: 0` with the note "no episode could be escalated
+        // even though 26443 tokens of pressure exist". The transcript was forwarded
+        // unchanged, so the proxy's whole purpose silently did nothing.
+        //
+        // The 32,768 case is asserted too, so a regression that broke *both* is not mistaken
+        // for this bug being fixed.
+        let (fabric, engine, _b) = rig().await;
+        // 40k tokens of history, built from many small episodes the way a real conversation
+        // is rather than from a few enormous ones.
+        seed(&fabric, 400, 100).await;
+
+        let live: usize = {
+            let episodes = engine.fabric.evictable_episodes("s1").await.unwrap();
+            episodes.iter().map(|e| e.live_tokens(&engine.counter)).sum()
+        };
+        assert!(live > 32_768, "the fixture must outgrow every window tested, got {live}");
+
+        for window in [32_768usize, 8_192, 4_096] {
+            let plan = engine.plan("s1", "0", window, &big_prompt(live)).await.unwrap();
+            assert_eq!(
+                plan.pressure,
+                Pressure::Compacting,
+                "a {window}-token window with {live} live tokens must be under pressure"
+            );
+            assert!(
+                plan.planned_savings > 0,
+                "a {window}-token window with {live} live tokens reclaimed nothing; \
+                 notes: {:?}",
+                plan.notes
+            );
+        }
     }
 
     #[tokio::test]
