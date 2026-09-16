@@ -39,6 +39,14 @@ pub struct EngineConfig {
     pub project_id: Option<String>,
     /// Default context window when the backend cannot report one.
     pub default_n_ctx: usize,
+    /// Whether `default_n_ctx` was set deliberately rather than defaulted.
+    ///
+    /// Distinguishes "the user told me the window is 12288" from "nobody said, so it is
+    /// 32768". Without it a user's explicit setting loses to a backend's *simulated*
+    /// answer, which is how `--context-window` came to have no effect on the embedded
+    /// backend while appearing to be accepted.
+    #[serde(default)]
+    pub context_window_explicit: bool,
     pub eviction: EvictionPolicy,
     pub coherence: CoherenceConfig,
     pub recall: RecallPolicy,
@@ -55,6 +63,7 @@ impl Default for EngineConfig {
             project_root: None,
             project_id: None,
             default_n_ctx: 32_768,
+            context_window_explicit: false,
             eviction: EvictionPolicy::default(),
             coherence: CoherenceConfig::default(),
             recall: RecallPolicy::default(),
@@ -306,6 +315,20 @@ impl Engine {
     /// wrong in the optimistic direction is what causes a hard context-overflow
     /// failure mid-session, so the fallback is the conservative default.
     pub async fn context_window(&self) -> usize {
+        // # An explicit setting wins over the probe
+        //
+        // The backend is asked first because a real server knows its own `n_ctx` better
+        // than a config file does — but "real" is the operative word. The embedded
+        // backend *simulates* a slot and reports a fixed 32,768, so asking it first meant
+        // `--context-window 12288` was silently overridden by a number that describes
+        // nothing. A user who sets the window is stating a fact about their model; a
+        // simulation asserting otherwise is not evidence, and a flag that appears to do
+        // nothing is worse than one that does not exist.
+        //
+        // A reachable external backend still wins, because there the probe is real.
+        if self.config.context_window_explicit {
+            return self.config.default_n_ctx;
+        }
         let caps = self.backend.capabilities();
         if caps.reachable {
             // `n_ctx` is reported per slot; slot 0 is the default single-slot case.

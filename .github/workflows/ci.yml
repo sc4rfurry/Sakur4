@@ -120,6 +120,103 @@ jobs:
         run: cargo test -p sakur4-core --features encryption --test encryption_at_rest
 
   # ---------------------------------------------------------------------------
+  # The Hermes ContextEngine (FR-16), which is Python and lives outside the Rust
+  # workspace.
+  #
+  # `verify_engine.py` exercises the engine against a *live* daemon rather than a mock,
+  # because the engine's whole job is to talk to a running process and satisfy an
+  # interface Hermes owns. That means this job has to start one.
+  #
+  # The window is deliberately small. The daemon plans against the backend's reported
+  # window, and the embedded backend simulates 32,768 — so the test's synthetic history
+  # would sit below the trigger, the plan would correctly reclaim nothing, and the job
+  # would fail for a reason that has nothing to do with the engine.
+  # ---------------------------------------------------------------------------
+  hermes-engine:
+    name: Hermes context engine (FR-16)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build the daemon
+        run: cargo build --release -p sakur4d
+
+      - name: Start a daemon for the engine to talk to
+        run: |
+          ./target/release/sakur4d --db /tmp/hermes-engine.db --backend embedded \
+            --context-window 8192 serve --transport http --bind 127.0.0.1:8770 --no-dream &
+          for _ in $(seq 1 40); do
+            if curl -sf -o /dev/null http://127.0.0.1:8770/ 2>/dev/null || \
+               curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8770/ | grep -qE '^[24]'; then
+              echo "daemon up"; break
+            fi
+            sleep 0.5
+          done
+
+      # The engine imports `agent.context_engine`, which only exists inside Hermes. CI
+      # does not have Hermes, so the interface is stubbed: the contract under test is
+      # this engine's behaviour, not Hermes'.
+      - name: Stub the Hermes interface
+        run: |
+          mkdir -p /tmp/hermes-stub/agent
+          cat > /tmp/hermes-stub/agent/__init__.py <<'PY'
+          PY
+          cat > /tmp/hermes-stub/agent/context_engine.py <<'PY'
+          """Minimal stand-in for Hermes' ContextEngine ABC.
+
+          Only the surface this engine implements: the abstract methods plus the
+          documented attributes run_agent.py reads directly. Enough to import and
+          instantiate; the real class adds helpers this engine does not use.
+          """
+          from abc import ABC, abstractmethod
+          from typing import Any, Dict, List, Optional
+
+
+          class ContextEngine(ABC):
+              last_prompt_tokens: int = 0
+              last_completion_tokens: int = 0
+              last_total_tokens: int = 0
+              threshold_tokens: int = 0
+              context_length: int = 0
+              compression_count: int = 0
+              threshold_percent: float = 0.75
+              protect_first_n: int = 3
+              protect_last_n: int = 6
+              emit_automatic_compaction_status: bool = True
+
+              @property
+              @abstractmethod
+              def name(self) -> str: ...
+
+              @abstractmethod
+              def update_from_response(self, usage: Dict[str, Any]) -> None: ...
+
+              @abstractmethod
+              def should_compress(self, prompt_tokens: Optional[int] = None) -> bool: ...
+
+              @abstractmethod
+              def compress(self, messages: List[Dict[str, Any]], current_tokens: Optional[int] = None,
+                           focus_topic: Optional[str] = None, force: bool = False,
+                           memory_context: str = "") -> List[Dict[str, Any]]: ...
+
+              def on_session_start(self, session_id: str, **kwargs: Any) -> None: ...
+              def on_session_reset(self) -> None: ...
+              def update_model(self, model: Any = None, **kwargs: Any) -> None: ...
+          PY
+
+      - name: Verify the engine against the live daemon
+        env:
+          SAKUR4_URL: http://127.0.0.1:8770
+          HERMES_AGENT_DIR: /tmp/hermes-stub
+          SAKUR4_HERMES_PLUGIN: ${{ github.workspace }}/integrations/hermes-plugin
+        run: python integrations/hermes-plugin/verify_engine.py
+
+  # ---------------------------------------------------------------------------
   # Documentation: warn-free rustdoc, and doctests actually executed.
   # ---------------------------------------------------------------------------
   docs:

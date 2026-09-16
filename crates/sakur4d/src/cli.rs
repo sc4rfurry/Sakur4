@@ -52,9 +52,14 @@ pub struct Cli {
     #[arg(long, global = true, env = "SAKUR4_EMBED_MODEL")]
     pub embed_model: Option<String>,
 
-    /// Context window to plan against when the backend does not report one.
-    #[arg(long, global = true, default_value_t = 32_768)]
-    pub context_window: usize,
+    /// Context window to plan against.
+    ///
+    /// Optional rather than defaulted, so the engine can tell "the user set this" from
+    /// "nobody said". With a default the two are indistinguishable, and a user's
+    /// explicit value loses to a backend's *simulated* answer — which is how this flag
+    /// came to have no effect on the embedded backend while appearing to be accepted.
+    #[arg(long, global = true)]
+    pub context_window: Option<usize>,
 
     /// Increase log verbosity (`-v`, `-vv`).
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
@@ -278,7 +283,10 @@ pub(crate) fn build_config(cli: &Cli) -> EngineConfig {
     let mut cfg = EngineConfig {
         db_path: cli.db.display().to_string(),
         backend: cli.backend.clone(),
-        default_n_ctx: cli.context_window,
+        default_n_ctx: cli.context_window.unwrap_or(32_768),
+        // Set only when the flag was actually passed, so the engine can prefer the
+        // user's stated window over a backend's simulated one.
+        context_window_explicit: cli.context_window.is_some(),
         embed_url: cli.embed_url.clone(),
         embed_model: cli.embed_model.clone(),
         project_root: cli
