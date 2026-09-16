@@ -26,6 +26,10 @@ toml.workspace = true
 
 rmcp.workspace = true
 axum = "0.8"
+# Needed by the reverse proxy (FR-18), which forwards to the real inference server.
+reqwest.workspace = true
+parking_lot.workspace = true
+blake3.workspace = true
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
 http = "1"
@@ -41,5 +45,9 @@ uuid.workspace = true
 
 [dev-dependencies]
 axum = "0.8"
+# Needed by the reverse proxy (FR-18), which forwards to the real inference server.
+reqwest.workspace = true
+parking_lot.workspace = true
+blake3.workspace = true
 tempfile.workspace = true
 sakur4-testkit.workspace = true

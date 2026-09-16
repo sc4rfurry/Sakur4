@@ -1886,9 +1886,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "blake3",
  "chrono",
  "clap",
  "http",
+ "parking_lot",
+ "reqwest",
  "rmcp",
  "sakur4-core",
  "sakur4-testkit",
