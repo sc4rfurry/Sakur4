@@ -64,7 +64,17 @@ const UPSTREAM = arg("upstream", "http://100.98.158.87:8080");
 const PROXY = arg("proxy", "http://127.0.0.1:8091");
 const RECORDER = arg("recorder", null);
 const BIN = arg("bin", process.env.SAKUR4_BIN ?? null);
-const TURNS = Number(arg("turns", "300"));
+// # Sized to cross the trigger, not merely to be large
+//
+// The default was 300 turns, which is 20,571 tokens — under the 22,938-token trigger (70% of
+// a 32,768 window), so no plan was produced and the check failed for a reason that was the
+// check's own fault. It "passed" for a while only because the store was shared between runs
+// and the accumulated history pushed the measured size over the line, which means the earlier
+// green results were measuring leftover state rather than the code.
+//
+// 500 turns is ~34,000 tokens: comfortably over the trigger, and still well short of the
+// window, so the rewrite is a trim rather than an erasure.
+const TURNS = Number(arg("turns", "500"));
 const WINDOW = arg("window", "4096");
 
 const results = [];
