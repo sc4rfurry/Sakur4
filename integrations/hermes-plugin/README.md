@@ -50,9 +50,19 @@ sakur4d serve --transport http --bind 127.0.0.1:8770 --context-window <your mode
 
 ## Verifying it
 
-`verify_engine.py` exercises the engine against a **live daemon**. It is a script rather
-than a unit test because the engine's whole job is to talk to a running process and to
-satisfy an interface Hermes owns — mocking the daemon would test the mock.
+Two things are worth verifying separately, and only one of them is done.
+
+**The engine, against a live daemon** — done. `verify_engine.py` exercises it against a
+running process. It is a script rather than a unit test because the engine's whole job is
+to talk to a daemon and satisfy an interface Hermes owns; mocking the daemon would test
+the mock.
+
+**A Hermes session driving a model with this engine active** — **not done.** The engine
+registers and is instantiated by a real Hermes install, but a one-shot session in an
+isolated profile could not be routed to a local model, and the cause is Hermes'
+provider resolution rather than this engine. The configuration that *does* work, the three
+enabling details that are easy to miss, and exactly where it stopped are recorded in
+[LIVE-TESTING.md](LIVE-TESTING.md), so finishing it does not mean repeating that search.
 
 ```bash
 # Terminal 1
