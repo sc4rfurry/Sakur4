@@ -71,89 +71,89 @@ without one nothing resolves at all.
 
 ## Where it stopped
 
-A one-shot session in an isolated profile never reaches the local server:
+A one-shot session never reaches the intended model. Selecting it four different ways all
+produce the same failure:
 
 ```console
-$ HERMES_HOME=/tmp/hermes-test-home hermes -z "Reply with exactly: HERMES_OK"
-HTTP 401: The API Key appears to be invalid or may have expired.
+$ hermes -z "Reply with exactly: HERMES_OK"
+HTTP 401: Invalid Authentication          # or: The API Key appears to be invalid…
 ```
 
-That message is **OpenRouter's wording**, so the request is going to a cloud provider that
-was never configured for this profile. Four things were ruled out by measurement rather
-than by reading:
+The wording varies because **it comes from whichever fallback provider answers**, not from
+the model that was asked for. Six things were ruled out by measurement:
 
-**The local server is fine.** It answers 200 with *and* without an `Authorization` header:
+| Ruled out | How |
+|---|---|
+| The local model server | answers `200` with **and without** an `Authorization` header |
+| The engine | the failure is identical whether `context.engine` is `sakur4` or unset |
+| The config syntax | `load_config()` returns the provider, engine and model exactly as written |
+| The engine's daemon | answers MCP over curl, and reports `anchors: 1` after a pin |
+| The plugin | registers and loads (`Sakur4ContextEngine`, `name: sakur4`) |
+| Process spawning | `Start-Process cmd /c echo` exits 0 |
+
+The decisive test is a listener this repository controls
+([`docs/verification/capture-request.ps1`](../../docs/verification/capture-request.ps1)),
+with the local provider's `base_url` pointed at it. **The capture file is never written** —
+nothing arrives — so the request does not reach the endpoint that was configured, however
+it was selected:
+
+- `--model custom:llama/Qwen3.8-27B` — nothing arrives
+- inherited `modelRoles`, with the config's own default — nothing arrives
+- a hand-written `custom_providers` entry naming the provider — nothing arrives
+- the user's working config copied wholesale plus `context.engine: sakur4` — nothing arrives
+
+## The one Hermes behaviour worth knowing from this
+
+**A `--model` override that does not resolve fails silently.** The config's
+`model.default` is a cloud model, so when the override is not understood Hermes uses that
+instead — and the error names *its* credentials:
 
 ```console
-$ curl -s -X POST http://your-llama-server:8080/v1/chat/completions \
-       -H 'Authorization: Bearer local-only' -d '{...}'      → HTTP 200
-$ curl -s -X POST http://your-llama-server:8080/v1/chat/completions -d '{...}'  → HTTP 200
+$ hermes -z "Reply with exactly: HERMES_OK" --model custom:llama/Qwen3.8-27B
+HTTP 401: Invalid Authentication
 ```
 
-**The config parses.** `load_config()` returns the custom provider, the engine name, and
-the default model exactly as written.
+Nothing in that message says the model was not found, and `hermes doctor` reports
+"✓ API key or custom endpoint configured". From outside the harness this cost a round of
+work; from inside it is one `hermes status`.
 
-**The request is not reaching the configured endpoint at all.** The provider was pointed
-at a listener this repository controls —
-[`docs/verification/capture-request.ps1`](../../docs/verification/capture-request.ps1) —
-and the capture file was never written. Nothing arrived. So the failure is upstream of any
-HTTP call to the local provider: Hermes is choosing a different model than the one the
-config names.
-
-**The engine is not involved.** It registers and loads (above), and the failure is
-identical whether `context.engine` is `sakur4` or unset.
-
-### The most likely cause
-
-`state.auth` in Hermes is driven by `modelRoles` and per-model auth entries, not only by
-the top-level `model.default`. The user's own config carries `modelRoles`
-(`default: infron/qwen/qwen3.8-27b:free`) and a large `custom_providers` list, and this
-isolated profile was built by adding to a config that already had them. A model string an
-error message cannot resolve falls back — and the fallback's credential is the expired one.
-
-Confirming it means reading `hermes_cli/auth.py`'s `state.auth` resolution or running with
-only `modelRoles` set. Both are a few minutes **on a profile whose routing already works**,
-which is why that is the recommended next step rather than more work here.
+**The local provider is fine.** Pointed at directly, the same server answers `200`. The
+problem is entirely in how Hermes resolves a model string for a custom provider.
 
 ## What this does and does not mean
 
 **Verified:** the engine registers, is instantiated by Hermes, talks to a live daemon, and
 passes 27 contracts against it. The integration is correct.
 
-**Not verified:** a Hermes session driving a model with this engine active. So the
-in-turn behaviour question remains open here, exactly as model-initiated tool use remains
-open for OMP.
+**Not verified:** a Hermes session driving a model with this engine active. The in-turn
+behaviour question stays open here, exactly as model-initiated tool use stays open for OMP.
 
-**Not a defect in Sakur4.** Every failure is in provider selection, which is Hermes'
-configuration; the request never reaches Sakur4 or the model server, and the same engine
-passes its contracts against the same daemon.
+**Not a defect in Sakur4.** The request never reaches Sakur4 or the model server, and the
+same engine passes its contracts against the same daemon.
 
-## To finish it
+## To finish it — five minutes, from inside
 
-The recommended route is not more work in an isolated profile. It is a few minutes **on a
-profile whose routing already works**, which is the user's own:
-
-1. Confirm the model actually selected: `hermes status`, or send one prompt with
-   `hermes -z "ping"` and check which provider answers.
-2. Add `context: { engine: sakur4 }` to `config.yaml` and run the same prompt again.
-3. If the engine is engaged and the answer changes, the injection path is proven.
-
-The engine side needs nothing further. On a profile where provider selection works:
+The remaining step cannot be done from outside the harness, because the failing seam is
+Hermes' own model resolution. On a profile where a session already works:
 
 ```bash
-# 1. A daemon the engine can reach.
-sakur4d --db ~/.sakur4/hermes.db --backend http://your-llama-server:8080 \
-        serve --transport http --bind 127.0.0.1:8771
+# 1. Confirm which model a session actually uses. No override — use the configured one.
+hermes status
+hermes -z "Reply with exactly: OK"        # this must succeed before going further
 
-# 2. The plugin, and the engine selected.
-cp -r integrations/hermes-plugin "$HERMES_HOME/plugins/sakur4"
-hermes plugins enable sakur4
-# then add `context: { engine: sakur4 }` to config.yaml
+# 2. Only then add the engine, and change nothing else.
+#    context:
+#      engine: sakur4
+hermes -z "Reply with exactly: OK"        # still succeeds?
 
-# 3. A live turn, and the engine's own status.
+# 3. Ask something only memory can answer.
 hermes -z "What is the deployment codename? One line, or UNKNOWN."
 ```
 
-If the answer is correct, the engine injected the Anchor Set into a real Hermes request —
-which is the same contract the OMP extension was found to be violating, and the reason
-this is worth finishing.
+A **correct** codename at step 3 proves the engine injected the Anchor Set into a real
+Hermes request — the same contract the OMP extension was found violating, and the reason
+this is worth finishing. `UNKNOWN` means injection is not reaching the request, and the
+engine needs the treatment the OMP extension got.
+
+If a `--model` override appears to be ignored, that is the failure mode above rather than
+the engine: check `hermes status` before blaming anything downstream.
