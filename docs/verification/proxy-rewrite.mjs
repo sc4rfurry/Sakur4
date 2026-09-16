@@ -62,6 +62,7 @@ const PROXY = arg("proxy", "http://127.0.0.1:8091");
 const RECORDER = arg("recorder", null);
 const BIN = arg("bin", process.env.SAKUR4_BIN ?? null);
 const TURNS = Number(arg("turns", "300"));
+const WINDOW = arg("window", "4096");
 
 const results = [];
 const check = (name, fn) => {
@@ -165,7 +166,7 @@ async function main() {
       [
         "--db", `${process.env.TEMP ?? "/tmp"}/sakur4-proxy-rewrite.db`,
         "--backend", UPSTREAM,
-        "--context-window", "4096",
+        "--context-window", WINDOW,
         "proxy",
         "--bind", `127.0.0.1:${proxyPort}`,
         "--upstream", recorder.url,
@@ -280,6 +281,24 @@ async function main() {
       (m) => typeof m.content === "string" && m.content.includes("[Sakur4 removed"),
     );
     assert.ok(index >= 1, `marker at index ${index} would displace the cacheable head`);
+  });
+
+  // # A rewrite must shorten, not erase
+  //
+  // The first iteration of this check ran a 20,571-token transcript against a 4,096-token
+  // window and kept 3 messages of 602. That is arithmetically correct — the window genuinely
+  // cannot hold the conversation — and it is not what a user wants to discover their proxy
+  // doing to a session. At any window where the transcript is over budget but the sum of
+  // budget and target exceeds it, some recent history should survive, because the plan aims
+  // at `target` rather than at zero.
+  //
+  // Asserted as a floor rather than a ratio: the right fraction depends on the window, and a
+  // test that hard-codes one would fail the next time the profile changes.
+  check("some conversation survives the rewrite", () => {
+    assert.ok(
+      forwarded.messages.length >= 3,
+      `kept only ${forwarded.messages.length} message(s) — the rewrite erased the session`,
+    );
   });
 
   check("the rewrite actually sends the model less", () => {

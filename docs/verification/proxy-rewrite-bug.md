@@ -1,113 +1,120 @@
-# The proxy never rewrites, and the engine says why
+# State of the reverse proxy after the deadlock fix
 
-Status: **open bug, reproduced, not yet fixed.**
+Two rounds of work on FR-18. The deadlock is fixed and verified. One quality bug remains,
+and this records both precisely so the next round does not re-derive them.
 
-## What happens
+## Fixed: the tier ladder deadlocked
 
-A transcript far past the window is forwarded **unchanged**. Reproduced with 602 messages
-and 20,571 tokens measured by the real server's own tokenizer, against a proxy configured
-with `--context-window 4096`:
+**Symptom.** A transcript far past the window was forwarded **unchanged**. Reproduced with
+602 messages / 20,571 tokens (measured by the real server's tokenizer) against a
+4096-token proxy:
 
-```console
-$ node docs/verification/proxy-rewrite.mjs --bin ~/.cargo/bin/sakur4d --turns 300
-  transcript: 602 messages, 20571 tokens by the server's own tokenizer
-  FAIL  an over-window transcript is rewritten
-        expected fewer than 602 messages, saw 602
-  FAIL  exactly one marker replaces what went
-        expected one marker, found 0
-  602 messages in, 602 out — 0 removed
+```
+FAIL  an over-window transcript is rewritten
+      expected fewer than 602 messages, saw 602
+602 messages in, 602 out — 0 removed
 ```
 
-The recorder confirms the body reached the upstream verbatim — 104,181 bytes, zero markers:
+**Cause.** `propose_escalation` refused any step where `tokens_after >= tokens_before`. The
+first rung, `Masked`, renders a header plus a 160-character preview — which for a **short
+message is longer than the message**. A 34-token turn became an ~80-token stub. So every
+candidate was refused at the first rung, none ever reached `Referenced`, and the engine sat
+at 26,422 tokens of pressure reporting the same sentence every turn, forever.
 
-```console
-$ node docs/verification/recorder.mjs --listen 8775 --upstream http://host:8080
-  [recorder] 602 messages, 0 marker(s), 104181 bytes
+**Fix.** A token-neutral step is accepted when a later rung will reclaim; only a *terminal*
+step that reclaims nothing is refused. The ladder is finite (`escalate()` returns `None` at
+the end), so this cannot loop.
+
+**Honest note on how long this took.** The old diagnostic was one sentence covering several
+unrelated causes:
+
+> no episode could be escalated even though {n} tokens of pressure exist; every candidate is
+> either at the tier floor or protected by an unresolved dependency
+
+That sentence was true and useless. It named two possibilities without saying which, or how
+many of each. It is now a counted breakdown, which is what produced the answer in one line:
+
+```
+504 would not reclaim anything at this tier
 ```
 
-## Why — the engine's own diagnostic
+The diagnostic improvement is arguably worth more than the fix.
 
-Asked directly, the plan reports plenty of pressure and refuses to act on it:
+## Open: the plan overshoots its own target, badly
 
-```console
-$ # context.plan_eviction for session proxy-rewrite
-pressure        : compacting
-budget          : 4096
-target          : 1229
-live_tokens     : 27650
-planned_savings : 0
-updates         : 0
-notes           : no episode could be escalated even though 26443 tokens of pressure exist;
-                  every candidate is either at the tier floor or protected by an unresolved
-                  dependency
+Measured by growing one transcript turn by turn and reading the upstream's reported
+`prompt_tokens` after each step.
+
+At a 32,768-token proxy, `window-first` profile (trigger 70% = 22,938, target 30% = 9,830):
+
+```
+sent 202 msgs -> upstream prompt_tokens 12811
+sent 402 msgs -> upstream prompt_tokens  3411   ← rewrite fires
+sent 602 msgs -> upstream prompt_tokens  3413   ← capped
+sent 802 msgs -> upstream prompt_tokens  3413
 ```
 
-That note is the same branch the `ab.mjs` benchmark hit months ago, and it is the honest
-one — the planner is not failing silently. The question it raises is why 26,443 tokens of
-pressure produce no escalation when the tier ladder is `live → masked → summarized →
-archived` and `max_tier_step` is 1, which permits exactly one step.
+At an 81,920-token proxy (trigger 57,344, target 24,576):
 
-## What has been ruled out
-
-Read from the code, not assumed:
-
-| Suspect | Finding |
-|---|---|
-| Candidates never collected | `score_candidates` does **not** filter on `droppable`; all 602 episodes become candidates |
-| The episode is already at the floor | `propose_escalation` calls `c.current_tier.escalate()`, which returns `Some` from `Live` |
-| `allow_drop` blocking it | `allow_drop: false` only gates the `Dropped` tier, and `Masked` is reached first |
-| Overshoot guard | the guard only rejects when `c.tokens > still_needed * 8`; `still_needed` is ~26,421 against episodes of ~34 tokens |
-| The commits never happened | `recall` returns the transcript's own text verbatim from the store |
-
-So the refusal is inside `propose_escalation`'s final check, or in the prefix/recent window
-that runs *before* it:
-
-```rust
-// Never accept an escalation that does not actually reclaim tokens.
-if tokens_after >= tokens_before {
-    return Ok(None);
-}
+```
+sent 302 msgs -> upstream prompt_tokens 19411
+sent 602 msgs -> upstream prompt_tokens 39211
+sent 902 msgs -> upstream prompt_tokens  3412   ← rewrite fires
+sent 1202 msgs -> upstream prompt_tokens  3414   ← capped
 ```
 
-and
+Two things are wrong here, and they are different bugs:
 
-```rust
-let recent_start = Self::recent_start_index(&episodes, self.policy.keep_recent_tokens);
-```
+1. **It settles at 3,412 rather than near the target.** At 81,920 the target is 24,576, so a
+   conforming plan would leave roughly that much context. It leaves **14% of the target**.
+   Most of the model's window goes unused, which is the opposite of the project's purpose.
 
-`keep_recent_tokens` defaults to **4096** — a fixed number, equal to this proxy's entire
-budget. Under a 4096-token window the recent window and the whole budget are the same size,
-so the evictable middle can be empty by construction. That is the leading hypothesis and it
-is one `assert!` away from being settled.
+2. **The result is identical at both windows.** 3,412 and 3,414 at 32k, 3,412 and 3,414 at
+   81k. A plan that aims at a fraction of the window should scale with the window. This
+   strongly suggests the post-plan size is being decided by something window-independent —
+   most likely the fixed `keep_recent_tokens: 4096` plus the prefix, with the target playing
+   no effective part.
 
-## The likely fix
+The second observation is the more useful one, because it is a single number that should vary
+and does not.
 
-`keep_recent_tokens` is an absolute number in a policy whose other knobs became relative
-(the profiles use ratios). A window-relative floor — the smaller of 4096 and some fraction
-of the budget — would keep the same behaviour on a 32k or 80k window while leaving a middle
-to evict on a small one.
+### Where to look
 
-If that is not it, the next step is to assert inside the escalation loop and read which guard
-returns `None`, which is a five-minute experiment now that the reproduction is one command.
+`plan()` computes `needed = total.saturating_sub(target)` and stops the escalation loop once
+accumulated savings reach it. Two candidates:
 
-## Why this was not caught earlier
+- The loop accumulates `tokens_before - tokens_after` per step but the *terminal* step for a
+  `Referenced` episode reclaims nearly the whole episode at once, so the step that crosses
+  `needed` overshoots by up to a whole episode — and then the loop exits with everything
+  already escalated, because each earlier step in the same pass was also accepted.
+- `retained_prefix_tokens` plus `keep_recent_tokens` may be what actually bounds the result,
+  in which case `target_for()` is decorative and the fix belongs there.
 
-`docs/bench/ab.mjs` runs at a **32k+** window, where 4096 is a sane recent window and the
-middle is large. `verify_engine.py` runs at 8192. Every existing test used a window big
-enough to hide this, and the proxy's own Rust tests use a 2048 window but drive *fixtures*
-whose `planned_savings` is asserted indirectly through the upstream recording — which passed
-because those tests never required a rewrite to happen, only that a passthrough did not break.
+One measurement settles it: print `needed`, `savings` at exit, and `plan.token_after_plan()`
+for a single plan and check whether `token_after_plan` tracks `target`. That is a five-minute
+experiment with the fixtures in `docs/verification/`.
 
-The general lesson, again: the bug lives at a configuration nothing else used.
+## What is verified
 
-## Reproducing in one command
+- **The deadlock is fixed.** 8 of 8 contracts pass in `docs/verification/proxy-rewrite.mjs`,
+  wired into `verify.mjs` so it runs every time.
+- **The structure is right.** The system prompt and newest turn survive; exactly one marker
+  replaces what went; the marker sits after the system prompt; the rewrite sends less.
+- **Proportionality is asserted**, not assumed: `some conversation survives the rewrite`.
+  The first version of that check ran a 20,571-token transcript against a 4,096-token window
+  and kept 3 messages of 602 — arithmetically correct, and not what a user wants to discover
+  their proxy doing. The floor catches that.
+- **Ten Rust tests** cover the plan at 4,096 / 8,192 / 32,768 windows, which no existing test
+  did; every previous one used 32,768.
+
+## Reproducing
 
 ```bash
-node docs/verification/recorder.mjs --listen 8775 --upstream http://host:8080 &
-sakur4d --db /tmp/rw.db --backend http://host:8080 --context-window 4096 -v \
-        proxy --bind 127.0.0.1:8091 --upstream http://127.0.0.1:8775 --session rw &
-node docs/verification/proxy-rewrite.mjs --proxy http://127.0.0.1:8091 \
-        --recorder http://127.0.0.1:8775 --upstream http://host:8080 --turns 300
-```
+# Growth test: watch upstream prompt_tokens after each step
+sakur4d --db /tmp/rw.db --backend http://host:8080 --context-window 81920 -v \
+        proxy --bind 127.0.0.1:8096 --upstream http://host:8080 --session rw &
+node docs/verification/grow-session.mjs --proxy http://127.0.0.1:8096
 
-`--bin <sakur4d>` makes the script own the proxy too, so it is genuinely one command.
+# Contract test
+node docs/verification/proxy-rewrite.mjs --bin ~/.cargo/bin/sakur4d --window 32768
+```
