@@ -226,11 +226,22 @@ for (const [label, make] of queries) {
 
 console.log("");
 console.log(`worst p95 across classes: ${worst.toFixed(0)} ms   (NFR-2 target: < 300 ms)`);
-console.log(
-  worst < 300
-    ? `VERDICT: PASS at ${N.toLocaleString()} entries`
-    : `VERDICT: FAIL at ${N.toLocaleString()} entries`,
-);
+const verdict = worst < 300 ? "PASS" : "FAIL";
+console.log(`VERDICT: ${verdict} at ${N.toLocaleString()} entries`);
+
+// # A machine-readable verdict, because scraping the human one was fragile
+//
+// `verify.mjs` first decided pass or fail by matching text in this output, and matched the
+// wrong anchor — so a run that passed with a 21 ms p95 was reported as a failure. Prose is
+// for people; a caller needs a field. Written before cleanup so it survives even if the
+// store removal fails.
+if (process.env.SAKUR4_VERDICT_JSON) {
+  const fs = await import("node:fs");
+  fs.writeFileSync(
+    process.env.SAKUR4_VERDICT_JSON,
+    JSON.stringify({ check: "nfr2-recall", verdict, worstP95Ms: worst, entries: N, target: 300 }, null, 2),
+  );
+}
 
 cleanup();
 rmSync(DB, { force: true });

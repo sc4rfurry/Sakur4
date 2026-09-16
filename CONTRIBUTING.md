@@ -27,11 +27,25 @@ cargo run -p sakur4d -- doctor                 # what did it detect?
 
 ## Before opening a pull request
 
-CI enforces all four of these, but running them locally saves a round trip:
+CI enforces all four of these, but there is now one command that runs everything:
 
 ```bash
-cargo fmt --all
-cargo clippy --workspace --all-targets --all-features
+node verify.mjs                              # everything this machine can run
+node verify.mjs --upstream http://host:8080  # add the live llama.cpp checks
+node verify.mjs --quick                      # skip the slow benchmarks
+node verify.mjs --only rust,hermes           # a subset, by group or check id
+node verify.mjs --list                       # what exists, and what each needs
+```
+
+It reports **skipped separately from passed**, because those are different things: a run
+that skipped its live-server checks is not a green run. `--require-all` makes a skip fail,
+which is what CI uses.
+
+The individual commands, if you would rather drive them yourself:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets
 cargo test --workspace --all-targets
 cargo doc --workspace --no-deps
 ```
