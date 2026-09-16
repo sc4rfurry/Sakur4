@@ -486,14 +486,21 @@ async fn drop_evicted(
     //
     // The *newest* evicted message sets the cut, and everything before it leaves while
     // everything after it stays. Cutting at the oldest instead would delete the entire
-    // conversation on any turn where the plan happened to name an early episode, which is
-    // exactly what happened: 599 of 602 messages went while the plan had only asked to move
-    // a few.
+    // conversation on any turn where the plan happened to name an early episode.
     //
-    // This is also what the design is for. Eviction happens at a *boundary*: the head is
-    // preserved so the provider's cached prefix stays valid, and the tail is preserved
-    // because it is what the model is being asked about. The episode ids only decide where
-    // the boundary goes.
+    // # Not bounded here, deliberately
+    //
+    // An attempt to also require the cut to leave `target` tokens behind produced a retained
+    // prompt of **108 tokens** — worse than the bug it was meant to fix — because the backward
+    // walk measured plain message text while the plan's target is in rendered-timeline tokens,
+    // and the two are not comparable. It was reverted rather than debugged in place: the
+    // planner already aims at the target, and a second, differently-measured bound fighting it
+    // is how a fix becomes two bugs.
+    //
+    // What the measurement did establish is recorded in docs/verification/proxy-rewrite-bug.md:
+    // with the engine's cut alone, a session settles at the same retained size whatever the
+    // window, which the engine's own window-relative target cannot explain. That is the open
+    // defect, and it belongs in the planner rather than here.
     let cut = messages
         .iter()
         .enumerate()
