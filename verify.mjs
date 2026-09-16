@@ -470,7 +470,7 @@ function benchChecks() {
 }
 
 /** Live checks: everything that needs a real llama.cpp. */
-function liveChecks() {
+async function liveChecks() {
   // # Why `--only` suppresses the skip records, not just the checks
   //
   // A caller who passes `--only rust,bench` has said which groups they care about. If the
@@ -517,16 +517,14 @@ function liveChecks() {
     );
   }
 
-  // The reverse proxy's rewrite path, driven with a real multi-turn transcript. This is the
-  // check that found a live bug — with a 4096-token window the engine declines to reclaim
-  // 26,443 tokens of pressure, so the proxy forwards everything unchanged. It is wired in
-  // rather than left as a script so the bug stays visible instead of being a document.
+  // The reverse proxy's rewrite path, driven with a real multi-turn transcript. It is wired in
+  // rather than left as a script so the behaviour stays visible instead of becoming a document.
   const rewrite = join(ROOT, "docs", "verification", "proxy-rewrite.mjs");
   const binary = daemonBinary();
   if (existsSync(rewrite) && binary) {
     const rw = run(
       process.execPath,
-      [rewrite, "--bin", binary, "--upstream", UPSTREAM, "--turns", "300"],
+      [rewrite, "--bin", binary, "--upstream", UPSTREAM],
       { timeout: 1_800_000 },
     );
     const ok = /VERDICT: PASS/.test(rw.output);
@@ -534,8 +532,80 @@ function liveChecks() {
       "live",
       "proxy rewrites an over-window transcript",
       ok ? PASS : FAIL,
-      ok ? "the transcript was trimmed and a marker left" : lastLines(rw.output, 8),
+      ok ? "10 contracts: trimmed, marked, and proportionate" : lastLines(rw.output, 8),
     );
+
+    // # A single large request is a different path from a growing session
+    //
+    // The check above sends its transcript in one shot too, but the *growth* test is what
+    // distinguishes the two cases: a session that grows a turn at a time lets each plan pick
+    // up the tier ladder where the last one left it. For five rounds the single-request case
+    // was broken while staged tests passed — the plan advanced 903 episodes, reported zero
+    // savings, and the proxy discarded the result and forwarded everything.
+    //
+    // The assertion here is that retained context tracks the target, which is 30% of the
+    // window under `window-first`. A settled value far below it is precisely the failure, and
+    // it is invisible to any "did it rewrite" check because nothing is rewritten.
+    const growth = join(ROOT, "docs", "verification", "grow-session.mjs");
+    if (existsSync(growth)) {
+      const port = 8700 + (process.pid % 60);
+      const growDir = mkdtempSync(join(tmpdir(), "sakur4-grow-"));
+      const daemon = spawnDaemon(binary, [
+        "--db", join(growDir, "grow.db"),
+        "--backend", UPSTREAM,
+        "--context-window", "32768",
+        "proxy",
+        "--bind", `127.0.0.1:${port}`,
+        "--upstream", UPSTREAM,
+        "--session", "verify-grow",
+      ]);
+      let ready = false;
+      const deadline = Date.now() + 25_000;
+      while (Date.now() < deadline && !ready) {
+        try {
+          const probe = await fetch(`http://127.0.0.1:${port}/v1/models`, {
+            signal: AbortSignal.timeout(1500),
+          });
+          ready = probe.status > 0;
+        } catch {
+          await new Promise((r) => setTimeout(r, 250));
+        }
+      }
+      if (!ready) {
+        record("live", "proxy trims a single large request", SKIP, "the proxy did not start");
+      } else {
+        const g = run(
+          process.execPath,
+          [growth, "--proxy", `http://127.0.0.1:${port}`, "--steps", "600", "--every", "300"],
+          { timeout: 1_200_000 },
+        );
+        const settled = Number((g.output.match(/Settled at (\d+) tokens/) ?? [])[1] ?? 0);
+        const target = Math.round(32_768 * 0.3);
+        const good = settled >= target * 0.4;
+        record(
+          "live",
+          "proxy trims a single large request",
+          good ? PASS : FAIL,
+          settled === 0
+            ? lastLines(g.output, 6)
+            : `settled at ${settled} tokens against a ${target}-token target` +
+              (good ? "" : " — far below it, so the trim erases rather than shortens"),
+        );
+      }
+      try {
+        daemon?.kill();
+      } catch {
+        /* already gone */
+      }
+      // The daemon may still hold the store open, and on Windows an open handle makes the
+      // removal fail with EBUSY rather than being deferred. Losing a temp directory is not
+      // worth failing a verification run over, so the OS gets to clean up instead.
+      try {
+        rmSync(growDir, { recursive: true, force: true });
+      } catch {
+        /* the OS will reclaim the temp directory */
+      }
+    }
   }
 }
 
@@ -647,7 +717,7 @@ async function main() {
   encryptionChecks();
   await hermesChecks();
   benchChecks();
-  liveChecks();
+  await liveChecks();
   harnessChecks();
 
   const counts = summarize();
