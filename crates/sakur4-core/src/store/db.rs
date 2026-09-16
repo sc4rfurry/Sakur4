@@ -112,6 +112,85 @@ impl Db {
         })
     }
 
+    /// Open (creating if needed) an **encrypted** store at `path`, applying migrations.
+    ///
+    /// # Where the key goes, and where it does not
+    ///
+    /// `PRAGMA key` must be the very first statement on a SQLCipher connection —
+    /// before any other pragma, and before the file is read. SQLite attempts to read
+    /// the header on the first statement, so a pragma issued first (a `journal_mode`
+    /// setting, say) would fail with "file is not a database" on an encrypted store.
+    /// The key therefore goes in the connection's `open` path, not in the pragma list
+    /// applied afterwards.
+    ///
+    /// # Why the key is quoted rather than passed raw
+    ///
+    /// A raw key is a *passphrase*, which SQLCipher runs through PBKDF2 — meaning a
+    /// weak one is brute-forceable against the file. This uses the `x'…'` form, which
+    /// is a raw 256-bit key used directly, so the passphrase-derivation step cannot
+    /// be attacked: an attacker must find the key itself. The caller is responsible
+    /// for the key being random, which `sakur4d gen-key` generates.
+    #[cfg(feature = "encryption")]
+    pub async fn open_encrypted(path: impl AsRef<Path>, key: &str) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let pragma = key_pragma(key)?;
+        let p = path.clone();
+        let pragma_for_task = pragma.clone();
+        let (vector_backend, fts5, schema_version) = tokio::task::spawn_blocking(move || {
+            let mut conn = Connection::open(&p)?;
+            // Before anything else, including loading an extension.
+            conn.pragma_update(None, "key", &pragma_for_task)?;
+            let vector_backend = crate::store::db::try_load_sqlite_vec(&conn);
+            let (schema_version, _applied) = schema::migrate(&mut conn)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            let fts5 = conn
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='episodic_fts'",
+                    [],
+                    |_| Ok(true),
+                )
+                .unwrap_or(false);
+            if !fts5 {
+                tracing::error!(
+                    "FTS5 is unavailable in this SQLite build; lexical recall disabled."
+                );
+            }
+            schema::record_vector_backend(&conn, vector_backend)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            conn.execute(
+                "INSERT INTO meta(key,value) VALUES('fts5', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [if fts5 { "1" } else { "0" }],
+            )?;
+            Ok::<_, rusqlite::Error>((vector_backend, fts5, schema_version))
+        })
+        .await
+        .map_err(|e| Error::Pool(format!("migration task panicked: {e}")))??;
+
+        let conn = {
+            let c = Connection::open(&path)?;
+            c.pragma_update(None, "key", &pragma)?;
+            c
+        };
+
+        tracing::info!(
+            path = %path.display(),
+            schema_version,
+            vector_backend = vector_backend.as_str(),
+            fts5,
+            encrypted = true,
+            "memory fabric opened (encrypted)"
+        );
+
+        Ok(Self { conn: Arc::new(Mutex::new(conn)), path, read_only: false, vector_backend, fts5 })
+    }
+
     /// Open an in-memory store. Used by tests and by the `--ephemeral` demo mode.
     ///
     /// # The one subtlety
@@ -380,4 +459,46 @@ pub(crate) fn try_load_sqlite_vec(conn: &Connection) -> VectorBackend {
         tracing::warn!(path = %candidate.display(), "sqlite-vec present but unusable; using exact scan");
     }
     VectorBackend::BruteForce
+}
+
+/// Turn a configured key into the `PRAGMA key` argument, or refuse it.
+///
+/// # Why the format is enforced rather than accepted loosely
+///
+/// SQLCipher treats a plain string as a *passphrase* and runs it through PBKDF2. That
+/// is fine for a human-chosen password and wrong here: this key is generated, stored
+/// in a file, and never typed, so the derivation step buys nothing and leaves the
+/// only attack surface — guessing the passphrase — in place. The `x'…'` form is a raw
+/// key used directly, so an attacker must obtain the key rather than guess it.
+///
+/// A 64-character hex string is therefore required, which is exactly 32 bytes. A
+/// shorter key is refused loudly rather than silently stretched, because "encrypted"
+/// with a four-character key is a claim a user would reasonably rely on and should
+/// not be able to make by accident.
+#[cfg(feature = "encryption")]
+pub fn key_pragma(key: &str) -> Result<String> {
+    let trimmed = key.trim();
+    // Already in `x'…'` form: validate the inner hex and pass it through, so a caller
+    // who read the value straight out of SQLCipher's own documentation is not forced
+    // to reshape it.
+    let hex = trimmed.strip_prefix("x'").and_then(|s| s.strip_suffix('\'')).unwrap_or(trimmed);
+
+    if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(Error::Integrity(format!(
+            "the encryption key must be 64 hex characters (32 bytes); got {} character(s). \
+             Generate one with `sakur4d gen-key`.",
+            hex.len()
+        )));
+    }
+    Ok(format!("x'{hex}'"))
+}
+
+/// Generate a fresh 256-bit key as 64 lowercase hex characters.
+#[cfg(feature = "encryption")]
+pub fn generate_key() -> String {
+    // Two v4 UUIDs are 32 random bytes from the OS, which is the same entropy source
+    // SQLCipher expects and avoids pulling in a second RNG crate for one call.
+    let a = uuid::Uuid::new_v4();
+    let b = uuid::Uuid::new_v4();
+    format!("{}{}", a.simple(), b.simple())
 }

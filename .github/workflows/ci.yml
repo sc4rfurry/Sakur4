@@ -33,6 +33,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: cargo fmt
         run: cargo fmt --all -- --check
+      # `--all-features` deliberately, and the encryption feature must therefore be
+      # lint-clean too — but linting it needs SQLCipher's crypto provider to *resolve*,
+      # which is why libssl-dev is installed here as well as in the encryption job.
+      # Without it this step fails inside a C build script with `OPENSSL_DIR is not
+      # set`, which reads as a lint failure and is not one.
+      - name: Install SQLCipher's crypto provider
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --all-features
 
@@ -76,6 +85,39 @@ jobs:
       - name: Build on MSRV
         if: matrix.os == 'ubuntu-latest'
         run: cargo build --workspace
+
+  # ---------------------------------------------------------------------------
+  # Encryption at rest (FR-20), an opt-in feature that needs its own job.
+  #
+  # Two reasons it is not folded into `test`:
+  #
+  #  1. It swaps the bundled SQLite for SQLCipher, so it cannot share a build with
+  #     the default feature set — a store written by one is unreadable by the other.
+  #  2. Its tests are `#![cfg(feature = "encryption")]`, so without this job they
+  #     would never run anywhere and the suite would pass while verifying nothing.
+  #
+  # Linux only, because that is where the requirement is satisfiable without asking
+  # anyone to install anything. The feature's platform notes live in
+  # `crates/sakur4-core/Cargo.toml`; Windows needs OpenSSL development files, which a
+  # default CI runner does not have.
+  # ---------------------------------------------------------------------------
+  encryption:
+    name: encryption at rest (FR-20)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: encryption
+      - name: Install SQLCipher's crypto provider
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev
+      - name: Build with the encryption feature
+        run: cargo build -p sakur4-core --features encryption
+      - name: Verify the acceptance criterion
+        run: cargo test -p sakur4-core --features encryption --test encryption_at_rest
 
   # ---------------------------------------------------------------------------
   # Documentation: warn-free rustdoc, and doctests actually executed.

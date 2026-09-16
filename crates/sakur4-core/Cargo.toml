@@ -14,6 +14,44 @@ keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
 
+[features]
+default = []
+# Optional encryption at rest (FR-20).
+#
+# Switches the bundled SQLite for SQLCipher, which is what makes `PRAGMA key` mean
+# anything. Off by default, and deliberately so:
+#
+# * It replaces the SQLite library the whole crate is built against, so it is not a
+#   change to take on behalf of every user.
+# * Development builds stay fast. SQLCipher is a full C library compile, and the
+#   vendored variant additionally compiles OpenSSL.
+# * A store written by an encrypted build is unreadable by a plain one, so mixing the
+#   two in a workspace produces a store that opens in `cargo test` and not in a
+#   release.
+#
+# # Platform support, which is not uniform
+#
+# `bundled-sqlcipher` compiles SQLCipher but links the **system** OpenSSL:
+#
+#   Linux    works. `libssl-dev` is on most images and is one apt install otherwise.
+#            This is what CI verifies.
+#   macOS    works with `brew install openssl` if it is not already present.
+#   Windows  needs the OpenSSL **development** files — headers and import libraries,
+#            not just the runtime. The common ShiningLight installer ships DLLs only
+#            and fails with a message about a missing include directory.
+#
+# The vendored variant (`bundled-sqlcipher-vendored-openssl`) was tried and rejected.
+# Compiling OpenSSL needs a complete Perl and NASM on PATH, and a stock Windows
+# machine has neither. Git for Windows ships a Perl, but it is an msys subset missing
+# `Locale::Maketext::Simple`, so it fails inside OpenSSL's own `Configure` with an
+# error about a Perl module. Publishing a feature that fails to build for most people
+# who enable it would be worse than documenting the OpenSSL requirement, which at
+# least names something the user can install.
+#
+# The tests in `tests/encryption_at_rest.rs` are gated on this feature, so the suite
+# states which build it verified rather than passing vacuously without it.
+encryption = ["rusqlite/bundled-sqlcipher"]
+
 [dependencies]
 tokio.workspace = true
 tokio-util.workspace = true
