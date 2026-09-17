@@ -100,6 +100,21 @@ If the registry has not caught up, `cargo publish -p sakur4d` fails with a
 dependency-resolution error rather than anything about the code. Waiting a minute
 and retrying is the fix.
 
+**What CI can and cannot check here.** Only `sakur4-core` is dry-run published, because it is
+the only crate verifiable before a first release. `cargo package --list` succeeds for `sakur4d`
+regardless — it does not resolve dependencies at all — so it cannot stand in for "publishable",
+and the CI job states the distinction rather than implying all three are checked.
+
+**Most users never take this path.** Releases ship as prebuilt archives and `install.sh`
+installs them. The registry exists so `cargo install sakur4d` works for people who prefer it.
+To install from a checkout with no registry involved at all:
+
+```bash
+cargo install --path crates/sakur4d
+```
+
+Verified end to end: builds in about eight minutes and installs a working binary.
+
 ## Version policy
 
 While the major version is `0`, the MCP tool surface — tool names, argument shapes,

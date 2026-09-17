@@ -318,12 +318,38 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: sakur4-core is publishable
+      # # The publish order, which is not the obvious one
+      #
+      # `cargo publish` resolves a path dependency through the registry, so `sakur4d` cannot be
+      # published until `sakur4-core` exists on crates.io. Verified locally: `cargo publish
+      # --dry-run -p sakur4d` fails with "no matching package named `sakur4-core` found,
+      # location searched: crates.io index", and it will keep failing until the core crate is
+      # published. So this job verifies the one crate that can be verified before a first
+      # release, rather than implying all three are checked.
+      #
+      # `cargo package --list` succeeds for every crate because it does not resolve
+      # dependencies at all, so it cannot stand in for "publishable". The distinction is named
+      # here instead of left to the reader.
+      - name: sakur4-core is publishable (the only crate checkable pre-publish)
         run: cargo publish -p sakur4-core --dry-run --allow-dirty
 
+      # What can be checked for the others: that the packaged file list is complete, so a
+      # published crate would not be missing a source file.
       - name: every manifest packages a sane file list
         run: |
           for p in sakur4-core sakur4d sakur4-testkit; do
             echo "--- $p ---"
             cargo package -p "$p" --list --allow-dirty >/dev/null
+          done
+
+      # Publishing `sakur4d` before `sakur4-core` fails at upload time, after the core crate
+      # has already been consumed. This keeps the order stated where a releaser will look.
+      - name: the publish order is documented
+        run: |
+          set -euo pipefail
+          if ! grep -q 'cargo publish -p sakur4-core' README.md; then
+            echo "::error::README does not document publishing sakur4-core before sakur4d"
+            exit 1
+          fi
+          echo "publish order documented"
           done
