@@ -259,7 +259,7 @@ $ hermes mcp test sakur4
 
 ### 2 · Oh My Pi — native extension
 
-OMP has **no MCP client**. It needs a native TypeScript extension instead — which
+For OMP there is **no MCP client**. It needs a native TypeScript extension instead — which
 turns out to be an advantage, because an extension can see inside the agent loop and
 therefore reach hooks a tool provider cannot.
 

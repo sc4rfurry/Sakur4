@@ -34,6 +34,20 @@ for (let i = 0; i < argv.length; i += 1) {
 }
 const DB = arg("db", null);
 const DRY = argv.includes("--dry-run");
+// `--archive` moves episodes out of recall's window instead of deleting them.
+//
+// # Why this exists, and why it is not a delete
+//
+// `episodic_stream` is append-only by trigger, and that is FR-1 — the property the whole memory
+// layer rests on. A verification run wrote its fixtures into the default store before that was
+// caught, and there is no way to remove them. What can be done is move them out of the window:
+// the append-only trigger covers `content, role, tool_name, seq, session_id, episode_id` and not
+// `eviction_tier`, so an episode's tier is mutable where its text is not.
+//
+// `Archived` is out-of-window, which means recall skips it unless `include_archived` is set. The
+// bytes stay, the session's history stays coherent, and the fixtures stop surfacing as confident
+// answers to unrelated questions.
+const ARCHIVE = argv.includes("--archive");
 
 if (!DB) {
   console.error("store-purge: --db is required");
@@ -70,6 +84,55 @@ const plans = [
 console.log("");
 for (const session of sessions) {
   let total = 0;
+
+  if (ARCHIVE) {
+    // Archive the episodes, then remove the atlas entries anchored to them.
+    //
+    // Both halves are needed. Recall returns `semantic_entry` results from the atlas, and those
+    // are filtered by *their* tier and anchor, not by the episode's — so archiving the episodes
+    // left the derived summaries still surfacing as confident answers. Which is exactly what the
+    // first attempt at this did: 62 episodes archived, and the same three fixtures still ranked
+    // at 0.5 for an unrelated query.
+    let archived = 0;
+    let purged = 0;
+    try {
+      const live = db
+        .prepare("SELECT COUNT(*) AS n FROM episodic_stream WHERE session_id = ? AND eviction_tier = 'live'")
+        .get(session)?.n ?? 0;
+      const derived = db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM semantic_atlas
+            WHERE anchor_id IN (SELECT episode_id FROM episodic_stream WHERE session_id = ?)`,
+        )
+        .get(session)?.n ?? 0;
+
+      if (DRY) {
+        console.log(`  would archive ${String(live).padStart(4)} episodes and drop ${derived} atlas entries  ${session}`);
+        continue;
+      }
+
+      archived = db
+        .prepare(
+          "UPDATE episodic_stream SET eviction_tier = 'archived' WHERE session_id = ? AND eviction_tier = 'live'",
+        )
+        .run(session).changes;
+      purged = db
+        .prepare(
+          `DELETE FROM semantic_atlas
+            WHERE anchor_id IN (SELECT episode_id FROM episodic_stream WHERE session_id = ?)`,
+        )
+        .run(session).changes;
+
+      console.log(
+        `  archived ${String(archived).padStart(4)} episodes, dropped ${String(purged).padStart(3)} atlas entries  ${session}`,
+      );
+    } catch (error) {
+      console.log(`  \x1b[31mfailed\x1b[0m on ${session}`);
+      console.log(`         ${error.message.split("\n")[0].slice(0, 100)}`);
+    }
+    continue;
+  }
+
   for (const [table, where] of plans) {
     if (table === "symbolic_fact") continue; // project-scoped, not session-scoped
     let count = 0;
