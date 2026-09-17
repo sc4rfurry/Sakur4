@@ -281,7 +281,7 @@ cp -r integrations/hermes-plugin "$LOCALAPPDATA/hermes/plugins/sakur4"
 # then set `context.engine: sakur4` in ~/.hermes/config.yaml
 ```
 
-Verified by 28 contracts against a live daemon. See
+Verified by 44 contracts against a live daemon. See
 [integrations/hermes-plugin](integrations/hermes-plugin/README.md).
 
 ### 4 · Agent Skill — no MCP, no extension

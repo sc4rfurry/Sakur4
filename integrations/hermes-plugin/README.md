@@ -73,7 +73,7 @@ sakur4d --db /tmp/hermes.db --backend embedded \
 SAKUR4_URL=http://127.0.0.1:8770 python integrations/hermes-plugin/verify_engine.py
 ```
 
-It exits non-zero on the first failed contract, so it can gate a release. 25 contracts
+It exits non-zero on the first failed contract, so it can gate a release. 44 contracts
 covering threshold arithmetic, anchor injection, compaction, recall after eviction,
 provider accounting, deepcopy, and the offline path.
 

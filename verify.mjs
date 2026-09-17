@@ -828,7 +828,7 @@ async function main() {
         "groups and what they need:",
         "  rust        nothing                      fmt, clippy, tests, doctests, doc",
         "  encryption  OpenSSL development files    FR-20 acceptance criterion",
-        "  hermes      python + a built daemon      FR-16 context engine, 27 contracts",
+        "  hermes      python + a built daemon      FR-16 context engine, 44 contracts",
         "  bench       a repository to index        scripted A/B, NFR-2 recall",
         "  live        --upstream <url>             real llama.cpp measurements",
         "  harness     a built daemon               OMP + Hermes install, generated config",
