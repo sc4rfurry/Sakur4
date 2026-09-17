@@ -119,10 +119,41 @@ function run(command, args, { cwd = ROOT, env = {}, timeout = 900_000 } = {}) {
   return { ok: result.status === 0, output, status: result.status, error: result.error };
 }
 
-/** Does this command exist and answer? */
+/**
+ * Does this command exist and answer?
+ *
+ * # Why "produced output" counts, and why transient failure is retried
+ *
+ * The first version required `status === 0` within 20 seconds. That is wrong twice over.
+ *
+ * A tool can answer correctly and still exit non-zero. `hermes` was doing exactly that from a
+ * PowerShell wrapper — printing its version and returning a failure code — so an installed
+ * harness was reported as `hermes not on PATH`, which is the opposite of the truth and sends a
+ * reader looking for an installation problem.
+ *
+ * And a probe that starts a whole application can exceed a fixed timeout on a busy machine.
+ * This one was reached only after four heavy checks had run, the *last* of which invokes a
+ * harness that talks to a model. The same command answered in a second when run alone and timed
+ * out in the full pass, so the check silently became a skip depending on what ran before it —
+ * the worst kind of flake, because it looks like an environment fact.
+ *
+ * So: an answer is evidence the command exists and works, whichever way it exited; and a first
+ * attempt that fails outright is retried once with more time, because the alternative is a
+ * verifier whose result depends on machine load.
+ */
 function available(command, args = ["--version"]) {
-  const result = spawnSync(command, args, { encoding: "utf8", shell: false, timeout: 20_000 });
-  return !result.error && result.status === 0;
+  const attempt = (timeout) =>
+    spawnSync(command, args, { encoding: "utf8", shell: false, timeout, maxBuffer: 8 * 1024 * 1024 });
+
+  let result = attempt(20_000);
+  if (result.error || result.status !== 0) {
+    result = attempt(60_000);
+  }
+
+  const producedOutput = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim().length > 0;
+  // `status === null` with no error means the process was killed by a signal, which for a
+  // version probe means it never got to answer.
+  return producedOutput || (!result.error && result.status === 0);
 }
 
 function daemonBinary() {
@@ -632,7 +663,10 @@ function harnessChecks() {
       record("harness", "Hermes plugin", SKIP, "hermes not on PATH");
     } else {
       const r = run("hermes", ["plugins", "list"]);
-      const listed = r.ok && /sakur4/.test(r.output);
+      // `r.ok` is deliberately not required: a CLI can list plugins and still exit non-zero, and
+      // the evidence that matters is whether the plugin appears in the output. Requiring a clean
+      // exit would turn a successful listing into "not installed".
+      const listed = /sakur4/.test(r.output);
       record(
         "harness",
         "Hermes plugin",
