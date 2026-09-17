@@ -39,6 +39,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
+      # # SQLCipher's crypto provider has to resolve, even to lint
+      #
+      # `--all-features` turns on the `encryption` feature, whose build script needs OpenSSL's
+      # development files. Without them this step dies inside a C build script with
+      # `OPENSSL_DIR is not set`, which reads as a lint failure and is not one.
+      #
+      # The CI workflow documents this trap and installs libssl-dev for exactly this reason.
+      # This workflow ran the same command without it, so the first release would have failed
+      # at its first verification step — before building anything, and with a message pointing
+      # at the linter rather than at the missing package.
+      - name: Install SQLCipher's crypto provider
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev
       - run: cargo clippy --workspace --all-targets --all-features
       - run: cargo build --workspace --bins
       - run: cargo test --workspace --all-targets
