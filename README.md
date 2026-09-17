@@ -120,6 +120,7 @@ anywhere.
 <tr><th>Method</th><th>Command</th><th>Notes</th></tr>
 <tr><td><b>Install script</b></td><td><code>curl -fsSL https://raw.githubusercontent.com/sakur4/sakur4/main/install.sh | sh</code></td><td>Detects your platform, <b>verifies the checksum</b>, installs, and says where the skill went.</td></tr>
 <tr><td><b>Release binary</b></td><td>Download from <a href="https://github.com/sakur4/sakur4/releases">Releases</a></td><td>Archives carry <code>sakur4d</code>, the skill and the OMP plugin together.</td></tr>
+<tr><td><b>From a checkout</b></td><td><code>cargo install --path crates/sakur4d</code></td><td>Builds and installs in one step. About eight minutes from cold; verified.</td></tr>
 <tr><td><b>From source</b></td><td><code>cargo build --release</code></td><td>Then copy <code>target/release/sakur4d</code> onto your <code>PATH</code>.</td></tr>
 </table>
 
@@ -931,3 +932,10 @@ a public issue.
 <br>
 <sub><i>Sakur4</i> — for the sakura, and for the <code>4</code> in <code>sakur4d</code>, which is what you get when the name you want is already taken.</sub>
 </div>
+
+**Publishing to crates.io, when you want `cargo install sakur4d`:** publish
+`cargo publish -p sakur4-core` **before** `cargo publish -p sakur4d`. `cargo publish` resolves
+a path dependency through the registry, so the binary crate cannot be published until the core
+crate is on crates.io — publishing in the other order fails with
+`no matching package named 'sakur4-core' found`. The full sequence is in
+[docs/RELEASING.md](docs/RELEASING.md).
