@@ -308,6 +308,11 @@ from the response the proxy already had to read.
 `--observe-only` forwards everything unchanged and only records, which is the safe way to
 see what it *would* have done on your real traffic before letting it act.
 
+> **Do not run the proxy and the OMP extension at the same time.** Both manage context, and a
+> turn gets managed twice — OMP hangs before sending its first request. Use the proxy *or* the
+> extension. `--no-extensions` disables the extension for a proxied session. Verified, and the
+> full comparison is in [docs/verification/proxy-harness.md](docs/verification/proxy-harness.md).
+
 | Hook | What Sakur4 does with it |
 |---|---|
 | `session_start` | probes the daemon once; reports a missing binary before ten turns go unrecorded; live counts in the status bar |
