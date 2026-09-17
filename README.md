@@ -118,10 +118,16 @@ anywhere.
 
 <table>
 <tr><th>Method</th><th>Command</th><th>Notes</th></tr>
-<tr><td><b>Release binary</b></td><td>Download from <a href="https://github.com/sakur4/sakur4/releases">Releases</a></td><td>Recommended today. Archives carry <code>sakur4d</code>, the skill and the OMP plugin together.</td></tr>
+<tr><td><b>Install script</b></td><td><code>curl -fsSL https://raw.githubusercontent.com/sakur4/sakur4/main/install.sh | sh</code></td><td>Detects your platform, <b>verifies the checksum</b>, installs, and says where the skill went.</td></tr>
+<tr><td><b>Release binary</b></td><td>Download from <a href="https://github.com/sakur4/sakur4/releases">Releases</a></td><td>Archives carry <code>sakur4d</code>, the skill and the OMP plugin together.</td></tr>
 <tr><td><b>From source</b></td><td><code>cargo build --release</code></td><td>Then copy <code>target/release/sakur4d</code> onto your <code>PATH</code>.</td></tr>
-<tr><td><b>crates.io</b></td><td><code>cargo install sakur4d</code></td><td>Available once v0.1.0 is published.</td></tr>
 </table>
+
+The installer **refuses to install an archive it cannot verify**. If `SHA256SUMS.txt` is
+unreachable, or does not list your platform's archive, it stops rather than continuing — an
+installer that silently skips verification teaches people to trust the output of a pipe.
+
+`SAKUR4_VERSION=v0.1.0` pins a release; `SAKUR4_BIN_DIR` chooses where it lands.
 
 Put the binary somewhere on `PATH` — `~/.cargo/bin` is where `cargo install` puts it and
 where every integration looks first. If it lives somewhere unusual, set `SAKUR4_BIN` and

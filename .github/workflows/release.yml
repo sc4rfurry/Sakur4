@@ -128,13 +128,33 @@ jobs:
           "ASSET=dist/$name.zip" | Out-File -Append -FilePath $env:GITHUB_ENV
 
       # A checksum per artifact, so a downloader can verify what they got.
+      #
+      # # Record bare filenames
+      #
+      # `sha256sum ./*.tar.gz` writes `hash  *./name` — a leading `*` for binary mode plus a
+      # `./` prefix — and `install.sh` looks its archive up by name. Shipping that form meant
+      # the installer could not find any archive it was asked to verify, and refused every
+      # install with "not listed in SHA256SUMS.txt" while looking like a corrupt download.
+      #
+      # Passing bare names through `xargs` gives `hash  name`, which is what the installer
+      # parses and what `sha256sum -c` expects.
       - name: Checksum
         shell: bash
         run: |
+          set -euo pipefail
           cd dist
-          if command -v sha256sum >/dev/null; then sha256sum ./*.tar.gz ./*.zip > SHA256SUMS.txt 2>/dev/null || true; fi
-          if command -v shasum >/dev/null; then shasum -a 256 ./*.tar.gz ./*.zip > SHA256SUMS.txt 2>/dev/null || true; fi
-          cat SHA256SUMS.txt 2>/dev/null || echo "no checksums generated"
+          rm -f SHA256SUMS.txt
+          ls -1 ./*.tar.gz ./*.zip 2>/dev/null | sed 's|^\./||' | sort > .assets
+          if command -v sha256sum >/dev/null 2>&1; then
+            xargs -a .assets sha256sum > SHA256SUMS.txt
+          elif command -v shasum >/dev/null 2>&1; then
+            xargs -a .assets shasum -a 256 > SHA256SUMS.txt
+          else
+            echo "::error::no checksum tool available; the release would be unverifiable"
+            exit 1
+          fi
+          rm -f .assets
+          cat SHA256SUMS.txt
 
       - uses: actions/upload-artifact@v4
         with:
@@ -162,9 +182,66 @@ jobs:
 
       - name: Collect release assets
         run: |
+          set -euo pipefail
           mkdir -p release
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name 'SHA256SUMS.txt' \) -exec cp {} release/ \;
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} release/ \;
+          # # One checksum file, not one per platform
+          #
+          # Each matrix job writes its own `SHA256SUMS.txt` covering only the archive it just
+          # built, and `download-artifact` with `merge-multiple` drops them all into one
+          # directory. Copying them the same way the archives are copied meant four of the five
+          # were silently overwritten and the published checksum file listed exactly one
+          # platform.
+          #
+          # That is not cosmetic. `install.sh` refuses to install an archive that is not listed
+          # in `SHA256SUMS.txt` — deliberately, because an installer that skips verification is
+          # worse than no installer — so four of five platforms would have failed to install
+          # with "not listed in SHA256SUMS.txt" on the first release.
+          #
+          # Concatenating is correct here because the entries are `hash  filename` lines and the
+          # filenames are unique per platform. Sorting keeps the file stable between runs.
+          if compgen -G 'artifacts/**/SHA256SUMS.txt' >/dev/null 2>&1; then
+            find artifacts -name 'SHA256SUMS.txt' -exec cat {} + | sort -k2 > release/SHA256SUMS.txt
+          else
+            # Some matrix entries may not generate one; derive them from the assets instead of
+            # shipping a release with no verification at all.
+            (cd release && sha256sum ./*.tar.gz ./*.zip > SHA256SUMS.txt)
+          fi
+          echo "--- checksum coverage ---"
+          wc -l < release/SHA256SUMS.txt
           ls -la release/
+
+      # The guard for the bug above: every published archive must appear in the published
+      # checksum file. Without this the mistake is invisible until a user on an unlisted
+      # platform runs the installer and is refused — which reads as the installer being broken
+      # rather than the release being incomplete.
+      - name: Every archive is covered by a checksum
+        run: |
+          set -euo pipefail
+          missing=0
+          for asset in release/*.tar.gz release/*.zip; do
+            [ -e "$asset" ] || continue
+            name="$(basename "$asset")"
+            if ! awk -v f="$name" '$2 == f || $2 == "*"f { found = 1 } END { exit !found }' release/SHA256SUMS.txt; then
+              echo "::error::$name has no entry in SHA256SUMS.txt; the installer will refuse it"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "SHA256SUMS.txt contents:"
+            cat release/SHA256SUMS.txt
+            exit 1
+          fi
+          echo "all $(ls release/*.tar.gz release/*.zip 2>/dev/null | wc -l) archives are covered"
+
+      # Verified against the real artifacts, not a fixture. A checksum file that lists the
+      # right names but the wrong hashes is worse than one that lists nothing, because it looks
+      # like verification happened.
+      - name: The checksums match the archives
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum -c SHA256SUMS.txt
 
       - name: Extract the changelog section for this tag
         id: notes
