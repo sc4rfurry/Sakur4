@@ -192,6 +192,36 @@ if (b.ms < a.ms * 0.5) {
   console.log(`  the KV cache is still reused but the timing may be dominated by`);
   console.log(`  something else.`);
 }
+
+// # The verdict as a field, because the prose one is timing-dependent
+//
+// `b.ms < a.ms * 0.5` is a wall-clock threshold, and under load a genuine 4x speedup can measure
+// below 2x. The script is right to report what it saw; the problem was a *caller* parsing
+// "automatic prefix reuse WORKS" out of the output, which turns a timing wobble into a failed
+// check. That is what happened: one full verification run reported `live 1 failed`, and three
+// subsequent runs of the identical command were green with no way to tell which check had moved.
+//
+// The field carries the measurements as well as the verdict, so a caller can report why rather
+// than only that.
+if (process.env.SAKUR4_VERDICT_JSON) {
+  const fs = await import("node:fs");
+  fs.writeFileSync(
+    process.env.SAKUR4_VERDICT_JSON,
+    JSON.stringify(
+      {
+        check: "llamacpp-prefix",
+        verdict: b.ms < a.ms * 0.5 ? "PASS" : "FAIL",
+        coldMs: Math.round(a.ms),
+        warmMs: Math.round(b.ms),
+        headChangedMs: Math.round(c.ms),
+        ratio: Number((b.ms / a.ms).toFixed(3)),
+        note: "a wall-clock threshold: under load a real speedup can measure below 2x",
+      },
+      null,
+      2,
+    ),
+  );
+}
 console.log("");
 if (c.ms > b.ms * 2) {
   console.log(`  Changing the HEAD cost ${fmt(c.ms)} against ${fmt(b.ms)} for the identical`);

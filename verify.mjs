@@ -561,31 +561,75 @@ async function liveChecks() {
   if (!wanted("live", "live")) return;
 
   const script = join(ROOT, "docs", "verification", "llamacpp-prefix.mjs");
+  // # Read the verdict field, not the prose
+  //
+  // `llamacpp-prefix.mjs` decides with `b.ms < a.ms * 0.5` — a wall-clock threshold — so under
+  // load a genuine 4x speedup can measure below 2x. Parsing "automatic prefix reuse WORKS" out
+  // of its output turned that wobble into a failed check: one full run reported `live 1 failed`,
+  // and three subsequent runs of the identical command were green, with nothing in the failure
+  // to say which check had moved or why.
+  //
+  // The script now writes the verdict *and* the measurements to a field. Same lesson as the
+  // benchmark's own verdict file, in a different script, three years of rounds apart.
+  const verdictFile = join(tmpdir(), `sakur4-prefix-${process.pid}.json`);
   const r = run(process.execPath, [script, "--base", UPSTREAM, "--tokens", "1500", "--long", "3000"], {
     timeout: 1_200_000,
+    env: { SAKUR4_VERDICT_JSON: verdictFile },
   });
-  // The meaningful assertion is that reuse happened at all, not that the script exited 0 —
-  // the script reports findings, and "the server does not reuse prefixes" is a finding.
-  const reuseWorks = /automatic prefix reuse WORKS/.test(r.output);
+  let header = null;
+  try {
+    header = JSON.parse(readFileSync(verdictFile, "utf8"));
+  } catch {
+    /* the script did not get far enough to write one */
+  }
+  try {
+    rmSync(verdictFile, { force: true });
+  } catch {
+    /* ignore */
+  }
   record(
     "live",
     "llama.cpp prefix behaviour",
-    reuseWorks ? PASS : FAIL,
-    reuseWorks
-      ? (r.output.match(/Re-sending the same prompt took[^\n]*/) ?? [""])[0].trim()
+    header?.verdict === "PASS" ? PASS : FAIL,
+    header
+      ? `warm ${header.warmMs} ms against ${header.coldMs} ms cold (${Math.round((1 - header.ratio) * 100)}% faster)`
       : lastLines(r.output, 6),
   );
 
   const rule = join(ROOT, "docs", "verification", "reuse-rule.mjs");
   if (existsSync(rule)) {
+    // # Asserted on the numbers, from the table the script actually prints
+    //
+    // The previous version regex-matched prose: `/A 2,219-token preserved prefix|preserved
+    // prefix[^\n]*reused/`, with a hard-coded token count and a fallback on the string
+    // "reused %". Section A prints a *table* — `pad tokens / prompt tokens / cache_n /
+    // prompt_n / reused %` — and none of that prose is in it, so the check was matching a
+    // string that does not exist and relying on whichever fallback happened to fire.
+    //
+    // The real invariant is in the table: with the head held fixed and the tail growing,
+    // `cache_n` stays just behind `prompt tokens` and the reused share stays high. That is
+    // what "a preserved prefix is reused" means, and it is a property of numbers the server
+    // reported rather than of wording this script chose.
     const rr = run(process.execPath, [rule, "--base", UPSTREAM], { timeout: 1_200_000 });
-    const preserves = /A 2,219-token preserved prefix|preserved prefix[^\n]*reused/i.test(rr.output)
-      || /reused %[\s\S]*100%/.test(rr.output);
+    const rows = [];
+    for (const line of rr.output.split("\n")) {
+      const m = line.match(/^\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)%/);
+      if (m) rows.push({ pad: +m[1], prompt: +m[2], cacheN: +m[3], reusedPct: +m[5] });
+    }
+    // Section A's rows are the ones with a growing pad; the warm check above them has no pad.
+    const sectionA = rows.filter((row) => row.pad > 0);
+    const worst = sectionA.length ? Math.min(...sectionA.map((r) => r.reusedPct)) : 0;
+    const tracked = sectionA.filter((r) => r.cacheN > 0 && r.cacheN <= r.prompt).length;
+    const preserves = sectionA.length >= 5 && worst >= 80 && tracked === sectionA.length;
     record(
       "live",
       "compaction case",
       preserves ? PASS : FAIL,
-      preserves ? "a preserved prefix is reused in full" : lastLines(rr.output, 6),
+      preserves
+        ? `a preserved prefix is reused: ${sectionA.length} tails, worst ${worst}%`
+        : `expected every row's cache_n to track its prompt with high reuse; ` +
+          `got ${sectionA.length} rows, worst ${worst}%, ${tracked} tracking — ` +
+          lastLines(rr.output, 4),
     );
   }
 
