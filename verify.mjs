@@ -115,6 +115,7 @@ const CATALOG = {
     "OMP extension command forms",
     "integration tool names exist",
     "snapshot and restore",
+    "usage accounting round trip",
     "Hermes plugin",
   ],
 };
@@ -776,6 +777,29 @@ function harnessChecks() {
         ok
           ? "round trip on the embedded backend, clear refusal on the real one"
           : lastLines(ok ? "" : `${embedded.output}\n${live.output}`, 8),
+      );
+    }
+  }
+
+  // Usage accounting (FR-15) as a round trip: report through `context.record_usage`, read the
+  // receipt, check the totals are the sum they claim to be. The classifier has unit tests; the
+  // tool path a user takes had none, and a classifier can be right while the tool feeding it
+  // is wrong.
+  if (wanted("usage", "harness")) {
+    const script = join(ROOT, "docs", "verification", "usage-roundtrip.mjs");
+    const binary = daemonBinary();
+    if (!existsSync(script) || !binary) {
+      record("harness", "usage accounting round trip", SKIP, "needs a built daemon");
+    } else {
+      const r = run(process.execPath, [script, "--bin", binary]);
+      const ok = r.ok && /VERDICT: PASS/.test(r.output);
+      record(
+        "harness",
+        "usage accounting round trip",
+        ok ? PASS : FAIL,
+        ok
+          ? "cold, growing, resent, and broken-prefix turns"
+          : lastLines(r.output, 8),
       );
     }
   }

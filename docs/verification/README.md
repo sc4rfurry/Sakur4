@@ -243,6 +243,9 @@ node docs/verification/tool-names.mjs $BIN
 # Snapshot / restore (FR-8): the round trip, and the refusal on a backend without the API.
 node docs/verification/snapshot-roundtrip.mjs --bin $BIN --backend embedded
 node docs/verification/snapshot-roundtrip.mjs --bin $BIN --backend $BASE
+
+# Usage accounting (FR-15): report through the tool, then read the receipt back.
+node docs/verification/usage-roundtrip.mjs --bin $BIN
 ```
 
 ### Diagnostics, for when something looks wrong
