@@ -76,8 +76,27 @@ The version lives in one place, `[workspace.package] version` in the root
 `[workspace.dependencies]` carry the same version — bump those together or
 `cargo package` will fail to resolve.
 
+In practice those are the only three occurrences of the version string in the file, so the bump
+is one substitution:
+
 ```bash
-cargo build --workspace          # refresh Cargo.lock
+sed -i 's/0\.1\.0/0.2.0/g' Cargo.toml     # or your editor's replace-all
+cargo build --workspace                  # refresh Cargo.lock
+```
+
+**The failure mode is caught, which is worth knowing before you worry about it.** Bumping the
+workspace version while leaving the path dependencies behind fails immediately and legibly:
+
+```text
+error: failed to select a version for the requirement `sakur4-core = "^0.2.0"`
+```
+
+So a mistyped bump cannot reach a release; it stops at `cargo build`. After the bump the built
+binary reports the new version, which is the cheapest confirmation:
+
+```console
+$ ./target/debug/sakur4d --version
+sakur4d 0.2.0
 ```
 
 ### 4. Commit and tag
