@@ -259,7 +259,27 @@ pwsh docs/verification/capture-request.ps1 8772
 
 # What the server reuses, when longest-common-prefix alone does not explain it.
 node docs/verification/reuse-probe.mjs --base $BASE
+
+# What is in a store, by session, and what anchors each atlas entry.
+node docs/verification/store-inventory.mjs --db ~/.sakur4/sakur4.db
+node docs/verification/atlas-inventory.mjs --match "some text"
+
+# Move named sessions out of recall's window. Backs up first, has no --all, and reports what
+# actually changed rather than what it attempted.
+node docs/verification/store-purge.mjs --db PATH --archive --dry-run --session NAME
 ```
+
+**`episodic_stream` is append-only by trigger**, so episodes cannot be deleted — that is FR-1 and
+it is the point. A session can be *archived* out of recall's window instead, because the trigger
+covers `content, role, tool_name, seq, session_id, episode_id` and not `eviction_tier`.
+
+Archiving an episode is not sufficient on its own. Recall also returns `semantic_entry` results
+from the atlas, and those are filtered by **their own anchor**, not by the episode's tier — so a
+session whose episodes are archived can still surface through its summaries. `store-purge --archive`
+does both.
+
+These exist because a verification script had been writing its fixtures into the *default* store
+rather than a temporary one. The scripts are fixed; the tools are what cleaned up after them.
 
 `recorder.mjs` is what established that the reverse proxy was forwarding over-long transcripts
 verbatim. `capture-request.ps1` is what localised the Hermes integration's failure to its own
