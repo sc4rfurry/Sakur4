@@ -605,6 +605,41 @@ impl RepoCortex {
         focus_paths: Option<&[String]>,
         counter: &TokenCounter,
     ) -> Result<(String, usize)> {
+        self.map_with(token_budget, focus_paths, counter, false).await
+    }
+
+    /// The repository map with **qualified names** instead of signatures.
+    ///
+    /// # Why this exists
+    ///
+    /// `map` prints a signature when a symbol has one, which carries more information per
+    /// token — the right default. But it meant the qualified names were never shown, and
+    /// `symbol --name` and `impact --name` take exactly those. So the documented workflow
+    /// "call `map`, then look up a name from it" could not be followed: every name a user
+    /// could see was a signature, and every name the lookup accepted was invisible.
+    ///
+    /// Verified against this repository: `map` emitted 20 symbol lines, not one of them a
+    /// qualified name, and `symbol --name Engine::open` returned `not found` for each of six
+    /// spellings tried.
+    ///
+    /// Discovery therefore needs its own mode rather than a wider default. A map is
+    /// token-budgeted and every character spent on a second rendering of a symbol is a
+    /// character not spent on another file, so the names are opt-in.
+    pub async fn repo_map_names(
+        &self,
+        token_budget: usize,
+        counter: &TokenCounter,
+    ) -> Result<(String, usize)> {
+        self.map_with(token_budget, None, counter, true).await
+    }
+
+    async fn map_with(
+        &self,
+        token_budget: usize,
+        focus_paths: Option<&[String]>,
+        counter: &TokenCounter,
+        names_only: bool,
+    ) -> Result<(String, usize)> {
         let facts = self.fabric.project_facts(&self.project_id).await?;
         if facts.is_empty() {
             return Ok((
@@ -691,9 +726,13 @@ impl RepoCortex {
             for s in syms {
                 // Show the signature when there is one; it carries far more
                 // information per token than a bare name.
-                let line = match &s.signature {
-                    Some(sig) => format!("  {} {sig}\n", s.kind.as_str()),
-                    None => format!("  {} {}\n", s.kind.as_str(), s.qualified_name),
+                let line = if names_only {
+                    format!("  {}\n", s.qualified_name)
+                } else {
+                    match &s.signature {
+                        Some(sig) => format!("  {} {sig}\n", s.kind.as_str()),
+                        None => format!("  {} {}\n", s.kind.as_str(), s.qualified_name),
+                    }
                 };
                 block_symbols.push(line);
             }

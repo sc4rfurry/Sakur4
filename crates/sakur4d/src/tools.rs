@@ -253,6 +253,14 @@ pub struct RepoMapInput {
     pub token_budget: usize,
     #[serde(default)]
     pub focus_paths: Option<Vec<String>>,
+    /// Print qualified names instead of signatures.
+    ///
+    /// Exists because `code.query_symbol` and `code.impact_of_change` take qualified names
+    /// while the default map shows signatures, so without this there is no way to learn what
+    /// to pass them. Opt-in rather than default: a map is token-budgeted, and every character
+    /// spent on a second rendering of a symbol is a character not spent on another file.
+    #[serde(default)]
+    pub names_only: Option<bool>,
 }
 
 /// `code.get_repo_map` output.
@@ -872,13 +880,20 @@ impl Sakur4Server {
         &self,
         Parameters(input): Parameters<RepoMapInput>,
     ) -> Result<Json<RepoMapOutput>, ErrorData> {
-        let focus = input.focus_paths.as_deref();
-        let (map, used) = self
-            .engine
-            .repo()
-            .repo_map(input.token_budget, focus, self.engine.tokens())
-            .await
-            .map_err(to_error)?;
+        let (map, used) = if input.names_only.unwrap_or(false) {
+            self.engine
+                .repo()
+                .repo_map_names(input.token_budget, self.engine.tokens())
+                .await
+                .map_err(to_error)?
+        } else {
+            let focus = input.focus_paths.as_deref();
+            self.engine
+                .repo()
+                .repo_map(input.token_budget, focus, self.engine.tokens())
+                .await
+                .map_err(to_error)?
+        };
         Ok(Json(RepoMapOutput { map, tokens_used: used, token_budget: input.token_budget }))
     }
 

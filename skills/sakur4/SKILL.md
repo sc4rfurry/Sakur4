@@ -150,14 +150,33 @@ while a session is active, so it is safe to call any time.
 ```bash
 node scripts/sakur4.mjs index --root .
 node scripts/sakur4.mjs map --budget 1500
+node scripts/sakur4.mjs map --budget 800 --names      # the names symbol/impact accept
 node scripts/sakur4.mjs symbol --name "src::auth::validate"
 node scripts/sakur4.mjs impact --name "src::auth::validate"
 ```
 
+**Use `--names` to find a name before looking one up.** Ordinary `map` output shows each
+symbol's *signature*, which is the more useful rendering per token — but `symbol` and `impact`
+take *qualified names*, and a signature is not one. So `map` alone cannot tell you what to pass
+them, and the two example names above (`src::auth::validate`) are placeholders that will not
+exist in your repository. `map --names` prints the real ones, and they look like this:
+
+```text
+crates/sakur4-core/src/engine.rs  (rank 0.02)
+  crates::sakur4-core::src::engine::EngineConfig
+  crates::sakur4-core::src::engine::Engine::open
+  crates::sakur4-core::src::engine::EngineConfig::from_toml_path
+```
+
+Copy one of those verbatim. The shape is `path::Type::member`, so a method is qualified by the
+type it is implemented on — `Engine::open` and `Server::open` are different facts.
+
 - `index` parses the repository and builds a call and import graph. Re-running it
   is incremental, so it is cheap.
 - `map` prints a structural outline ranked by how load-bearing each symbol is,
-  fitted to a token budget. Call it before opening files in bulk.
+  fitted to a token budget. Call it before opening files in bulk. Add `--names` to
+  get the qualified names that `symbol` and `impact` accept; the default output shows
+  signatures, which is more useful per token but is not a name you can pass on.
 - `symbol` returns a symbol's **current** signature from the parser — this cannot be
   stale, unlike anything you remember.
 - `impact` lists every call site that depends on a symbol, transitively. Run it
