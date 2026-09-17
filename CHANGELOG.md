@@ -27,7 +27,7 @@ home on crates.io rather than as a stability promise, and may change within a
   the cacheable head is not moved.
 - Exposes `sakur4_recall` through `get_tool_schemas`/`handle_tool_call`, and implements
   `__deepcopy__` because Hermes copies the engine for sub-agents.
-- 27 contracts verified against a live daemon by `verify_engine.py`.
+- 44 contracts verified against a live daemon by `verify_engine.py`.
 
 **OpenAI-compatible reverse proxy (FR-18, `sakur4d proxy`)**
 

@@ -18,6 +18,7 @@ Exits non-zero on the first failed contract, so it can gate a release.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from typing import Any, Dict, List
@@ -199,6 +200,112 @@ def main() -> int:
               original.last_prompt_tokens != 9999)
     except Exception as exc:  # noqa: BLE001
         check("deepcopy succeeds", False, f"{type(exc).__name__}: {exc}")
+
+    # -----------------------------------------------------------------------
+    print("\nthe methods Hermes calls around a session, not during one")
+    # -----------------------------------------------------------------------
+    # These six were implemented and never exercised. A no-op where behaviour was intended
+    # fails silently: the session keeps working and one guarantee is simply absent.
+    fresh = module.Sakur4ContextEngine(base_url=base_url, session_id="hermes-verify")
+
+    # `on_session_start` must pull the Anchor Set immediately. The implementation's own comment
+    # says why — "a session that opens with a pinned rule should not spend a turn without it" —
+    # and a turn without it is exactly the bug this engine was written to fix.
+    fresh.client.call("memory.pin", {
+        "content": "the session-start contract must be armed before the first turn",
+        "kind": "task_contract",
+        "session_id": "hermes-verify",
+    })
+    fresh.on_session_start("hermes-verify")
+    check("on_session_start arms the anchors before the first turn",
+          bool(fresh._last_anchors),
+          "otherwise the opening turn runs without a pinned rule")
+    check("on_session_start adopts the session id it is given",
+          fresh.session_id == "hermes-verify")
+    fresh.on_session_start("hermes-verify", model={"contextWindow": 40_000})
+    check("on_session_start takes the model's window from a dict",
+          fresh.context_length == 40_000 and fresh.threshold_tokens == 30_000,
+          f"context_length={fresh.context_length} threshold={fresh.threshold_tokens}")
+
+    # `update_model` accepts either a dict or an object, because Hermes passes both.
+    class _Model:
+        context_length = 12_000
+
+    fresh.update_model(_Model())
+    check("update_model takes the window from an object too",
+          fresh.context_length == 12_000 and fresh.threshold_tokens == 9_000)
+    before = fresh.context_length
+    fresh.update_model(None)
+    check("update_model with no model changes nothing", fresh.context_length == before)
+
+    # `on_session_reset` clears the per-session counters. Without it a new session inherits the
+    # previous one's compaction count and the status line reports a session that never happened.
+    fresh.update_from_response({"prompt_tokens": 500, "completion_tokens": 10})
+    fresh.compression_count = 4
+    fresh.prefix_breaks = 2
+    fresh.on_session_reset()
+    check("on_session_reset clears every counter",
+          fresh.compression_count == 0 and fresh.provider_cache_turns == 0
+          and fresh.prefix_breaks == 0)
+
+    # `has_content_to_compress` is a cheap pre-check, and it has to agree with what `compress`
+    # can do: a transcript of only the protected head and tail has no middle to evict.
+    minimal = [{"role": "user", "content": f"t{i}"}
+               for i in range(fresh.protect_first_n + fresh.protect_last_n)]
+    check("has_content_to_compress is False when there is no middle",
+          fresh.has_content_to_compress(minimal) is False,
+          f"{len(minimal)} messages is exactly the protected head and tail")
+    check("has_content_to_compress is True once a middle exists",
+          fresh.has_content_to_compress(minimal + [{"role": "user", "content": "middle"}]) is True)
+
+    # `prune_tool_results_only` is deliberately a no-op beyond committing. What matters is that
+    # it returns the shape Hermes expects — messages and a reclaimed count — and drops nothing,
+    # because a tool result dropped on a cheap trigger cannot be recovered by a later plan.
+    transcript = [
+        {"role": "system", "content": "you are a coding agent"},
+        {"role": "user", "content": "read the config"},
+        {"role": "tool", "name": "read_file", "content": "max_attempts = 3"},
+        {"role": "assistant", "content": "three attempts"},
+        {"role": "user", "content": "and the timeout?"},
+    ]
+    pruned, reclaimed = fresh.prune_tool_results_only(transcript, current_tokens=9_000)
+    check("prune_tool_results_only returns a (messages, count) pair",
+          isinstance(pruned, list) and isinstance(reclaimed, int),
+          f"got {type(pruned).__name__}, {type(reclaimed).__name__}")
+    check("prune_tool_results_only drops nothing",
+          pruned == transcript,
+          "the plan decides evictions; a cheap trigger must not pre-empt it")
+    recalled = fresh.client.call("memory.recall", {
+        "query": "max_attempts", "k": 3, "session_id": "hermes-verify",
+    })
+    check("the tool result it declined to prune is still retrievable",
+          isinstance(recalled, dict) and "max_attempts" in json.dumps(recalled),
+          "committing is the half that must still happen")
+
+    # The tool schema is a contract with a Pydantic client: one malformed entry makes the client
+    # reject the WHOLE catalog. That happened once inside the daemon, with a bare
+    # `serde_json::Value` output schema, so the shape is checked rather than assumed.
+    schemas = fresh.get_tool_schemas()
+    check("get_tool_schemas returns a list", isinstance(schemas, list) and len(schemas) == 1)
+    schema = schemas[0] if schemas else {}
+    check("the tool schema has the fields a client requires",
+          isinstance(schema.get("name"), str)
+          and isinstance(schema.get("description"), str)
+          and isinstance(schema.get("parameters"), dict),
+          "one malformed entry makes a Pydantic client reject the entire catalog")
+    params = schema.get("parameters") or {}
+    check("the parameters schema declares a type and properties",
+          params.get("type") == "object" and isinstance(params.get("properties"), dict),
+          f"parameters={params!r}"[:120])
+
+    check("handle_tool_call rejects a name it does not own",
+          "unknown" in fresh.handle_tool_call("someone_elses_tool", {}))
+    check("handle_tool_call asks for a query rather than guessing",
+          "needs a query" in fresh.handle_tool_call("sakur4_recall", {}))
+    check("handle_tool_call answers a real query",
+          "max_attempts" in fresh.handle_tool_call(
+              "sakur4_recall", {"query": "max_attempts", "k": 3}),
+          "the tool the model can call has to return the thing it promised")
 
     # -----------------------------------------------------------------------
     print("\na missing daemon must not break a session")

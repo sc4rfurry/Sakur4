@@ -123,7 +123,7 @@ problem is entirely in how Hermes resolves a model string for a custom provider.
 ## What this does and does not mean
 
 **Verified:** the engine registers, is instantiated by Hermes, talks to a live daemon, and
-passes 27 contracts against it. The integration is correct.
+passes 44 contracts against it. The integration is correct.
 
 **Not verified:** a Hermes session driving a model with this engine active. The in-turn
 behaviour question stays open here, exactly as model-initiated tool use stays open for OMP.

@@ -414,9 +414,21 @@ class Sakur4ContextEngine(ContextEngine):
         return tokens >= self.threshold_tokens
 
     def has_content_to_compress(self, messages: List[Dict[str, Any]]) -> bool:
-        # Needs at least the protected head and tail plus something in between, or the
-        # plan has nothing to evict and Hermes would run a pass for no reason.
-        return len(messages) > (self.protect_first_n + self.protect_last_n + 1)
+        """Whether there is anything between the protected head and tail to evict.
+
+        # The off-by-one this used to have
+
+        The test was `len(messages) > protect_first_n + protect_last_n + 1`, which demands one
+        message *more* than a middle. A transcript of exactly the protected head, exactly the
+        protected tail, and one message between them — the smallest transcript with anything
+        evictable in it — reported `False`, so a pass that could have reclaimed a turn never
+        ran. The comment above the line described the intended rule correctly; the comparison
+        did not match it.
+
+        Found by the contract that exercises this method against a live daemon. Nothing else
+        called it, so nothing else could have noticed.
+        """
+        return len(messages) >= (self.protect_first_n + self.protect_last_n + 1)
 
     def compress(
         self,
