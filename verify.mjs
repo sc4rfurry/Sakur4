@@ -90,9 +90,48 @@ const FAIL = "fail";
 const SKIP = "skip";
 
 const results = [];
+// Every group and id that actually ran, so a filter matching nothing can be reported rather
+// than silently succeeding. See the check in `main`.
+// # The full catalog, declared rather than discovered
+//
+// Recording only what *ran* would make the "matched no check" message print an empty list of
+// known names exactly when it is most needed — when a filter excluded everything, or when a
+// user mistyped. This is every group and id the script can produce, kept next to the code that
+// produces them so a drift is visible.
+const CATALOG = {
+  rust: ["cargo fmt", "cargo clippy", "cargo test", "doctests", "cargo doc"],
+  encryption: ["encryption at rest (FR-20)"],
+  hermes: ["context engine (FR-16)"],
+  bench: ["A/B (scripted)", "NFR-2 recall at scale"],
+  live: [
+    "llama.cpp prefix behaviour",
+    "compaction case",
+    "proxy rewrites an over-window transcript",
+    "proxy trims a single large request",
+  ],
+  harness: [
+    "OMP extension",
+    "generated configs name an absolute store",
+    "OMP extension command forms",
+    "integration tool names exist",
+    "Hermes plugin",
+  ],
+};
+const KNOWN_NAMES = [...new Set([...Object.keys(CATALOG), ...Object.values(CATALOG).flat()])].sort();
+const recordedGroups = new Set();
+const recordedIds = new Set();
 
+/**
+ * Record one check's outcome.
+ *
+ * `id` is what `--only` accepts and what `CATALOG` lists; `label` is what a person reads. They
+ * were the same string until the catalog guard pointed out that `--only fmt` could never match a
+ * check whose id was `cargo fmt` — the id is a selector, not a sentence.
+ */
 function record(group, id, status, note) {
   results.push({ group, id, status, note });
+  recordedGroups.add(group);
+  recordedIds.add(id);
   const mark = { [PASS]: "PASS", [FAIL]: "FAIL", [SKIP]: "SKIP" }[status];
   const colour = { [PASS]: "\x1b[32m", [FAIL]: "\x1b[31m", [SKIP]: "\x1b[33m" }[status];
   process.stdout.write(
@@ -275,7 +314,7 @@ async function hermesChecks() {
   // The engine imports `agent.context_engine`, which only exists inside a Hermes install.
   // CI stubs it; locally the real one is used when Hermes is present, because testing
   // against the real interface is strictly better than testing against a stub of it.
-  const hermesHome = join(process.env.LOCALAPPDATA ?? join(process.env.HOME ?? "", ".local", "share"), "hermes", "hermes-agent");
+  const hermesHome = join(process.env.LOCALAPPDATA ?? join(process.env.HOME ?? "", ".local", "share"), "hermes-agent");
   const agentDir = existsSync(join(hermesHome, "agent", "context_engine.py"))
     ? hermesHome
     : makeHermesStub();
@@ -789,10 +828,17 @@ async function main() {
         "groups and what they need:",
         "  rust        nothing                      fmt, clippy, tests, doctests, doc",
         "  encryption  OpenSSL development files    FR-20 acceptance criterion",
-        "  hermes      python + a built daemon      FR-16, 28 contracts",
+        "  hermes      python + a built daemon      FR-16 context engine, 27 contracts",
         "  bench       a repository to index        scripted A/B, NFR-2 recall",
         "  live        --upstream <url>             real llama.cpp measurements",
-        "  harness     OMP or the Hermes CLI        installation is discoverable",
+        "  harness     a built daemon               OMP + Hermes install, generated config",
+        "                                           paths, the extension's command forms,",
+        "                                           and every tool name it references",
+        "",
+        "--only takes a group or a check id, where a check id is the name printed beside PASS.",
+        "`hermes` is a group (the context engine); the plugin-discovery check is `Hermes plugin`",
+        "in the harness group. A filter that matches nothing is reported and exits non-zero,",
+        "because an empty result set is not a green one.",
         "",
       ].join("\n"),
     );
@@ -814,6 +860,47 @@ async function main() {
   harnessChecks();
 
   const counts = summarize();
+
+  // # A filter that matched nothing is not a pass
+  //
+  // `--only nfr --quick` ran no checks at all and printed "0 passed · 0 failed · 0 skipped",
+  // which reads as success. It is the third time in this project that an empty result set has
+  // presented as a green one — after an empty `--only` in an earlier version and a tool-name
+  // check that matched zero call sites. The set of things that ran is now compared against what
+  // was asked for.
+  //
+  // `--quick` legitimately suppresses some checks, so an id that was filtered out rather than
+  // unknown is named as such instead of being called a typo.
+  if (ONLY.length > 0) {
+    const unmatched = ONLY.filter((name) => !recordedGroups.has(name) && !recordedIds.has(name));
+    if (unmatched.length > 0) {
+      const known = KNOWN_NAMES;
+      process.stdout.write(
+        `\n  \x1b[33m--only named ${unmatched.map((u) => `'${u}'`).join(", ")}, which matched no check.\x1b[0m\n` +
+          `  Known here: ${known.join(", ")}\n` +
+          (QUICK ? "  (--quick suppresses some checks; drop it to include them.)\n" : ""),
+      );
+      return 1;
+    }
+  }
+
+  // The catalog above is only useful if it matches reality, so it is checked after a full run —
+  // where everything that can run has run. A narrow `--only` is exempt, because it excludes by
+  // design, and `--quick` is exempt because it suppresses the slow checks.
+  if (ONLY.length === 0 && !QUICK) {
+    const ran = new Set([...recordedGroups, ...recordedIds]);
+    const unlisted = [...ran].filter((name) => !KNOWN_NAMES.includes(name)).sort();
+    const unused = KNOWN_NAMES.filter((name) => !ran.has(name));
+    if (unlisted.length > 0 || unused.length > 0) {
+      process.stdout.write(
+        "\n  \x1b[33mthe check catalog in this file is stale.\x1b[0m" +
+          (unlisted.length ? ` Not listed: ${unlisted.join(", ")}.` : "") +
+          (unused.length ? ` Listed but absent: ${unused.join(", ")}.` : "") +
+          "\n",
+      );
+      return 1;
+    }
+  }
 
   if (counts[FAIL] > 0) return 1;
   if (REQUIRE_ALL && counts[SKIP] > 0) {
