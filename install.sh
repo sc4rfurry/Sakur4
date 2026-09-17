@@ -1,0 +1,196 @@
+#!/bin/sh
+# Install sakur4d from a GitHub release.
+#
+#   curl -fsSL https://raw.githubusercontent.com/sakur4/sakur4/main/install.sh | sh
+#
+# # Why a script and not a package
+#
+# Sakur4 is one self-contained binary with no runtime dependencies, so a package manager
+# would add a maintenance surface without adding anything a download does not. A `cargo
+# install` would compile the whole tree — tree-sitter grammars and a bundled SQLite — for a
+# tool whose entire point is to be cheap to run.
+#
+# # What this refuses to do
+#
+# It verifies the checksum before installing, and it stops rather than continuing if the
+# checksum cannot be fetched. An installer that silently skips verification is worse than no
+# installer, because it teaches people to trust the output of a pipe.
+#
+# Environment:
+#   SAKUR4_VERSION   tag to install, e.g. v0.1.0. Default: the latest release.
+#   SAKUR4_BIN_DIR   where to put the binary. Default: ~/.local/bin, or /usr/local/bin
+#                    when writable and ~/.local/bin is not on PATH.
+
+set -eu
+
+REPO="${SAKUR4_REPO:-sakur4/sakur4}"
+BIN="sakur4d"
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
+
+need() {
+    command -v "$1" >/dev/null 2>&1 || die "$1 is required but not installed"
+}
+
+need uname
+need mkdir
+need chmod
+need mv
+
+# A downloader and a checksum tool, either of which is present nearly everywhere. Both are
+# required; a partial set would mean installing without verifying.
+if command -v curl >/dev/null 2>&1; then
+    fetch() { curl -fsSL "$1"; }
+    fetch_to() { curl -fsSL -o "$2" "$1"; }
+elif command -v wget >/dev/null 2>&1; then
+    fetch() { wget -qO- "$1"; }
+    fetch_to() { wget -qO "$2" "$1"; }
+else
+    die "curl or wget is required"
+fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+    checksum() { sha256sum "$1" | awk '{print $1}'; }
+elif command -v shasum >/dev/null 2>&1; then
+    checksum() { shasum -a 256 "$1" | awk '{print $1}'; }
+else
+    die "sha256sum or shasum is required; this installer verifies before it installs"
+fi
+
+# ---------------------------------------------------------------------------
+# Which target
+# ---------------------------------------------------------------------------
+os="$(uname -s)"
+arch="$(uname -m)"
+
+case "$os" in
+    Linux)  os_part="unknown-linux-gnu" ;;
+    Darwin) os_part="apple-darwin" ;;
+    *) die "unsupported OS: $os. Download from https://github.com/$REPO/releases" ;;
+esac
+
+case "$arch" in
+    x86_64|amd64)  arch_part="x86_64" ;;
+    arm64|aarch64) arch_part="aarch64" ;;
+    *) die "unsupported architecture: $arch. Download from https://github.com/$REPO/releases" ;;
+esac
+
+target="${arch_part}-${os_part}"
+
+# ---------------------------------------------------------------------------
+# Which version
+# ---------------------------------------------------------------------------
+version="${SAKUR4_VERSION:-}"
+if [ -z "$version" ]; then
+    # The `releases/latest` redirect carries the tag, and reading it avoids needing the API
+    # (which is rate-limited and would fail differently for a user than for CI).
+    version="$(fetch "https://api.github.com/repos/$REPO/releases/latest" \
+        | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+        | head -n 1)"
+    [ -n "$version" ] || die "could not determine the latest release; set SAKUR4_VERSION"
+fi
+
+archive="${BIN}-${version}-${target}.tar.gz"
+base="https://github.com/$REPO/releases/download/$version"
+
+say "sakur4 installer"
+say "  version  $version"
+say "  target   $target"
+
+# ---------------------------------------------------------------------------
+# Download, verify, extract
+# ---------------------------------------------------------------------------
+tmp="$(mktemp -d 2>/dev/null || mktemp -d -t sakur4)"
+trap 'rm -rf "$tmp"' EXIT INT TERM
+
+say "  fetching $archive"
+fetch_to "$base/$archive" "$tmp/$archive" || die "download failed: $base/$archive"
+
+# The checksum file is required. Fetching it separately means a failure to reach it is a
+# failure to install, rather than a quiet downgrade to installing something unverified.
+fetch_to "$base/SHA256SUMS.txt" "$tmp/SHA256SUMS.txt" \
+    || die "could not fetch SHA256SUMS.txt; refusing to install without verification"
+
+# # Accept both checksum-file formats
+#
+# `sha256sum ./*.tar.gz` writes `hash  *./name`, while bare names give `hash  name`. Both
+# appear in the wild — the first is what a shell glob produces and the second is what the
+# release workflow writes now — so the lookup normalises the filename before comparing rather
+# than assuming one form.
+#
+# This was found by testing the installer against a real archive rather than by reading it: the
+# first version matched only `name` and every install would have been refused with "not listed
+# in SHA256SUMS.txt", which reads as a corrupt download rather than as an installer bug.
+expected="$(awk -v f="$archive" '
+    {
+        name = $2
+        sub(/^\*/, "", name)   # binary-mode marker
+        sub(/^\.\//, "", name) # leading ./ from a glob
+        if (name == f) { print $1; exit }
+    }
+' "$tmp/SHA256SUMS.txt")"
+[ -n "$expected" ] || die "$archive is not listed in SHA256SUMS.txt; refusing to install"
+
+actual="$(checksum "$tmp/$archive")"
+if [ "$expected" != "$actual" ]; then
+    die "checksum mismatch for $archive
+  expected $expected
+  actual   $actual
+Do not use this download. Report it at https://github.com/$REPO/issues"
+fi
+say "  checksum ok"
+
+tar -xzf "$tmp/$archive" -C "$tmp" || die "could not extract $archive"
+
+# ---------------------------------------------------------------------------
+# Install
+# ---------------------------------------------------------------------------
+bindir="${SAKUR4_BIN_DIR:-}"
+if [ -z "$bindir" ]; then
+    if [ -d "$HOME/.local/bin" ] || mkdir -p "$HOME/.local/bin" 2>/dev/null; then
+        bindir="$HOME/.local/bin"
+    else
+        bindir="/usr/local/bin"
+    fi
+fi
+mkdir -p "$bindir" 2>/dev/null || die "cannot create $bindir; set SAKUR4_BIN_DIR"
+
+# `mv` across filesystems fails, so copy into place and then make it executable. A
+# half-written binary is worse than none, so the copy goes to a temporary name first.
+mv "$tmp/$BIN-$version-$target/$BIN" "$bindir/$BIN.new"
+chmod +x "$bindir/$BIN.new"
+mv "$bindir/$BIN.new" "$bindir/$BIN"
+
+say "  installed $bindir/$BIN"
+
+# ---------------------------------------------------------------------------
+# What is next, and whether this will actually be found
+# ---------------------------------------------------------------------------
+say ""
+"$bindir/$BIN" --version >/dev/null 2>&1 || die "the installed binary does not run"
+
+case ":${PATH}:" in
+    *":$bindir:"*) ;;
+    *)
+        say "Add it to your PATH:"
+        say ""
+        say "  export PATH=\"$bindir:\$PATH\""
+        say ""
+        ;;
+esac
+
+# The archives carry the skill and the integrations, so a download is a complete install
+# rather than a binary and a scavenger hunt.
+if [ -d "$tmp/$BIN-$version-$target/skills/sakur4" ]; then
+    say "The Agent Skill came with it:"
+    say ""
+    say "  mkdir -p ~/.agents/skills"
+    say "  cp -r \"$tmp/$BIN-$version-$target/skills/sakur4\" ~/.agents/skills/"
+    say ""
+    say "Contact the daemon:"
+    say ""
+    say "  $BIN doctor"
+    say "  $BIN config hermes"
+    say ""
+fi
