@@ -32,6 +32,33 @@ cargo doc --workspace --no-deps
 
 CI enforces all four with warnings denied, so a warning is a failure there.
 
+**The second one needs OpenSSL development files.** `--all-features` enables the `encryption`
+feature, whose build script links SQLCipher, and without a crypto provider it dies with:
+
+```text
+Missing environment variable OPENSSL_DIR or OPENSSL_DIR is not set
+```
+
+That message points at the linter and the failure is not a lint failure. On Debian or Ubuntu:
+
+```bash
+sudo apt-get install -y libssl-dev
+```
+
+**On Windows it cannot be made to work** without installing OpenSSL development files and
+setting `OPENSSL_DIR`; the runtime package is not enough. So on a Windows machine, run the other
+three and lint with the default features:
+
+```bash
+cargo clippy --workspace --all-targets
+```
+
+That is a real gap in local verification rather than a failure — the feature is off by default
+and CI lints it on Linux, where the provider is present. Worth knowing before you spend an hour
+on a C build script.
+
+Every other step below runs anywhere.
+
 ### 2. Update the changelog
 
 Move everything under `## [Unreleased]` into a new `## [x.y.z] - YYYY-MM-DD`
