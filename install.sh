@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install sakur4d from a GitHub release.
 #
-#   curl -fsSL https://raw.githubusercontent.com/sakur4/sakur4/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/sc4rfurry/Sakur4/main/install.sh | sh
 #
 # # Why a script and not a package
 #

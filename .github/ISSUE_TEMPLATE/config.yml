@@ -1,8 +1,8 @@
 blank_issues_enabled: true
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/sakur4/sakur4/security/advisories/new
+    url: https://github.com/sc4rfurry/Sakur4/security/advisories/new
     about: Report privately. Please do not open a public issue for a security problem.
   - name: Question or design discussion
-    url: https://github.com/sakur4/sakur4/discussions
+    url: https://github.com/sc4rfurry/Sakur4/discussions
     about: For "how do I…" and "why is it shaped this way" rather than a bug.

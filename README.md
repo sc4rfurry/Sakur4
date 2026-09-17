@@ -17,12 +17,53 @@ five.
 
 <br>
 
-[![Release](https://img.shields.io/github/v/release/sakur4/sakur4?color=22d3ee&label=release)](https://github.com/sakur4/sakur4/releases)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.94%2B-orange.svg)](https://www.rust-lang.org)
-[![MCP](https://img.shields.io/badge/MCP-2026--07--28-8b5cf6.svg)](https://modelcontextprotocol.io)
-[![Tests](https://img.shields.io/badge/tests-257%20passing-34d399.svg)](#verification)
-[![Dependencies](https://img.shields.io/badge/runtime%20deps-none%20for%20the%20plugin-34d399.svg)](#design-decisions)
+[![Release](https://img.shields.io/github/v/release/sc4rfurry/Sakur4?color=22d3ee&label=release&style=flat-square)](https://github.com/sc4rfurry/Sakur4/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/sc4rfurry/Sakur4/ci.yml?branch=master&label=CI&style=flat-square)](https://github.com/sc4rfurry/Sakur4/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/sc4rfurry/Sakur4?style=flat-square&color=22d3ee)](https://github.com/sc4rfurry/Sakur4/stargazers)
+
+[![Tests](https://img.shields.io/badge/tests-256%20passing-34d399?style=flat-square)](#verification)
+[![MCP](https://img.shields.io/badge/MCP-2026--07--28-8b5cf6?style=flat-square)](https://modelcontextprotocol.io)
+[![Rust](https://img.shields.io/badge/rust-1.94%2B-orange?style=flat-square)](https://www.rust-lang.org)
+[![Platforms](https://img.shields.io/badge/platforms-linux%20%C2%B7%20macOS%20%C2%B7%20windows-4b5563?style=flat-square)](#install)
+[![Runtime deps](https://img.shields.io/badge/runtime%20deps-none-34d399?style=flat-square)](#design-decisions)
+
+</div>
+
+<br>
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**What it is**
+
+A memory and context layer that sits beside a coding agent. It keeps a verbatim record of
+what happened, finds it again by meaning rather than by grepping, and — the part nothing else
+does — **decides where to compact so the inference server's prompt cache still matches.**
+
+</td>
+<td width="50%" valign="top">
+
+**What it is not**
+
+Not a harness, not a model, not a proxy in the routing sense. It never calls a model and never
+owns the agent loop. Every harness that uses it keeps owning its own session; Sakur4 advises
+and records. Remove it and the agent still runs.
+
+</td>
+</tr>
+</table>
+
+<div align="center">
+
+**Measured against a real 27B on a real server** — not a fixture
+
+| tokens per turn | compactions | facts recalled | pinned constraint |
+|:---:|:---:|:---:|:---:|
+| **+1.3%** | 2 → **4** | 50% → **92%** | lost → **survived** |
+
+<sub>205 turns, matched 81,920-token window, `window-first` profile. Full method and raw numbers in <a href="#benchmark-what-changes-with-it-and-without-it">the benchmark</a>.</sub>
 
 </div>
 
@@ -118,8 +159,8 @@ anywhere.
 
 <table>
 <tr><th>Method</th><th>Command</th><th>Notes</th></tr>
-<tr><td><b>Install script</b></td><td><code>curl -fsSL https://raw.githubusercontent.com/sakur4/sakur4/main/install.sh | sh</code></td><td>Detects your platform, <b>verifies the checksum</b>, installs, and says where the skill went.</td></tr>
-<tr><td><b>Release binary</b></td><td>Download from <a href="https://github.com/sakur4/sakur4/releases">Releases</a></td><td>Archives carry <code>sakur4d</code>, the skill and the OMP plugin together.</td></tr>
+<tr><td><b>Install script</b></td><td><code>curl -fsSL https://raw.githubusercontent.com/sc4rfurry/Sakur4/main/install.sh | sh</code></td><td>Detects your platform, <b>verifies the checksum</b>, installs, and says where the skill went.</td></tr>
+<tr><td><b>Release binary</b></td><td>Download from <a href="https://github.com/sc4rfurry/Sakur4/releases">Releases</a></td><td>Archives carry <code>sakur4d</code>, the skill and the OMP plugin together.</td></tr>
 <tr><td><b>From a checkout</b></td><td><code>cargo install --path crates/sakur4d</code></td><td>Builds and installs in one step. About eight minutes from cold; verified.</td></tr>
 <tr><td><b>From source</b></td><td><code>cargo build --release</code></td><td>Then copy <code>target/release/sakur4d</code> onto your <code>PATH</code>.</td></tr>
 </table>

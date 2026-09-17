@@ -1,6 +1,6 @@
 # sakur4-core
 
-The engine behind [Sakur4](https://github.com/sakur4/sakur4) — a cache-coherent
+The engine behind [Sakur4](https://github.com/sc4rfurry/Sakur4) — a cache-coherent
 memory and context operating system for local coding and research agents.
 
 This crate is published so the `sakur4d` daemon has a home on crates.io. It is a
@@ -67,4 +67,4 @@ println!("backend: {} ({})", status.backend_name, status.cache_summary);
 
 ## License
 
-Apache-2.0. See [LICENSE](https://github.com/sakur4/sakur4/blob/main/LICENSE).
+Apache-2.0. See [LICENSE](https://github.com/sc4rfurry/Sakur4/blob/main/LICENSE).

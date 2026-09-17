@@ -1,6 +1,6 @@
 # sakur4d
 
-The [Sakur4](https://github.com/sakur4/sakur4) daemon: an MCP server that gives any
+The [Sakur4](https://github.com/sc4rfurry/Sakur4) daemon: an MCP server that gives any
 coding agent a persistent, self-curating memory and a cache-coherent context
 window.
 
@@ -11,7 +11,7 @@ cargo install sakur4d
 ```
 
 Or download a prebuilt binary from the
-[releases page](https://github.com/sakur4/sakur4/releases).
+[releases page](https://github.com/sc4rfurry/Sakur4/releases).
 
 ## Use it from your harness
 
@@ -67,4 +67,4 @@ sakur4d receipt <session>   # where the context budget went, and the cache verdi
 
 ## License
 
-Apache-2.0. See [LICENSE](https://github.com/sakur4/sakur4/blob/main/LICENSE).
+Apache-2.0. See [LICENSE](https://github.com/sc4rfurry/Sakur4/blob/main/LICENSE).

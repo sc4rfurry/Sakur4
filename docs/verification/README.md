@@ -163,7 +163,7 @@ run, because there is nowhere to push it.
 | crates.io | **not published** |
 | `gh` authentication | **not logged in** |
 | release tag | `v0.1.0` exists locally, unpushed |
-| `repository` in `Cargo.toml` | `https://github.com/sakur4/sakur4` — a **placeholder** |
+| `repository` in `Cargo.toml` | `https://github.com/sc4rfurry/Sakur4` — a **placeholder** |
 
 This is configuration rather than engineering. But until it is done, "production ready"
 is not a claim that can be made about something nobody can install.
@@ -267,6 +267,9 @@ node docs/verification/atlas-inventory.mjs --match "some text"
 # Move named sessions out of recall's window. Backs up first, has no --all, and reports what
 # actually changed rather than what it attempted.
 node docs/verification/store-purge.mjs --db PATH --archive --dry-run --session NAME
+
+# Is the repository URL real everywhere it appears?
+node docs/verification/repo-url.mjs
 ```
 
 **`episodic_stream` is append-only by trigger**, so episodes cannot be deleted — that is FR-1 and

@@ -101,10 +101,34 @@ function canvas(w, h, { grid = true, id = "c" } = {}) {
       <stop offset="0%" stop-color="#ffffff" stop-opacity="0.05"/>
       <stop offset="60%" stop-color="#ffffff" stop-opacity="0"/>
     </linearGradient>
+    <!--
+      Two off-centre washes and a hairline edge, shared by every figure.
+
+      A single centred glow made the whole set read as evenly lit, which is what makes a diagram
+      look generated rather than drawn: with no light direction there is no sense of a surface.
+      Two washes — cyan where the title sits, violet at the opposite corner — give the eye a
+      direction to follow, and the hairline stops the top edge dissolving into the page.
+    -->
+    <radialGradient id="${id}-washA" cx="16%" cy="8%" r="64%">
+      <stop offset="0%" stop-color="${T.cyan}" stop-opacity="0.13"/>
+      <stop offset="100%" stop-color="${T.cyan}" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="${id}-washB" cx="86%" cy="97%" r="60%">
+      <stop offset="0%" stop-color="${T.violet}" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="${T.violet}" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="${id}-edge" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="${T.cyan}" stop-opacity="0.8"/>
+      <stop offset="55%" stop-color="${T.violet}" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="${T.violet}" stop-opacity="0"/>
+    </linearGradient>
   </defs>
   <rect width="${w}" height="${h}" fill="${T.bg}"/>
+  <rect width="${w}" height="${h}" fill="url(#${id}-washA)"/>
+  <rect width="${w}" height="${h}" fill="url(#${id}-washB)"/>
   ${grid ? `<rect width="${w}" height="${h}" fill="url(#${id}-grid)" opacity="0.55"/>` : ""}
-  <rect width="${w}" height="${h}" fill="url(#${id}-vig)"/>`;
+  <rect width="${w}" height="${h}" fill="url(#${id}-vig)"/>
+  <rect x="0" y="0" width="${w}" height="2" fill="url(#${id}-edge)"/>`;
 }
 
 /** Rounded panel with a hairline border and an optional glow. */
@@ -240,12 +264,23 @@ function hero() {
 
   let s = canvas(W, H, { id });
 
+  // Only the wordmark gradient is hero-specific; the washes, the vignette and the top edge now
+  // come from `canvas`, so all eight figures share one atmosphere rather than eight variations.
+  s += `<defs><linearGradient id="${id}-word" x1="0" y1="0" x2="1" y2="0.4">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="52%" stop-color="${T.ink}"/>
+      <stop offset="100%" stop-color="${T.cyan}"/>
+    </linearGradient></defs>`;
+
   // --- Wordmark -----------------------------------------------------------
-  s += text(64, 104, "Sakur4", { size: 64, weight: 700, fill: T.ink, spacing: -2 });
+  s += text(64, 104, "Sakur4", { size: 64, weight: 700, fill: `url(#${id}-word)`, spacing: -2 });
   s += `<rect x="64" y="120" width="248" height="3" rx="1.5" fill="url(#${id}-rule)"/>`;
   s += `<defs><linearGradient id="${id}-rule" x1="0" y1="0" x2="1" y2="0">
     <stop offset="0%" stop-color="${T.cyan}"/><stop offset="70%" stop-color="${T.violet}"/><stop offset="100%" stop-color="${T.violet}" stop-opacity="0"/>
   </linearGradient></defs>`;
+
+  // The version, set as a value rather than a claim — monospaced, because that is what it is.
+  s += pill(504, 60, "v0.1.0", { fill: T.panel, stroke: T.panelEdge, ink: T.inkFaint });
 
   s += text(64, 162, "Cache-coherent memory and context for local coding agents", {
     size: 19,
