@@ -239,5 +239,5 @@ The first release. Everything below is new.
 - **`cargo deny` and `cargo audit` are not wired into CI.** Review `Cargo.lock`
   changes in a pull request.
 
-[Unreleased]: https://github.com/sakur4/sakur4/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/sakur4/sakur4/releases/tag/v0.1.0
+[Unreleased]: https://github.com/sc4rfurry/Sakur4/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/sc4rfurry/Sakur4/releases/tag/v0.1.0

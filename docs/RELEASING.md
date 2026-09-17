@@ -5,19 +5,37 @@ irreversible and therefore belong to a human.
 
 ## One-time setup
 
-Two values in the repository are placeholders and must be real before the first
-release:
+**The repository URL is real everywhere it appears**, and verified on every run:
 
-1. **The repository URL.** `Cargo.toml` has
-   `repository = "https://github.com/sakur4/sakur4"` in `[workspace.package]`.
-   Every crate inherits it, and it ends up in the published manifest — a crate
-   whose repository link 404s is a crate nobody can inspect. Change it once, in
-   `[workspace.package]`.
-2. **The compare/release links** at the bottom of `CHANGELOG.md`, which reference
-   the same URL.
+```toml
+repository = "https://github.com/sc4rfurry/Sakur4"
+```
 
-Nothing else needs configuring. CI uses no secrets; the release workflow uses the
-automatic `GITHUB_TOKEN`.
+That covers `[workspace.package]` in `Cargo.toml`, the badge and links in `README.md`,
+`install.sh`, the plugin and skill manifests, and the compare/release link definitions at the
+bottom of `CHANGELOG.md`. `verify.mjs` fails if a placeholder returns, because the failure it
+guards against is a published crate whose repository link 404s — a crate nobody can inspect.
+
+CI uses no secrets and the release workflow uses the automatic `GITHUB_TOKEN`, so nothing else
+needs configuring.
+
+### The first push
+
+The one step that cannot happen from inside the repository is getting it onto GitHub:
+
+```bash
+gh auth login                     # interactive, once
+git remote add origin https://github.com/sc4rfurry/Sakur4.git
+git push -u origin master --follow-tags
+```
+
+`v0.1.0` is already tagged locally, so `--follow-tags` starts the release workflow and produces
+the archives. Confirm with:
+
+```bash
+git ls-remote --tags origin | grep v0.1.0
+gh run list --limit 3
+```
 
 ## Cutting a release
 

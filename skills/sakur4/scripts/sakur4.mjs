@@ -154,7 +154,7 @@ function requireDaemon(opts) {
     fail(
       `could not find ${EXE}.\n` +
         `  Install it with:  cargo install sakur4d\n` +
-        `  Or download a release: https://github.com/sakur4/sakur4/releases\n` +
+        `  Or download a release: https://github.com/sc4rfurry/Sakur4/releases\n` +
         `  Or point at it with:  --bin /path/to/${EXE}   (or SAKUR4_BIN)`,
     );
   }

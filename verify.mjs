@@ -99,7 +99,7 @@ const results = [];
 // user mistyped. This is every group and id the script can produce, kept next to the code that
 // produces them so a drift is visible.
 const CATALOG = {
-  rust: ["cargo fmt", "cargo clippy", "cargo test", "doctests", "cargo doc"],
+  rust: ["cargo fmt", "cargo clippy", "cargo test", "doctests", "cargo doc", "repository URL is real"],
   encryption: ["encryption at rest (FR-20)"],
   hermes: ["context engine (FR-16)"],
   bench: ["A/B (scripted)", "NFR-2 recall at scale"],
@@ -798,6 +798,27 @@ function harnessChecks() {
         "integration tool names exist",
         ok ? PASS : FAIL,
         ok ? "OMP 10 + Hermes 4, all in the catalog" : lastLines(r.output, 6),
+      );
+    }
+  }
+
+  // The repository URL ships inside every published crate's manifest. A placeholder there is a
+  // crate nobody can inspect, and it is invisible locally: the build passes, the tests pass, and
+  // the wrong string goes out. It sat in sixteen files while everything was green.
+  if (wanted("repo-url", "rust")) {
+    const script = join(ROOT, "docs", "verification", "repo-url.mjs");
+    if (!existsSync(script)) {
+      record("rust", "repository URL is real", SKIP, "the check is missing");
+    } else {
+      const r = run(process.execPath, [script]);
+      const ok = r.ok && /none are placeholders/.test(r.output);
+      record(
+        "rust",
+        "repository URL is real",
+        ok ? PASS : FAIL,
+        ok
+          ? (r.output.match(/manifest repository: (\S+)/) ?? ["", ""])[1]
+          : lastLines(r.output, 5),
       );
     }
   }

@@ -6,12 +6,12 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sakur4/sakur4.git",
+    "url": "git+https://github.com/sc4rfurry/Sakur4.git",
     "directory": "integrations/omp-plugin"
   },
-  "homepage": "https://github.com/sakur4/sakur4#readme",
+  "homepage": "https://github.com/sc4rfurry/Sakur4#readme",
   "bugs": {
-    "url": "https://github.com/sakur4/sakur4/issues"
+    "url": "https://github.com/sc4rfurry/Sakur4/issues"
   },
   "keywords": [
     "pi-package",
