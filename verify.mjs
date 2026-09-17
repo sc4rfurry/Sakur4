@@ -658,6 +658,26 @@ function harnessChecks() {
     }
   }
 
+  // A generated config is the first thing a user pastes into a harness, and a relative store
+  // path in it lands the memory wherever that harness happens to spawn the process. Checked
+  // from an unrelated working directory, because that is the condition that exposes it.
+  if (wanted("config-paths", "harness")) {
+    const script = join(ROOT, "docs", "verification", "config-paths.mjs");
+    const binary = daemonBinary();
+    if (!existsSync(script) || !binary) {
+      record("harness", "generated configs name an absolute store", SKIP, "needs a built daemon");
+    } else {
+      const r = run(process.execPath, [script, binary]);
+      const ok = r.ok && /every harness config names an absolute store path/.test(r.output);
+      record(
+        "harness",
+        "generated configs name an absolute store",
+        ok ? PASS : FAIL,
+        ok ? "all five harnesses" : lastLines(r.output, 6),
+      );
+    }
+  }
+
   if (wanted("hermes-cli", "harness")) {
     if (!available("hermes", ["--version"])) {
       record("harness", "Hermes plugin", SKIP, "hermes not on PATH");

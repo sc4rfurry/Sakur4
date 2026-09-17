@@ -33,8 +33,20 @@ use sakur4_core::{Engine, EngineConfig};
 )]
 pub struct Cli {
     /// Path to the Memory Fabric store.
+    ///
+    /// A relative path resolves against the working directory, which is correct for a command
+    /// the user runs themselves. It is **not** correct for a path baked into a harness's
+    /// configuration: the harness picks the working directory, so `config` resolves this to an
+    /// absolute path before printing it. See `db_explicit`.
     #[arg(long, global = true, env = "SAKUR4_DB", default_value = "sakur4.db")]
     pub db: PathBuf,
+
+    /// Whether `--db` (or `SAKUR4_DB`) was given rather than defaulted.
+    ///
+    /// Distinguishes "the user named a store" from "nobody said", which `config` needs in order
+    /// to leave an explicit path alone while relocating only the default.
+    #[arg(skip)]
+    pub db_explicit: bool,
 
     /// Inference backend: `auto`, `embedded`, `none`, or an HTTP base URL.
     #[arg(long, global = true, env = "SAKUR4_BACKEND", default_value = "auto")]
@@ -130,9 +142,16 @@ pub enum Command {
         /// Path to the sakur4d binary. Defaults to this executable.
         #[arg(long)]
         binary: Option<PathBuf>,
-        /// Memory Fabric path to bake into the generated config.
-        #[arg(long)]
-        db: Option<PathBuf>,
+        // # No `--db` here, deliberately
+        //
+        // This variant used to declare its own `db: Option<PathBuf>`. Because `--db` is a
+        // `global = true` argument, that gave `clap` two copies of the flag, and it filled the
+        // subcommand's copy with the **default** `sakur4.db` even when the user never passed
+        // one. The default then shadowed the path `main` had already resolved to an absolute
+        // location, and `config` printed a relative store into the generated configuration.
+        //
+        // The symptom was a memory that landed wherever the harness happened to be standing.
+        // The cause was a duplicated flag; the fix is to have one.
     },
 
     /// Print resolved configuration and component status.
@@ -358,7 +377,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Proxy { bind, upstream, session, observe_only } => {
             proxy(&cli, &bind, &upstream, session, observe_only).await
         }
-        Command::Config { harness, binary, db } => config(&cli, &harness, binary, db),
+        Command::Config { harness, binary } => config(&cli, &harness, binary),
         Command::Doctor { refresh } => doctor(&cli, refresh).await,
         Command::Index { path, full } => index(&cli, path, full).await,
         Command::RepoMap { budget, focus, names } => repo_map(&cli, budget, focus, names).await,
@@ -399,17 +418,75 @@ pub async fn run(cli: Cli) -> Result<()> {
 /// binary's absolute path and *this* store baked in — removes the guesswork, and
 /// an absolute path matters because a harness does not inherit the shell's `PATH`
 /// or working directory.
-fn config(cli: &Cli, harness: &str, binary: Option<PathBuf>, db: Option<PathBuf>) -> Result<()> {
+/// The per-user default store: `~/.sakur4/sakur4.db`.
+///
+/// The same location the Agent Skill and the documentation already use, so a generated config
+/// writes to the store the user's other tools are reading rather than starting a second one.
+fn home_store_path() -> Option<PathBuf> {
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
+    Some(PathBuf::from(home).join(".sakur4").join("sakur4.db"))
+}
+/// Whether the store was named rather than defaulted.
+///
+/// Read from the raw arguments because `clap` cannot distinguish "the user wrote the default
+/// value" from "the default was applied" once parsing is done — both leave the same `PathBuf`.
+/// `SAKUR4_DB` counts as naming it: an environment variable the user set is a decision.
+/// The store path to actually use: absolute when defaulted, untouched when named.
+///
+/// The default is relative, which is a reasonable thing for a `--help` to print and a bad thing
+/// to write a database to. An explicit path — including a relative one — is the user's decision
+/// and is passed through unchanged.
+pub fn resolve_store(db: PathBuf, explicit: bool) -> PathBuf {
+    // # SQLite's in-memory marker is not a path
+    //
+    // `:memory:` is a keyword, not a filename, and resolving it against a directory produces
+    // `D:\...\:memory:` — a path SQLite cannot open. The first version of this function did
+    // exactly that and broke six transport tests whose whole purpose is to run without a file,
+    // so it is checked first and passed through untouched.
+    if db.as_os_str() == ":memory:" {
+        return db;
+    }
+    if explicit && db.is_absolute() {
+        return db;
+    }
+    if explicit {
+        // Named but relative: relative to the directory the user is standing in, which is what
+        // they meant.
+        return std::env::current_dir().map(|cwd| cwd.join(&db)).unwrap_or(db);
+    }
+    home_store_path().unwrap_or(db)
+}
+pub fn db_was_named() -> bool {
+    if std::env::var_os("SAKUR4_DB").is_some() {
+        return true;
+    }
+    std::env::args().any(|a| a == "--db" || a.starts_with("--db="))
+}
+fn config(cli: &Cli, harness: &str, binary: Option<PathBuf>) -> Result<()> {
     let exe = binary
         .or_else(|| std::env::current_exe().ok())
         .context("could not determine the sakur4d path; pass --binary")?;
     let exe = exe.display().to_string();
-    let store = db.unwrap_or_else(|| cli.db.clone()).display().to_string();
     let project = cli
         .project_root
         .clone()
         .or_else(|| std::env::current_dir().ok())
         .map(|p| p.display().to_string());
+
+    // # The store path must be absolute, because the harness chooses the working directory
+    //
+    // `--db` defaults to the relative `sakur4.db`, and this printed it verbatim. A GUI client
+    // spawns its MCP servers with a working directory it picks — Claude Desktop uses its own
+    // application folder — so the relative path resolved to somewhere the user would never
+    // look, and a second harness would silently build a second, empty memory.
+    //
+    // Verified by running the generated stdio command from an unrelated directory: the store
+    // was created there, not in the project the config names.
+    //
+    // An explicit `--db` is still honoured exactly, since a user who named a path meant it.
+    // `cli.db` has already been resolved to an absolute path by `resolve_store`, so the only
+    // decision left here is whether the command's own `--db` overrides it.
+    let store = cli.db.display().to_string();
 
     // A single spawnable command line, used by every stdio-shaped harness.
     let mut argv = vec![exe.clone(), "--db".into(), store.clone()];

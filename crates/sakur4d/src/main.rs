@@ -26,7 +26,26 @@ use sakur4d::cli::{self, Cli};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    // `clap` cannot tell a defaulted value from an explicitly written one, and `config` needs
+    // the difference: an explicit store is left alone, the default is relocated to an absolute
+    // path so a harness cannot land it in its own working directory.
+    cli.db_explicit = cli::db_was_named();
+    // # The default store is absolute, because the working directory is not ours to choose
+    //
+    // `--db` defaulted to the relative `sakur4.db`, so every invocation wrote its store
+    // wherever it happened to be standing. For a command a person runs that is merely
+    // surprising; for an MCP server it is wrong, because the *harness* picks the working
+    // directory — Claude Desktop uses its own application folder — and `sakur4d config` then
+    // baked that same relative path into the configuration it printed. Two harnesses would
+    // silently build two empty memories, and `doctor` reported the relative path so the user
+    // had no way to see where it went.
+    //
+    // Verified by running the generated stdio command from an unrelated directory: the store
+    // appeared there, not in the configured project.
+    //
+    // An explicitly named store is untouched, in either direction.
+    cli.db = cli::resolve_store(cli.db, cli.db_explicit);
     cli::init_tracing(cli.verbose);
     cli::run(cli).await
 }
