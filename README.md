@@ -130,6 +130,12 @@ installer that silently skips verification teaches people to trust the output of
 
 `SAKUR4_VERSION=v0.1.0` pins a release; `SAKUR4_BIN_DIR` chooses where it lands.
 
+**Publishing to crates.io, if you want `cargo install sakur4d` to work:** publish
+`cargo publish -p sakur4-core` **first**. `cargo publish` resolves a path dependency through the
+registry, so the binary crate cannot be published until the core crate is on crates.io —
+publishing in the other order fails with `no matching package named 'sakur4-core' found`. The
+full sequence, and what is deliberately not automated, is in [docs/RELEASING.md](docs/RELEASING.md).
+
 Put the binary somewhere on `PATH` — `~/.cargo/bin` is where `cargo install` puts it and
 where every integration looks first. If it lives somewhere unusual, set `SAKUR4_BIN` and
 everything will find it.
@@ -900,15 +906,22 @@ The full list, including every deviation from the source requirements, is in
 <img src="docs/assets/repo-map.svg" alt="Three Rust crates — the engine, the daemon and a test kit — plus harness integrations and a portable skill package." width="100%">
 
 ```
-crates/sakur4-core/       the engine — no transport, no MCP
-crates/sakur4d/           the daemon — CLI + MCP gateway
-crates/sakur4-testkit/    fixture repos, a fake llama.cpp server
-integrations/omp-plugin/  native Oh My Pi extension + installer
-skills/sakur4/            portable Agent Skills package
-docs/DESIGN.md            how each requirement is met, and the trade-offs taken
-docs/RELEASING.md         how to cut a release, and what is manual and why
-docs/assets/              the figures above, and the generator that draws them
+crates/sakur4-core/         the engine — no transport, no MCP
+crates/sakur4d/             the daemon — CLI, MCP gateway, reverse proxy
+crates/sakur4-testkit/      fixture repos, a fake llama.cpp server
+integrations/omp-plugin/    native Oh My Pi extension + installer
+integrations/hermes-plugin/ a Hermes ContextEngine, replacing its summariser
+skills/sakur4/              portable Agent Skills package
+docs/DESIGN.md              how each requirement is met, and the trade-offs taken
+docs/RELEASING.md           how to cut a release, and what is manual and why
+docs/bench/                 what changes with Sakur4 and without it
+docs/verification/          the measurement scripts, and what each one establishes
+docs/assets/                the figures above, and the generator that draws them
 ```
+
+All five integration routes are in the tree — MCP needs nothing beyond the daemon, and the
+other four live in `integrations/` and `skills/`. `verify.mjs` at the root runs every check
+across all of them.
 
 ---
 
@@ -932,10 +945,3 @@ a public issue.
 <br>
 <sub><i>Sakur4</i> — for the sakura, and for the <code>4</code> in <code>sakur4d</code>, which is what you get when the name you want is already taken.</sub>
 </div>
-
-**Publishing to crates.io, when you want `cargo install sakur4d`:** publish
-`cargo publish -p sakur4-core` **before** `cargo publish -p sakur4d`. `cargo publish` resolves
-a path dependency through the registry, so the binary crate cannot be published until the core
-crate is on crates.io — publishing in the other order fails with
-`no matching package named 'sakur4-core' found`. The full sequence is in
-[docs/RELEASING.md](docs/RELEASING.md).

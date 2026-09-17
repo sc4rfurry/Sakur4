@@ -192,6 +192,11 @@ Stated so nobody mistakes this for more than it is.
 
 ## Running these
 
+Every script here is dependency-free — plain Node or plain PowerShell — and runs standalone.
+Some need the inference server, some need a built `sakur4d`, and some need neither.
+
+### Against a real llama.cpp server
+
 ```bash
 BASE=http://host:port
 
@@ -208,5 +213,65 @@ node docs/verification/shortening-probe.mjs --base $BASE
 node docs/verification/lcp-diagnose.mjs --base $BASE
 ```
 
-All four are dependency-free Node scripts using `fetch`. They only require the server
-to be reachable; none of them need Sakur4 itself.
+None of those four need Sakur4 at all. They characterise the server, which is what everything
+else here depends on.
+
+### Against a built daemon
+
+```bash
+BIN=~/.cargo/bin/sakur4d
+BASE=http://host:port
+
+# Recall latency at scale (NFR-2: target < 300 ms p95).
+node docs/verification/nfr2-recall.mjs --n 100000 --bin $BIN
+
+# A real transcript through the reverse proxy: is it trimmed, marked, proportionate?
+node docs/verification/proxy-rewrite.mjs --bin $BIN --upstream $BASE --window 32768
+
+# How much context survives as a session grows, read from the server's own token counts.
+node docs/verification/grow-session.mjs --proxy http://127.0.0.1:8090
+
+# Does every generated harness config name an absolute store path?
+node docs/verification/config-paths.mjs $BIN
+
+# Do the exact command shapes the OMP extension builds still work?
+node docs/verification/omp-commands.mjs $BIN
+
+# Does every tool name an integration calls exist in the daemon's catalog?
+node docs/verification/tool-names.mjs $BIN
+```
+
+### Diagnostics, for when something looks wrong
+
+```bash
+# A recording reverse proxy: forwards to the server and dumps each request as JSON.
+node docs/verification/recorder.mjs --listen 8775 --upstream $BASE --dump /tmp/dump
+
+# A listener that captures what a harness actually sends, with credentials redacted.
+pwsh docs/verification/capture-request.ps1 8772
+
+# What the server reuses, when longest-common-prefix alone does not explain it.
+node docs/verification/reuse-probe.mjs --base $BASE
+```
+
+`recorder.mjs` is what established that the reverse proxy was forwarding over-long transcripts
+verbatim. `capture-request.ps1` is what localised the Hermes integration's failure to its own
+provider routing rather than to Sakur4 — the request never reached the proxy at all.
+`reuse-probe.mjs` exists because two earlier scripts produced a contradiction: prompts with the
+same measured token-level common prefix got opposite reuse results, so the decision involves
+something other than the prefix.
+
+### Written up rather than scripted
+
+Two results needed a narrative, because the finding was in the analysis rather than in a
+pass/fail:
+
+- [proxy-rewrite.md](proxy-rewrite.md) — the reverse proxy's rewrite path: three defects, what
+  caused each, and the wrong turns that found them. Includes the two assertions that had to be
+  corrected because they failed for their own reasons.
+- [proxy-harness.md](proxy-harness.md) — a real harness through the proxy, and the configuration
+  rule that came out of it: do not run the proxy and the OMP extension at once.
+
+`verify.mjs` at the repository root runs the automatable subset of all of this in one command,
+and reports skipped separately from passed — because a run that skipped its live-server checks
+is not a green run.
