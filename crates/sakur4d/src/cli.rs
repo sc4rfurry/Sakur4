@@ -158,6 +158,9 @@ pub enum Command {
         /// Boost symbols reachable from these paths.
         #[arg(long = "focus")]
         focus: Vec<String>,
+        /// Print qualified names instead of signatures, for use with `symbol` and `impact`.
+        #[arg(long)]
+        names: bool,
     },
 
     /// Print the blast radius of changing a symbol.
@@ -358,7 +361,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Config { harness, binary, db } => config(&cli, &harness, binary, db),
         Command::Doctor { refresh } => doctor(&cli, refresh).await,
         Command::Index { path, full } => index(&cli, path, full).await,
-        Command::RepoMap { budget, focus } => repo_map(&cli, budget, focus).await,
+        Command::RepoMap { budget, focus, names } => repo_map(&cli, budget, focus, names).await,
         Command::Impact { symbol, depth } => impact(&cli, &symbol, depth).await,
         Command::Symbol { qualified_name } => symbol(&cli, &qualified_name).await,
         Command::Recall { query, k, session, include_folded } => {
@@ -610,10 +613,16 @@ async fn index(cli: &Cli, path: Option<PathBuf>, full: bool) -> Result<()> {
     Ok(())
 }
 
-async fn repo_map(cli: &Cli, budget: usize, focus: Vec<String>) -> Result<()> {
+async fn repo_map(cli: &Cli, budget: usize, focus: Vec<String>, names: bool) -> Result<()> {
     let engine = open_engine(cli).await?;
-    let focus = if focus.is_empty() { None } else { Some(focus.as_slice()) };
-    let (map, used) = engine.repo().repo_map(budget, focus, engine.tokens()).await?;
+    // `--names` exists because the two lookup commands take qualified names and the default
+    // map shows signatures, so without it there is no way to discover what to pass them.
+    let (map, used) = if names {
+        engine.repo().repo_map_names(budget, engine.tokens()).await?
+    } else {
+        let focus = if focus.is_empty() { None } else { Some(focus.as_slice()) };
+        engine.repo().repo_map(budget, focus, engine.tokens()).await?
+    };
     println!("{map}");
     eprintln!("({used} tokens of a {budget}-token budget)");
     Ok(())
