@@ -239,6 +239,10 @@ node docs/verification/omp-commands.mjs $BIN
 
 # Does every tool name an integration calls exist in the daemon's catalog?
 node docs/verification/tool-names.mjs $BIN
+
+# Snapshot / restore (FR-8): the round trip, and the refusal on a backend without the API.
+node docs/verification/snapshot-roundtrip.mjs --bin $BIN --backend embedded
+node docs/verification/snapshot-roundtrip.mjs --bin $BIN --backend $BASE
 ```
 
 ### Diagnostics, for when something looks wrong

@@ -114,6 +114,7 @@ const CATALOG = {
     "generated configs name an absolute store",
     "OMP extension command forms",
     "integration tool names exist",
+    "snapshot and restore",
     "Hermes plugin",
   ],
 };
@@ -752,6 +753,29 @@ function harnessChecks() {
         "integration tool names exist",
         ok ? PASS : FAIL,
         ok ? "OMP 10 + Hermes 4, all in the catalog" : lastLines(r.output, 6),
+      );
+    }
+  }
+
+  // Snapshot / restore (FR-8) had never been called. Both halves matter: the round trip on a
+  // backend that supports it, and — on the user's llama.cpp, which returns 501 for save — a
+  // refusal clear enough that nobody believes their session is recoverable when it is not.
+  if (wanted("snapshot", "harness") && UPSTREAM) {
+    const script = join(ROOT, "docs", "verification", "snapshot-roundtrip.mjs");
+    const binary = daemonBinary();
+    if (!existsSync(script) || !binary) {
+      record("harness", "snapshot and restore", SKIP, "needs a built daemon");
+    } else {
+      const embedded = run(process.execPath, [script, "--bin", binary, "--backend", "embedded"]);
+      const live = run(process.execPath, [script, "--bin", binary, "--backend", UPSTREAM]);
+      const ok = /VERDICT: PASS/.test(embedded.output) && /VERDICT: PASS/.test(live.output);
+      record(
+        "harness",
+        "snapshot and restore",
+        ok ? PASS : FAIL,
+        ok
+          ? "round trip on the embedded backend, clear refusal on the real one"
+          : lastLines(ok ? "" : `${embedded.output}\n${live.output}`, 8),
       );
     }
   }
