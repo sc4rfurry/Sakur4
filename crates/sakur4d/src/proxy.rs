@@ -112,6 +112,33 @@ impl ProxyState {
 
 /// Run the proxy until `cancel` fires.
 pub async fn serve(engine: Engine, bind: &str, config: ProxyConfig) -> Result<()> {
+    let listener = tokio::net::TcpListener::bind(bind)
+        .await
+        .with_context(|| format!("binding the reverse proxy to {bind}"))?;
+    tracing::info!(bind, upstream = %bind_upstream(bind), "sakur4 reverse proxy listening");
+    serve_on(engine, listener, config).await
+}
+
+/// Run the proxy on a listener the caller has already bound.
+///
+/// # Why this is separate from `serve`
+///
+/// `serve` binds its own listener, which is right for a user — they name a port and the OS gives
+/// it to them. It is wrong for a test, and was the cause of eight failures on Linux: the test
+/// bound an ephemeral port to learn its number, then called `serve`, which bound a *different*
+/// ephemeral port. The client connected to the first one, nothing was listening there, and every
+/// test failed with `ConnectionRefused`.
+///
+/// It passed on Windows for many rounds purely by scheduling luck, which is worse than failing:
+/// a race that resolves the right way teaches you the code is correct.
+///
+/// Taking the listener makes the arrangement explicit and removes the race by construction — the
+/// address the caller has is the address that serves.
+pub async fn serve_on(
+    engine: Engine,
+    listener: tokio::net::TcpListener,
+    config: ProxyConfig,
+) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(config.timeout)
         // Redirects are followed by default; a local inference server does not redirect,
@@ -131,11 +158,6 @@ pub async fn serve(engine: Engine, bind: &str, config: ProxyConfig) -> Result<()
     // the OpenAI surface would mean a harness calling an endpoint this build had not heard
     // of gets a 404 from the proxy instead of the upstream's own answer.
     let router = axum::Router::new().fallback(any(forward)).with_state(state);
-
-    let listener = tokio::net::TcpListener::bind(bind)
-        .await
-        .with_context(|| format!("binding the reverse proxy to {bind}"))?;
-    tracing::info!(bind, upstream = %bind_upstream(bind), "sakur4 reverse proxy listening");
 
     axum::serve(listener, router)
         .with_graceful_shutdown(async move {

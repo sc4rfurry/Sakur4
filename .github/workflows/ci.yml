@@ -146,17 +146,50 @@ jobs:
       - name: Build the daemon
         run: cargo build --release -p sakur4d
 
+      # # Readiness means an MCP call the daemon actually answers
+      #
+      # The first version polled `GET /` with curl and `break`-ed on success — with no failure
+      # path at all. If the daemon never came up, the loop ran its forty iterations, exited 0,
+      # and the next step started `verify_engine.py` against a dead port. The engine defers
+      # when it cannot reach a daemon, which is correct behaviour but produces a *confusing*
+      # failure: the two contracts that need a live daemon to compact fail while the offline
+      # ones pass, so the report reads as a compaction bug rather than as "nothing was
+      # listening".
+      #
+      # A `GET /` is also the wrong probe: this is a streamable-HTTP MCP server, and the
+      # endpoint that proves it is working is a `tools/call`. So the probe posts one and
+      # requires a 200. If that never happens the step fails here, naming the daemon, rather
+      # than two steps later naming the wrong thing.
       - name: Start a daemon for the engine to talk to
         run: |
+          set -euo pipefail
           ./target/release/sakur4d --db /tmp/hermes-engine.db --backend embedded \
             --context-window 8192 serve --transport http --bind 127.0.0.1:8770 --no-dream &
-          for _ in $(seq 1 40); do
-            if curl -sf -o /dev/null http://127.0.0.1:8770/ 2>/dev/null || \
-               curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8770/ | grep -qE '^[24]'; then
-              echo "daemon up"; break
+
+          probe='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sakur4.status","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
+
+          ready=0
+          for attempt in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              -X POST http://127.0.0.1:8770/ \
+              -H 'content-type: application/json' \
+              -H 'accept: application/json, text/event-stream' \
+              -H 'MCP-Protocol-Version: 2026-07-28' \
+              -H 'Mcp-Method: tools/call' \
+              -H 'Mcp-Name: sakur4.status' \
+              -d "$probe" || true)
+            if [ "$code" = "200" ]; then
+              echo "daemon answered sakur4.status after ${attempt} attempt(s)"
+              ready=1
+              break
             fi
             sleep 0.5
           done
+
+          if [ "$ready" -ne 1 ]; then
+            echo "::error::the daemon never answered an MCP call on 127.0.0.1:8770"
+            exit 1
+          fi
 
       # The engine imports `agent.context_engine`, which only exists inside Hermes. CI
       # does not have Hermes, so the interface is stubbed: the contract under test is

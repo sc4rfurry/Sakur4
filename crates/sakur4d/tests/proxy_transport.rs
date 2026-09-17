@@ -74,6 +74,33 @@ async fn fake_upstream(
     )
 }
 
+/// Wait until something is accepting connections on `addr`.
+///
+/// # Why every test needed this
+///
+/// A `TcpListener` that has been bound is not yet *accepting*: `axum::serve` has to be polled
+/// before the backlog is drained, and `tokio::spawn` only schedules that. On Windows the spawned
+/// task happened to run before the client's first `connect`, so all eight of these tests passed
+/// for many rounds. On Linux they failed together with `ConnectionRefused` on the upstream's own
+/// ephemeral port — the first CI run on Linux.
+///
+/// Reading the bind as "the server is up" is the mistake. A connect that succeeds is the only
+/// evidence that it is, which is what this waits for. The alternative — sleeping a fixed amount —
+/// trades a race for a guess.
+async fn wait_until_listening(addr: SocketAddr) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if tokio::net::TcpStream::connect(addr).await.is_ok() {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "nothing accepted a connection on {addr} within 10s"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
 async fn spawn_upstream() -> (String, Seen) {
     let seen = Seen::default();
     let router = axum::Router::new().fallback(any(fake_upstream)).with_state(seen.clone());
@@ -82,6 +109,7 @@ async fn spawn_upstream() -> (String, Seen) {
     tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
     });
+    wait_until_listening(addr).await;
     (format!("http://{addr}"), seen)
 }
 
@@ -107,9 +135,13 @@ async fn spawn_proxy(upstream: &str, manage: bool) -> String {
         ..Default::default()
     };
 
+    // `serve_on`, not `serve`: `serve` binds its own ephemeral port, so the address returned here
+    // would name a listener nobody is serving. That mismatch is what failed all eight of these
+    // tests on Linux.
     tokio::spawn(async move {
-        let _ = sakur4d::proxy::serve(engine, &addr.to_string(), config).await;
+        let _ = sakur4d::proxy::serve_on(engine, listener, config).await;
     });
+    wait_until_listening(addr).await;
     format!("http://{addr}")
 }
 
