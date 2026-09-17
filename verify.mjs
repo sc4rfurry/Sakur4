@@ -678,6 +678,45 @@ function harnessChecks() {
     }
   }
 
+  // The extension drives the daemon with exact CLI argument shapes. They were written against a
+  // documented interface and never exercised outside OMP, so a renamed flag would surface only
+  // when a user ran that tool in a session.
+  if (wanted("omp-commands", "harness")) {
+    const script = join(ROOT, "docs", "verification", "omp-commands.mjs");
+    const binary = daemonBinary();
+    if (!existsSync(script) || !binary) {
+      record("harness", "OMP extension command forms", SKIP, "needs a built daemon");
+    } else {
+      const r = run(process.execPath, [script, binary]);
+      const ok = r.ok && /all \d+ extension command forms succeed/.test(r.output);
+      record(
+        "harness",
+        "OMP extension command forms",
+        ok ? PASS : FAIL,
+        ok ? "10 CLI shapes the extension builds" : lastLines(r.output, 6),
+      );
+    }
+  }
+
+  // A tool name typo is invisible until that one tool is called: the rest of the integration
+  // keeps working, so the plugin looks healthy while a tool is dead.
+  if (wanted("tool-names", "harness")) {
+    const script = join(ROOT, "docs", "verification", "tool-names.mjs");
+    const binary = daemonBinary();
+    if (!existsSync(script) || !binary) {
+      record("harness", "integration tool names exist", SKIP, "needs a built daemon");
+    } else {
+      const r = run(process.execPath, [script, binary]);
+      const ok = r.ok && /every tool name used by an integration exists/.test(r.output);
+      record(
+        "harness",
+        "integration tool names exist",
+        ok ? PASS : FAIL,
+        ok ? "OMP 10 + Hermes 4, all in the catalog" : lastLines(r.output, 6),
+      );
+    }
+  }
+
   if (wanted("hermes-cli", "harness")) {
     if (!available("hermes", ["--version"])) {
       record("harness", "Hermes plugin", SKIP, "hermes not on PATH");
