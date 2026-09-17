@@ -3,7 +3,12 @@
 # This matters more than usual here: the stdio transport is a newline-delimited
 # JSON-RPC channel, and the test suite compares protocol frames. A stray CR is
 # invisible in an editor and visible in a protocol trace.
-* text=auto
+#
+# `eol=lf` rather than plain `text`, because the default leaves the working tree to
+# `core.autocrlf` — which on this project's development machine is `true`, so every commit
+# produced an "LF will be replaced by CRLF" warning and the tree under review differed from
+# the tree committed. Stating the intent removes both.
+* text=auto eol=lf
 
 *.rs        text eol=lf
 *.toml      text eol=lf
@@ -11,7 +16,13 @@
 *.json      text eol=lf
 *.yml       text eol=lf
 *.yaml      text eol=lf
+*.mjs       text eol=lf
+*.ts        text eol=lf
 LICENSE     text eol=lf
+
+# `install.sh` is executed by `sh`, and a CR in a shebang line makes it fail with
+# "not found" — a confusing way to learn about line endings.
+*.sh        text eol=lf
 
 # Windows scripts need CRLF to run.
 *.ps1       text eol=crlf
@@ -22,8 +33,14 @@ LICENSE     text eol=lf
 *.png       binary
 *.jpg       binary
 *.webp      binary
+*.gif       binary
+*.ico       binary
 *.gguf      binary
 *.db        binary
+
+# SVGs are text and diff usefully, but they are generated: collapsed in review so that
+# regenerating the figures does not bury a real change.
+*.svg       text eol=lf -diff linguist-generated=true
 
 # Generated and vendored content: keep it out of diffs and language stats.
 Cargo.lock  linguist-generated=true
