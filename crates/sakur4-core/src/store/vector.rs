@@ -65,8 +65,12 @@ pub fn encode(v: &[f32]) -> Vec<u8> {
 }
 
 /// Decode little-endian `f32` bytes back into a vector.
+///
+/// `as_chunks` rather than `chunks_exact(4)` plus index arithmetic: the latter needs a bounds
+/// check the compiler cannot elide, because it cannot see that the slice is exactly four long.
+/// The cast is the same length by construction, so it cannot fail.
 pub fn decode(bytes: &[u8]) -> Vec<f32> {
-    bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
 }
 
 /// L2 norm, used to persist the precomputed magnitude alongside each vector.

@@ -99,7 +99,15 @@ const results = [];
 // user mistyped. This is every group and id the script can produce, kept next to the code that
 // produces them so a drift is visible.
 const CATALOG = {
-  rust: ["cargo fmt", "cargo clippy", "cargo test", "doctests", "cargo doc", "repository URL is real"],
+  rust: [
+    "cargo fmt",
+    "cargo clippy",
+    "cargo test",
+    "doctests",
+    "cargo doc",
+    "repository URL is real",
+    "workflow shell blocks parse",
+  ],
   encryption: ["encryption at rest (FR-20)"],
   hermes: ["context engine (FR-16)"],
   bench: ["A/B (scripted)", "NFR-2 recall at scale"],
@@ -227,9 +235,37 @@ function rustChecks() {
     record("rust", "cargo fmt", r.ok ? PASS : FAIL, r.ok ? "" : lastLines(r.output, 3));
   }
 
+  // Workflow `run:` blocks are shell scripts that nothing local parses. Two shipped with syntax
+  // errors visible only in CI: a stray `done` that killed a step before its first statement, and
+  // two lines that lost their indentation and stopped being part of the block at all.
+  if (wanted("workflow-shell", "rust")) {
+    const workflowCheck = join(ROOT, "docs", "verification", "workflow-shell.mjs");
+    if (!existsSync(workflowCheck)) {
+      record("rust", "workflow shell blocks parse", SKIP, "the check is missing");
+    } else {
+      const wf = run(process.execPath, [workflowCheck]);
+      const good = wf.ok && /run block\(s\) parse as shell/.test(wf.output);
+      record(
+        "rust",
+        "workflow shell blocks parse",
+        good ? PASS : FAIL,
+        good
+          ? `${(wf.output.match(/(\d+) run block\(s\) parse/) ?? ["", "?"])[1]} blocks`
+          : lastLines(wf.output, 5),
+      );
+    }
+  }
   if (wanted("clippy", "rust")) {
-    // Default features: `--all-features` would pull in encryption, which needs OpenSSL
-    // development files this machine may not have. The encryption group covers that.
+    // Default features, plus the feature-specific lints checked explicitly below.
+    //
+    // `--all-features` needs OpenSSL development files to build SQLCipher, which this machine
+    // does not have — and that gap is not theoretical. The first release's CI failed on two
+    // clippy lints that exist only under the `encryption` feature: a `?`-operator rewrite in
+    // `fts.rs` and `chunks_exact` in `vector.rs`. They had been in the tree for many rounds
+    // while every local check was green.
+    //
+    // So the features are linted individually where they can be built, and the ones that cannot
+    // are named rather than silently skipped.
     const r = run("cargo", ["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]);
     record("rust", "cargo clippy", r.ok ? PASS : FAIL, r.ok ? "" : lastLines(r.output, 6));
   }

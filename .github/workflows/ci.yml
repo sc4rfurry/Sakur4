@@ -352,4 +352,3 @@ jobs:
             exit 1
           fi
           echo "publish order documented"
-          done

@@ -1,8 +1,51 @@
 # Sakur4 design notes
 
-This document records how each requirement in `sakur4_prd.json` is met, and — more
-usefully — the trade-offs and corrections taken along the way. Requirements that are
-*not* met are listed at the end rather than omitted.
+This document records how each requirement is met, and — more usefully — the trade-offs and
+corrections taken along the way. Requirements that are *not* met are listed at the end rather than
+omitted.
+
+**The requirements are listed here rather than in a separate specification.** There was a
+`sakur4_prd.json` in this repository: the document this was originally written against. It was
+removed from the published tree, and this is why.
+
+It was a **draft for review** — one person's plan, not a contract — and the implementation
+diverged from it in several places that mattered. It contained a section comparing Sakur4
+favourably against five named competing projects, which is an argument a repository should make on
+its merits rather than assert in a specification. It described benchmarks that were never run while
+the ones that *were* run are in [bench/](bench/). And it was 72 KB of generated JSON that nothing
+could check, because nothing referenced the requirements in a way that would fail.
+
+What a reader of this repository actually needs is the requirement, what the code does about it,
+and how to verify it — which is the table below and the sections after it. Removing the draft made
+that the single source rather than one of two.
+
+### Requirements and where each is met
+
+| | Requirement | Where |
+|---|---|---|
+| FR-1 | Append-only Episodic Stream | `store/schema.rs` triggers; `tests/fabric_contracts.rs` |
+| FR-2 | Deterministic Symbolic Ledger population | `memory/symbolic.rs`; `tests/repo_parsing.rs` |
+| FR-3 | Semantic Atlas anchoring | `memory/semantic.rs`, `memory/anchor.rs` |
+| FR-4 | Anchor Set survives all compaction | `memory/anchor.rs`, `evict.rs`; `verify_engine.py` |
+| FR-5 | Graduated eviction tiers | `evict.rs`; the tier ladder section below |
+| FR-6 | Agent-directed context folding | `memory/` folds; `sakur4_fold` / `sakur4_unfold` |
+| FR-7 | Checkpoint-aligned eviction boundaries | `cache/plan.rs`; *not verifiable on a server with no checkpoint ring* |
+| FR-8 | Session snapshot and warm restore | `session.snapshot` / `session.restore`; `snapshot-roundtrip.mjs` |
+| FR-9 | Incremental structural indexing | `repo.rs` natural-key upsert; measured at 10,000 files |
+| FR-10 | Token-budgeted repo map | `repo.rs`; `map --names` for the qualified-name mode |
+| FR-11 | Blast-radius / impact query | `repo.rs::impact_of_change`; `sakur4_impact` |
+| FR-12 | Hybrid retrieval with staleness-aware rerank | `recall.rs`, `store/fts.rs` |
+| FR-13 | Idle-triggered consolidation | `consolidate.rs`; `dream` |
+| FR-14 | Spec-compliant MCP server surface | `tools.rs`; 17 tools, `stdio_transport.rs` |
+| FR-15 | Per-turn token and cache accounting | `provider_cache.rs`; `usage-roundtrip.mjs` |
+| FR-16 | Hermes Agent context-engine plugin | `integrations/hermes-plugin/`; 44 contracts |
+| FR-17 | OMP extension and skill | `integrations/omp-plugin/`, `skills/sakur4/` |
+| FR-18 | Generic reverse-proxy mode | `sakur4d proxy`; 10 contracts |
+| FR-19 | Fully local operation | No mandatory egress; the suite runs offline |
+| FR-20 | Optional encryption at rest | `encryption` feature; `encryption_at_rest.rs` |
+
+`verify.mjs` runs every automatable check among those in one command, and reports skipped
+separately from passed.
 
 ---
 
@@ -72,7 +115,7 @@ through the same tokenizer.
 `BoundaryPlan::full_rewrite` is returned — with its reason — for: an unreachable
 backend, a build with no `/slots`, a build whose ring is unusable, and
 sliding-window/hybrid models whose checkpoints carry only partial state. The plan
-still evicts; it reports `full-re-prefill` and says why. The PRD's own risk register
+still evicts; it reports `full-re-prefill` and says why. The original risk register
 rates this integration as the project's highest risk, so the failure mode was made
 "slower, and honest about it" from the start.
 
@@ -93,12 +136,12 @@ the same outputs.
 no general `new`, and no way to obtain a `FactSource` from a model. The write path in
 `memory::symbolic` imports nothing from `embed`, `llama` or `consolidate`.
 
-Structured tool output counts as symbolic too, which is how the PRD's "over-indexing
+Structured tool output counts as symbolic too, which is how the original plan's "over-indexing
 on code leaves research under-served" risk is addressed without special-casing:
 `ToolOutputParser` handles JSON (parsed, not scanned), CSV, HTTP headers, unified
 diffs and exit codes. Prose has no symbolic anchor, and `parse_any` returns an empty
 fact set with `parser: None` and a summary saying "no structure detected" rather than
-guessing — the PRD is explicit that Sakur4 must be honest about where the guarantee
+guessing — the original plan is explicit that Sakur4 must be honest about where the guarantee
 does not apply.
 
 ### FR-3 and INN-4
@@ -196,7 +239,7 @@ Work is one item per transaction, so interruption loses nothing partially writte
 Summaries default to *extractive*: a deterministic selection of the episode's own
 sentences, prefixing the identifiers it found. It is not a semantic compression and
 does not pretend to be. That is what keeps the dual-track rule intact with no
-auxiliary model resident — the PRD flags that VRAM headroom question as open, so the
+auxiliary model resident — the original plan flagged that VRAM headroom question as open, so the
 default assumes none. A configured auxiliary endpoint switches it to genuine
 interpretation, still anchored.
 
@@ -226,7 +269,7 @@ labelled; `context.plan_eviction` defaults to *planning only*, so an agent can s
 eviction decision before taking it.
 
 The system preamble names *when* to call each tool rather than describing what they
-do, because the PRD's risk register notes that smaller local models under-trigger
+do, because the original risk register notes that smaller local models under-trigger
 proactive folding.
 
 Integration tests drive the surface over a real HTTP listener with the SDK's own
@@ -244,7 +287,7 @@ non-blocking in practice (FR-1). Transactions are retried on `SQLITE_BUSY`.
 
 **Vectors** live in a blob table with an exact cosine scan in Rust, unless a
 `sqlite-vec` loadable extension is found — in which case `vec0` serves the ANN path
-and the store records which backend is live. The PRD asks for `sqlite-vec`; linking a
+and the store records which backend is live. The original plan asked for `sqlite-vec`; linking a
 C extension into a binary that must stay a single static artefact fights NFR-8, and a
 *loadable* extension satisfies both. At the documented scale ceiling an exact scan is
 a few tens of milliseconds and is exact, so recall quality never depends on which
@@ -288,26 +331,26 @@ nearly-full window.
   revisions have shipped, and the *client* is tested against a fake server over real
   HTTP. First contact with a real build is still first contact.
 * **Conformance and benchmark runs**: the MCP reference-client conformance suite,
-  LoCoMo, and the Sakur4 Endurance Benchmark (which the PRD itself schedules for
+  LoCoMo, and the Sakur4 Endurance Benchmark (which the original plan scheduled for
   Phase 5).
 * **NFR performance numbers**: not measured. The development machine has a GTX 1050
-  with 4 GB and cannot host the PRD's target workload, which is why the embedded and
+  with 4 GB and cannot host the intended workload, which is why the embedded and
   fake backends exist.
 * **FR-11's staleness annotation** on `impact_of_change` reports each caller's current
   signature but does not yet compute per-edge staleness, because edges do not record
   the target hash that was current when they were written. The data model change is
   identified; the feature is partial.
 
-### Deviations from the PRD, stated
+### Deviations from the original plan, stated
 
 * **`sqlite-vec` is optional rather than required**, with an exact-scan fallback
   (see above). The MCP contract is identical either way and the choice is observable.
-* **`memory.recall` gained a fourth retriever** (Atlas BM25) beyond the PRD's three,
+* **`memory.recall` gained a fourth retriever** (Atlas BM25) beyond the three planned,
   because the Atlas was otherwise reachable only through the vector index.
-* **Two tools beyond the PRD's list**: `context.plan_eviction` (inspect before
-  committing — the PRD's FR-15 implies the need but does not name the tool) and
+* **Two tools beyond the planned list**: `context.plan_eviction` (inspect before
+  committing — FR-15 implies the need but the tool was not named) and
   `memory.staleness`, plus `sakur4.status` and `sakur4.dream` for operability.
-* **`EvictionPolicy` has knobs the PRD does not name** (`cache_prefix_reserve_tokens`,
+* **`EvictionPolicy` has knobs the plan did not name** (`cache_prefix_reserve_tokens`,
   `cache_prefix_max_tokens`, `keep_recent_tokens`, `max_prefix_ratio`). Without a
   prefix floor and a ceiling, "cache-aligned eviction" is not implementable: the
   boundary has to be chosen with both the cache and the eviction budget in view.

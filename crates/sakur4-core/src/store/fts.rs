@@ -394,19 +394,20 @@ fn stem_of(term: &str) -> Option<String> {
     if !lower.chars().all(|c| c.is_ascii_alphabetic()) || lower.len() < MIN_STEM_LEN + 2 {
         return None;
     }
-    let stem = if let Some(base) = lower.strip_suffix("ies") {
-        format!("{base}y")
-    } else if let Some(base) = lower.strip_suffix("es") {
-        base.to_string()
-    } else if let Some(base) = lower.strip_suffix('s') {
-        base.to_string()
-    } else if let Some(base) = lower.strip_suffix("ing") {
-        base.to_string()
-    } else if let Some(base) = lower.strip_suffix("ed") {
-        base.to_string()
-    } else {
-        return None;
-    };
+    // Suffixes, longest-relevant first: `-ies` before `-es` before `-s`, or "stories" would
+    // reduce to "storie". Each arm falls through to the next when it does not match.
+    //
+    // `or_else` rather than a chain of `if let ... else if let`, which clippy flags for good
+    // reason: the chain reads as a sequence of conditions, and this is one operation with four
+    // candidates. The `?` also makes the "none matched" case an early return instead of a
+    // trailing `else` whose only job is to give up.
+    let stem = lower
+        .strip_suffix("ies")
+        .map(|base| format!("{base}y"))
+        .or_else(|| lower.strip_suffix("es").map(str::to_string))
+        .or_else(|| lower.strip_suffix('s').map(str::to_string))
+        .or_else(|| lower.strip_suffix("ing").map(str::to_string))
+        .or_else(|| lower.strip_suffix("ed").map(str::to_string))?;
     if stem.len() >= MIN_STEM_LEN { Some(stem) } else { None }
 }
 

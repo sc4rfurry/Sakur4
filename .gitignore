@@ -1,7 +1,15 @@
-﻿target/
+target/
 sakur4.db
 sakur4.db-wal
 sakur4.db-shm
 *.snapshot
 .sakur4/
 sakur4-snapshots/
+
+# Python bytecode. erify_engine.py and the Hermes plugin are Python, so running either
+# produces these next to the source. They are build output, they differ per interpreter
+# version, and a .pyc in a repository is one of the signals that a project was never
+# published with care.
+__pycache__/
+*.py[cod]
+*.pyo
