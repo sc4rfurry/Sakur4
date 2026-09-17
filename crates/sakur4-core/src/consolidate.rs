@@ -166,7 +166,22 @@ impl Consolidator {
             config,
             tracked_slots: Arc::new(parking_lot::RwLock::new(vec!["0".to_string()])),
             running: Arc::new(AtomicBool::new(false)),
-            last_activity: Arc::new(AtomicU64::new(now_secs())),
+            // # Zero, not now
+            //
+            // This used to start at `now_secs()`, which made the quiet period measure time
+            // since the *process started* rather than time since the last activity. Two
+            // consequences, and the second made FR-13 unreachable:
+            //
+            // A long-lived daemon could not consolidate for its first 90 seconds, which is
+            // merely wasteful. A short-lived process could never consolidate at all — and
+            // `sakur4d` is invoked per command by the Agent Skill and by `sakur4 dream`, so
+            // every one of those calls reported "not idle yet" for a quiet period that had
+            // not actually been observed. Idle consolidation was unreachable from the CLI.
+            //
+            // Zero means "no activity recorded", which is the honest initial state, and it
+            // makes the first `maybe_run` on a quiet system do its work. `note_activity` is
+            // what starts the clock, and its doc comment already describes exactly that.
+            last_activity: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -776,18 +791,28 @@ mod tests {
 
     #[tokio::test]
     async fn skips_when_a_slot_is_generating() {
+        // The point is the quiet-period gate: activity within the period must block a pass.
+        //
+        // This test previously called `note_activity()` on one consolidator and then asserted
+        // on a *different*, freshly built one — which was never touched, so it passed for a
+        // reason unrelated to what it claims. It would have passed whatever `is_idle` did.
         let (fabric, c, backend) = rig(idle_config()).await;
         let _ = fabric;
-        // Simulate an active generation by making the slot unreadable.
-        // EmbeddedBackend never reports is_processing, so instead assert the
-        // quiet-period gate, which is the part that depends on tracked activity.
         let cfg = ConsolidatorConfig { quiet_period_secs: 3_600, ..Default::default() };
-        c.note_activity();
-        let (_, c2, _) = rig(cfg).await;
-        let report = c2.maybe_run().await.unwrap();
+        let (_, blocked, _) = rig(cfg).await;
+
+        // No activity recorded yet: a quiet system is allowed to consolidate. This is the case
+        // that starts at zero and is why a fresh process can do useful work at all.
+        assert!(blocked.is_idle().await, "a system with no recorded activity is idle");
+
+        // Now record activity through the public API and assert on the *same* instance.
+        blocked.note_activity();
+        assert!(!blocked.is_idle().await, "activity inside the quiet period must block");
+        let report = blocked.maybe_run().await.unwrap();
         assert!(!report.ran);
         assert!(report.skipped_reason.as_deref().unwrap().contains("not idle"));
         let _ = backend;
+        let _ = c;
     }
 
     #[tokio::test]
