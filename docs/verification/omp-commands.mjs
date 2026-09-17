@@ -12,6 +12,9 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const bin =
   process.argv[2] ?? `${process.env.USERPROFILE ?? process.env.HOME}/.cargo/bin/sakur4d`;
@@ -44,8 +47,22 @@ const cases = [
 ];
 
 let failed = 0;
+
+// # A throwaway store, because these commands write
+//
+// The first version of this check ran each command with no `--db`, which resolves to
+// `~/.sakur4/sakur4.db` — the store a person's real sessions use. Every run therefore committed
+// its fixtures into real memory: sixty episodes and twenty anchors accumulated under
+// `omp-extension-check` before anyone looked, and the only reason it was noticed at all is that
+// the store was inspected for an unrelated reason.
+//
+// A test that writes to the user's data is a test that corrupts it, and "it is only test data"
+// stops being true the moment the store is the one they search.
+const storeDir = mkdtempSync(join(tmpdir(), "sakur4-omp-commands-"));
+const store = join(storeDir, "commands.db");
+
 for (const [label, args] of cases) {
-  const result = spawnSync(bin, args, {
+  const result = spawnSync(bin, ["--db", store, ...args], {
     encoding: "utf8",
     timeout: 300_000,
     maxBuffer: 64 * 1024 * 1024,
@@ -58,6 +75,12 @@ for (const [label, args] of cases) {
   console.log(
     `  ${ok ? "ok  " : `EXIT${result.status}`} ${label.padEnd(24)} ${(first ?? "(no output)").trim().slice(0, 58)}`,
   );
+}
+
+try {
+  rmSync(storeDir, { recursive: true, force: true });
+} catch {
+  /* the OS will reclaim the temp directory */
 }
 
 console.log("");
