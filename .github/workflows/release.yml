@@ -260,12 +260,30 @@ jobs:
           #
           # Concatenating is correct here because the entries are `hash  filename` lines and the
           # filenames are unique per platform. Sorting keeps the file stable between runs.
+          # # Normalise the filename column
+          #
+          # Every entry must be `hash  name`, and neither of the two paths here produced that on
+          # the first release. The per-platform files arrived as `hash  ./name` — `find -exec cp`
+          # keeps the `artifacts/` layout — and the fallback runs `sha256sum ./*.tar.gz`, which is
+          # the `hash  *./name` form this workflow exists to avoid.
+          #
+          # The check below caught it, and named all five platforms, which is what that check is
+          # for: `install.sh` refuses any archive missing from this file, so shipping it would
+          # have failed every install on every platform with "not listed in SHA256SUMS.txt",
+          # reading as a corrupt download rather than as a bad checksum file.
+          #
+          # `awk` normalises both markers in one pass and preserves the hash, so the file says
+          # what it is supposed to say regardless of which branch produced it.
           if compgen -G 'artifacts/**/SHA256SUMS.txt' >/dev/null 2>&1; then
-            find artifacts -name 'SHA256SUMS.txt' -exec cat {} + | sort -k2 > release/SHA256SUMS.txt
+            find artifacts -name 'SHA256SUMS.txt' -exec cat {} + \
+              | awk '{ name = $2; sub(/^\*/, "", name); sub(/^\.\//, "", name); print $1 "  " name }' \
+              | sort -k2 > release/SHA256SUMS.txt
           else
             # Some matrix entries may not generate one; derive them from the assets instead of
             # shipping a release with no verification at all.
-            (cd release && sha256sum ./*.tar.gz ./*.zip > SHA256SUMS.txt)
+            (cd release && sha256sum ./*.tar.gz ./*.zip) \
+              | awk '{ name = $2; sub(/^\*/, "", name); sub(/^\.\//, "", name); print $1 "  " name }' \
+              > release/SHA256SUMS.txt
           fi
           echo "--- checksum coverage ---"
           wc -l < release/SHA256SUMS.txt
