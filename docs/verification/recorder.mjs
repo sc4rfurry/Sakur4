@@ -21,7 +21,12 @@ const arg = (name, fallback) => {
 };
 
 const LISTEN = Number(arg("listen", "8775"));
-const UPSTREAM = arg("upstream", "http://your-llama-server:8080");
+const UPSTREAM = arg("upstream", process.env.LLAMA_BASE ?? null);
+// Required, with no default: see the note in llamacpp-prefix.mjs.
+if (!UPSTREAM) {
+  console.error("usage: --upstream http://host:port   (or set LLAMA_BASE)");
+  process.exit(2);
+}
 const DUMP = arg("dump", null);
 
 if (DUMP) mkdirSync(DUMP, { recursive: true });

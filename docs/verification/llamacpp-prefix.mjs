@@ -34,7 +34,14 @@
 //
 // Run: node docs/verification/llamacpp-prefix.mjs [--base http://host:port]
 
-const BASE = argValue("--base", process.env.LLAMA_BASE ?? "http://your-llama-server:8080");
+const BASE = argValue("--base", process.env.LLAMA_BASE ?? null);
+// Required, with no default. A private endpoint's address does not belong in a repository, and a
+// default pointing at somebody's machine is worse than none: it works for its owner and fails for
+// everyone else, without saying that a flag was expected.
+if (!BASE) {
+  console.error("usage: --base http://host:port   (or set LLAMA_BASE)");
+  process.exit(2);
+}
 const N_PREDICT = Number(argValue("--predict", "1"));
 
 function argValue(name, fallback) {

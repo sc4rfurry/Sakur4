@@ -60,7 +60,12 @@ const arg = (name, fallback) => {
 };
 const has = (name) => argv.includes(`--${name}`);
 
-const UPSTREAM = arg("upstream", "http://your-llama-server:8080");
+const UPSTREAM = arg("upstream", process.env.LLAMA_BASE ?? null);
+// Required, with no default: see the note in llamacpp-prefix.mjs.
+if (!UPSTREAM) {
+  console.error("usage: --upstream http://host:port   (or set LLAMA_BASE)");
+  process.exit(2);
+}
 const PROXY = arg("proxy", "http://127.0.0.1:8091");
 const RECORDER = arg("recorder", null);
 const BIN = arg("bin", process.env.SAKUR4_BIN ?? null);
