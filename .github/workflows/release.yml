@@ -191,10 +191,24 @@ jobs:
           echo "checksumming:"
           sed 's/^/  /' .assets
 
+          # # `xargs -a` is a GNU extension
+          #
+          # The first release run failed on both macOS runners with:
+          #
+          #   xargs: invalid option -- a
+          #
+          # BSD `xargs` has no `-a` — reading the argument list from a file is GNU-only — and macOS
+          # ships BSD. Linux passed the same step unchanged. Redirection is POSIX and behaves
+          # identically on both, which is what a workflow running on five platforms has to use.
+          #
+          # The `sed` restores the bare-name form the comment above describes: `sha256sum name`
+          # writes `hash  name` while `sha256sum ./name` writes `hash  *./name`, so passing plain
+          # names through a redirection reintroduced the `*` this step exists to remove.
+          # `install.sh` normalises both, but only one of them is what the file is supposed to say.
           if command -v sha256sum >/dev/null 2>&1; then
-            xargs -a .assets sha256sum > SHA256SUMS.txt
+            xargs sha256sum < .assets | sed 's/ \*/  /' > SHA256SUMS.txt
           elif command -v shasum >/dev/null 2>&1; then
-            xargs -a .assets shasum -a 256 > SHA256SUMS.txt
+            xargs shasum -a 256 < .assets | sed 's/ \*/  /' > SHA256SUMS.txt
           else
             echo "::error::no checksum tool available; the release would be unverifiable"
             exit 1
