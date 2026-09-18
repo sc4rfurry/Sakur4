@@ -124,6 +124,10 @@ jobs:
           cp -r integrations "dist/$name/" 2>/dev/null || true
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           echo "ASSET=dist/$name.tar.gz" >> "$GITHUB_ENV"
+          # Printed so the packaging step's own output records what it made. The first release
+          # run failed in the *next* step with an empty message, and there was no way to tell from
+          # the logs whether the archive had been built or not.
+          ls -la dist/
 
       - name: Package (windows)
         if: matrix.archive == 'zip'
@@ -152,13 +156,41 @@ jobs:
       #
       # Passing bare names through `xargs` gives `hash  name`, which is what the installer
       # parses and what `sha256sum -c` expects.
+      # # Enumerate, do not glob
+      #
+      # `ls -1 ./*.tar.gz ./*.zip` fails with the status of the *last* failing operand when any
+      # glob matches nothing — and under `set -o pipefail` that status becomes the pipeline's, so
+      # the step dies with `exit code 2` and prints nothing at all. That is what the first release
+      # run did, and the message named neither the directory nor the files it did contain.
+      #
+      # A `for` loop over the globs is explicit about the empty case instead of inheriting a
+      # status from `ls`, and the failure below says what was in `dist/` so the next reader does
+      # not have to guess which side is wrong: the packaging step producing nothing, or this step
+      # looking in the wrong place.
       - name: Checksum
         shell: bash
         run: |
           set -euo pipefail
           cd dist
           rm -f SHA256SUMS.txt
-          ls -1 ./*.tar.gz ./*.zip 2>/dev/null | sed 's|^\./||' | sort > .assets
+
+          : > .assets
+          for f in *.tar.gz *.zip; do
+            [ -e "$f" ] || continue
+            printf '%s\n' "$f" >> .assets
+          done
+          sort -o .assets .assets
+
+          if [ ! -s .assets ]; then
+            echo "::error::no archives found to checksum"
+            echo "dist/ contains:"
+            ls -la
+            exit 1
+          fi
+
+          echo "checksumming:"
+          sed 's/^/  /' .assets
+
           if command -v sha256sum >/dev/null 2>&1; then
             xargs -a .assets sha256sum > SHA256SUMS.txt
           elif command -v shasum >/dev/null 2>&1; then
