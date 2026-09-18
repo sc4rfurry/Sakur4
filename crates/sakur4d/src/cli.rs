@@ -161,6 +161,24 @@ pub enum Command {
         refresh: bool,
     },
 
+    /// Generate a key for an encrypted store, and print it.
+    ///
+    /// # This command did not exist, and three places said it did
+    ///
+    /// `SECURITY.md` told the reader to run it, a doc comment in `sakur4-core` named it, and the
+    /// runtime error a user meets when opening an encrypted store without a key *instructed* them
+    /// to run it:
+    ///
+    /// > Generate one with `sakur4d gen-key`.
+    ///
+    /// `Db::generate_key` existed the whole time; only the wiring was missing. So the documented
+    /// path to creating a key ended in `unrecognized subcommand`, at the one moment the user has
+    /// no alternative — they cannot open their own store without one.
+    ///
+    /// It prints to stdout and nothing else, so `sakur4d gen-key > key.txt` works, and it never
+    /// writes the key anywhere itself.
+    GenKey,
+
     /// Build or refresh the Repo Cortex index.
     Index {
         /// Repository root; defaults to `--project-root` or the working directory.
@@ -379,6 +397,28 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         Command::Config { harness, binary } => config(&cli, &harness, binary),
         Command::Doctor { refresh } => doctor(&cli, refresh).await,
+        Command::GenKey => {
+            // Stdout only, so `gen-key > key.txt` works and the key never lands somewhere the
+            // program chose.
+            //
+            // Gated: `generate_key` lives behind `sakur4-core`'s `encryption` feature, because a
+            // build without SQLCipher cannot open an encrypted store and a key for it would be
+            // useless. The alternative — printing a key this build cannot use — is worse than
+            // saying so.
+            #[cfg(feature = "encryption")]
+            {
+                println!("{}", sakur4_core::store::db::generate_key());
+                Ok(())
+            }
+            #[cfg(not(feature = "encryption"))]
+            {
+                anyhow::bail!(
+                    "this build has no encryption support, so a key would be unusable.\n\
+                     Rebuild with `cargo build --features encryption` (needs OpenSSL development \
+                     files), or install a release binary, which includes it."
+                )
+            }
+        }
         Command::Index { path, full } => index(&cli, path, full).await,
         Command::RepoMap { budget, focus, names } => repo_map(&cli, budget, focus, names).await,
         Command::Impact { symbol, depth } => impact(&cli, &symbol, depth).await,

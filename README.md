@@ -159,7 +159,7 @@ anywhere.
 
 <table>
 <tr><th>Method</th><th>Command</th><th>Notes</th></tr>
-<tr><td><b>Install script</b></td><td><code>curl -fsSL https://raw.githubusercontent.com/sc4rfurry/Sakur4/main/install.sh | sh</code></td><td>Detects your platform, <b>verifies the checksum</b>, installs, and says where the skill went.</td></tr>
+<tr><td><b>Install script</b></td><td><code>curl -fsSL https://raw.githubusercontent.com/sc4rfurry/Sakur4/master/install.sh | sh</code></td><td>Detects your platform, <b>verifies the checksum</b>, installs, and says where the skill went.</td></tr>
 <tr><td><b>Release binary</b></td><td>Download from <a href="https://github.com/sc4rfurry/Sakur4/releases">Releases</a></td><td>Archives carry <code>sakur4d</code>, the skill and the OMP plugin together.</td></tr>
 <tr><td><b>From a checkout</b></td><td><code>cargo install --path crates/sakur4d</code></td><td>Builds and installs in one step. About eight minutes from cold; verified.</td></tr>
 <tr><td><b>From source</b></td><td><code>cargo build --release</code></td><td>Then copy <code>target/release/sakur4d</code> onto your <code>PATH</code>.</td></tr>

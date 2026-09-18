@@ -15,6 +15,16 @@ readme = "README.md"
 name = "sakur4d"
 path = "src/main.rs"
 
+[features]
+# Forwarded so `sakur4d gen-key` can exist. The key generator lives in `sakur4-core` behind this
+# feature, because a build without SQLCipher cannot open an encrypted store — so `gen-key` has
+# nothing to offer without it, and `--features encryption` is what turns both on together.
+#
+# Without this declaration the `cfg(feature = "encryption")` in `cli.rs` was an undeclared
+# condition: it compiled, printed two warnings, and the branch it guards could never be taken,
+# because nothing could enable a feature this manifest did not name.
+encryption = ["sakur4-core/encryption"]
+
 [dependencies]
 sakur4-core.workspace = true
 

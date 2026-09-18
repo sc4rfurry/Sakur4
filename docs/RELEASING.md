@@ -123,7 +123,7 @@ sakur4d 0.2.0
 git add -A
 git commit -m "release: v0.2.0"
 git tag -a v0.2.0 -m "Sakur4 v0.2.0"
-git push origin main --follow-tags
+git push -u origin master --follow-tags
 ```
 
 The tag triggers `.github/workflows/release.yml`, which:

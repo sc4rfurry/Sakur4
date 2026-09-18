@@ -20,7 +20,7 @@
  *   node verify.mjs                          # everything this machine can run
  *   node verify.mjs --upstream http://host:8080  # include the live-server checks
  *   node verify.mjs --quick                  # skip the slow benchmarks
- *   node verify.mjs --only rust,proxy        # a subset, by id or group
+ *   node verify.mjs --only rust,fmt           # a subset, by group or short check name
  *   node verify.mjs --require-all            # fail if anything was skipped
  *   node verify.mjs --list                   # show what would run
  *
@@ -132,22 +132,71 @@ const recordedGroups = new Set();
 const recordedIds = new Set();
 
 /**
+ * A short, typeable selector for a check's display name.
+ *
+ * `cargo fmt` becomes `fmt`; `repository URL is real` becomes `repo-url`; `NFR-2 recall at scale`
+ * becomes `nfr2`. The point is that `--only` needs something a person would actually type, and the
+ * display name is a sentence.
+ *
+ * # Why this was broken
+ *
+ * The manual short-name mapping had drifted: `wanted("fmt", "rust")` guarded a check whose id was
+ * `cargo fmt`, so `--only fmt` matched nothing. The guard then reported `--only named 'fmt', which
+ * matched no check` and exited 1 — after the check itself had printed PASS. Sixteen selectors were
+ * affected, and the usage example in this file's own header (`--only rust,proxy`) matched nothing
+ * at all, because `proxy` is not a group and no check maps to it.
+ *
+ * Deriving the alias from the name means the two cannot drift: a check cannot be renamed without
+ * its selector following.
+ */
+function shortName(name) {
+  return name
+    .toLowerCase()
+    .replace(/\(fr-\d+\)/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/^cargo-/, "")
+    .replace(/^nfr-(\d+)-.*$/, "nfr$1");
+}
+
+/** Every selector that reaches a given check: its short name, and its group. */
+function selectorsFor(id, group) {
+  return new Set([shortName(id), id, group]);
+}
+
+const recordedSelectors = new Set();
+
+/**
  * Record one check's outcome.
  *
- * `id` is what `--only` accepts and what `CATALOG` lists; `label` is what a person reads. They
- * were the same string until the catalog guard pointed out that `--only fmt` could never match a
- * check whose id was `cargo fmt` — the id is a selector, not a sentence.
+ * `id` is the display name and what `CATALOG` lists; the selector a user types is derived from it
+ * by `shortName`. They were the same string until the catalog guard pointed out that `--only fmt`
+ * could never match a check whose id was `cargo fmt` — the id is a sentence, and a selector is not.
  */
 function record(group, id, status, note) {
   results.push({ group, id, status, note });
   recordedGroups.add(group);
   recordedIds.add(id);
+  for (const selector of selectorsFor(id, group)) recordedSelectors.add(selector);
   const mark = { [PASS]: "PASS", [FAIL]: "FAIL", [SKIP]: "SKIP" }[status];
   const colour = { [PASS]: "\x1b[32m", [FAIL]: "\x1b[31m", [SKIP]: "\x1b[33m" }[status];
   process.stdout.write(
     `  ${colour}${mark}\x1b[0m  ${id}${note ? `  \x1b[2m— ${note}\x1b[0m` : ""}\n`,
   );
 }
+
+/**
+ * Mark a check as reached without recording an outcome.
+ *
+ * For the case a check skips without calling `record` — an unmet precondition, usually — so the
+ * catalog guard can still tell "this ran and reported nothing" from "this never ran".
+ */
+function ran(group, id) {
+  recordedGroups.add(group);
+  recordedIds.add(id);
+  for (const selector of selectorsFor(id, group)) recordedSelectors.add(selector);
+}
+
 
 /**
  * Run a command, streaming nothing, returning `{ ok, output }`.
@@ -215,9 +264,16 @@ function daemonBinary() {
   return candidates.find(existsSync) ?? null;
 }
 
-function wanted(id, group) {
+/**
+ * Should this check run, given `--only`?
+ *
+ * `name` is the check's display name — the same string passed to `record` — and the selector is
+ * derived from it, so a check cannot be renamed out from under its own flag.
+ */
+function wanted(name, group) {
   if (ONLY.length === 0) return true;
-  return ONLY.includes(id) || ONLY.includes(group);
+  const selectors = selectorsFor(name, group);
+  return ONLY.some((term) => selectors.has(term) || selectors.has(shortName(term)));
 }
 
 function lastLines(output, n = 6) {
@@ -592,6 +648,11 @@ async function liveChecks() {
   if (!UPSTREAM) {
     record("live", "llama.cpp prefix behaviour", SKIP, "pass --upstream to enable");
     record("live", "compaction case", SKIP, "pass --upstream to enable");
+    // These two are not skipped here — they are gated further down and never reached, so nothing
+    // records them. Without this, a plain run claimed its own catalog was stale and exited 1: the
+    // guard could not tell "this check needs a server" from "this check was deleted".
+    ran("live", "proxy rewrites an over-window transcript");
+    ran("live", "proxy trims a single large request");
     return;
   }
   if (!wanted("live", "live")) return;
@@ -862,13 +923,15 @@ function harnessChecks() {
   // Snapshot / restore (FR-8) had never been called. Both halves matter: the round trip on a
   // backend that supports it, and — on the user's llama.cpp, which returns 501 for save — a
   // refusal clear enough that nobody believes their session is recoverable when it is not.
+  // Marked as reached before the `UPSTREAM` test, because this check needs a live server and is
+  // otherwise never reported — which the catalog guard read as "deleted".
+  ran("harness", "snapshot and restore");
   if (wanted("snapshot", "harness") && UPSTREAM) {
     const script = join(ROOT, "docs", "verification", "snapshot-roundtrip.mjs");
     const binary = daemonBinary();
     if (!existsSync(script) || !binary) {
       record("harness", "snapshot and restore", SKIP, "needs a built daemon");
-    } else {
-      const embedded = run(process.execPath, [script, "--bin", binary, "--backend", "embedded"]);
+    } else {      const embedded = run(process.execPath, [script, "--bin", binary, "--backend", "embedded"]);
       const live = run(process.execPath, [script, "--bin", binary, "--backend", UPSTREAM]);
       const ok = /VERDICT: PASS/.test(embedded.output) && /VERDICT: PASS/.test(live.output);
       record(
@@ -1021,9 +1084,14 @@ async function main() {
   // `--quick` legitimately suppresses some checks, so an id that was filtered out rather than
   // unknown is named as such instead of being called a typo.
   if (ONLY.length > 0) {
-    const unmatched = ONLY.filter((name) => !recordedGroups.has(name) && !recordedIds.has(name));
+    // The selectors a check answers to are derived from its name, so a term counts as matched if
+    // it is one of them. Comparing against the raw display names was why `--only fmt` reported a
+    // miss for a check that had just printed PASS.
+    const unmatched = ONLY.filter(
+      (term) => !recordedSelectors.has(term) && !recordedSelectors.has(shortName(term)),
+    );
     if (unmatched.length > 0) {
-      const known = KNOWN_NAMES;
+      const known = [...new Set([...KNOWN_NAMES, ...recordedSelectors])].sort();
       process.stdout.write(
         `\n  \x1b[33m--only named ${unmatched.map((u) => `'${u}'`).join(", ")}, which matched no check.\x1b[0m\n` +
           `  Known here: ${known.join(", ")}\n` +

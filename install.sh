@@ -18,12 +18,19 @@
 #
 # Environment:
 #   SAKUR4_VERSION   tag to install, e.g. v0.1.0. Default: the latest release.
-#   SAKUR4_BIN_DIR   where to put the binary. Default: ~/.local/bin, or /usr/local/bin
-#                    when writable and ~/.local/bin is not on PATH.
+#   SAKUR4_BIN_DIR   where to put the binary. Default: ~/.local/bin if it exists or can be
+#                    created, otherwise /usr/local/bin when that is writable.
 
 set -eu
 
-REPO="${SAKUR4_REPO:-sakur4/sakur4}"
+# The repository, not an environment default.
+#
+# This read `sakur4/sakur4` — an organisation nobody owns — while the header four lines above
+# named the correct URL. Every install path went to a 404: the latest-release lookup, the archive,
+# and the checksum file. It survived a verified release because the guard for placeholder URLs no
+# longer listed that owner, and the substitution that fixed the documented URL did not reach here,
+# since this string carries no URL prefix.
+REPO="${SAKUR4_REPO:-sc4rfurry/Sakur4}"
 BIN="sakur4d"
 
 say() { printf '%s\n' "$*"; }
@@ -83,8 +90,10 @@ target="${arch_part}-${os_part}"
 # ---------------------------------------------------------------------------
 version="${SAKUR4_VERSION:-}"
 if [ -z "$version" ]; then
-    # The `releases/latest` redirect carries the tag, and reading it avoids needing the API
-    # (which is rate-limited and would fail differently for a user than for CI).
+    # The API, not the `releases/latest` redirect. The redirect is cheaper and is not
+    # rate-limited, but resolving it needs `curl -L` and a header parse, and this script
+    # already has a `fetch` helper that follows redirects -- so the API call is the one that
+    # keeps the failure mode the same for a user as for CI.
     version="$(fetch "https://api.github.com/repos/$REPO/releases/latest" \
         | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
         | head -n 1)"
