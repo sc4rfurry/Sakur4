@@ -1,7 +1,7 @@
 # Live-model A/B: does a real model benefit
 
 Every other benchmark in this repository measures the engine. This one measures a
-**model** — whether a locally-running a 27B model, driven through a real harness, actually
+**model** — whether a locally running 27B model, driven through a real harness, actually
 benefits from the memory layer, and whether the plumbing that was supposed to deliver it
 actually delivers it.
 
@@ -10,7 +10,7 @@ actually delivers it.
 | | |
 |---|---|
 | Harness | Oh My Pi 18.2.0, the `omp-sakur4` extension |
-| Model | a 27B model at Q3_K, 81,920-token window, served by llama.cpp the current build |
+| Model | a locally served 27B model at Q3_K, 81,920-token window |
 | Repo | A three-file fixture whose contents deliberately say **nothing** about the question |
 | Question | *"What is the one rule about the migrations directory in this project? Answer in one short line, or say UNKNOWN."* |
 
@@ -107,14 +107,14 @@ node skills/sakur4/scripts/sakur4.mjs pin --kind safety_constraint \
 
 # Arm A
 omp -p "What is the one rule about the migrations directory in this project? Answer in one short line, or say UNKNOWN." \
-    --model local/a 27B model --thinking off --no-session --no-lsp --no-skills
+    --model local/<model> --thinking off --no-session --no-lsp --no-skills
 
 # Arm B — the control
 omp -p "What is the one rule about the migrations directory in this project? Answer in one short line, or say UNKNOWN." \
-    --model local/a 27B model --thinking off --no-session --no-lsp --no-skills --no-extensions
+    --model local/<model> --thinking off --no-session --no-lsp --no-skills --no-extensions
 
 # Arm C — plugin on, empty store
-SAKUR4_DB=/tmp/empty.db omp -p "…" --model local/a 27B model --thinking off --no-session --no-lsp --no-skills
+SAKUR4_DB=/tmp/empty.db omp -p "…" --model local/<model> --thinking off --no-session --no-lsp --no-skills
 ```
 
 ## What is still not verified

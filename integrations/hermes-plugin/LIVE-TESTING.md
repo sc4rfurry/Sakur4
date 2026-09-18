@@ -50,18 +50,18 @@ custom_providers:
 
 # WRONG — the provider id is not the key, and `default_model` is ignored
 model:
-  default: local/Qwen3.8-27B
+  default: local/a 27B model
 
 # RIGHT
 model:
-  default: custom:llama/Qwen3.8-27B   # slug from custom_provider_slug(name)
+  default: custom:llama/a 27B model   # slug from custom_provider_slug(name)
 custom_providers:
   - name: LLaMa                        # → slug `custom:llama`
     base_url: http://host:8080/v1
     api_key: local-only                # `key_env: NAME` also works if NAME is in .env
-    model: Qwen3.8-27B
+    model: a 27B model
     models:
-      Qwen3.8-27B: {}
+      a 27B model: {}
     models_discovered: true
 ```
 
@@ -97,7 +97,7 @@ with the local provider's `base_url` pointed at it. **The capture file is never 
 nothing arrives — so the request does not reach the endpoint that was configured, however
 it was selected:
 
-- `--model custom:llama/Qwen3.8-27B` — nothing arrives
+- `--model custom:llama/a 27B model` — nothing arrives
 - inherited `modelRoles`, with the config's own default — nothing arrives
 - a hand-written `custom_providers` entry naming the provider — nothing arrives
 - the user's working config copied wholesale plus `context.engine: sakur4` — nothing arrives
@@ -109,7 +109,7 @@ it was selected:
 instead — and the error names *its* credentials:
 
 ```console
-$ hermes -z "Reply with exactly: HERMES_OK" --model custom:llama/Qwen3.8-27B
+$ hermes -z "Reply with exactly: HERMES_OK" --model custom:llama/a 27B model
 HTTP 401: Invalid Authentication
 ```
 

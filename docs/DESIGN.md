@@ -333,7 +333,7 @@ nearly-full window.
 * **Conformance and benchmark runs**: the MCP reference-client conformance suite,
   LoCoMo, and the Sakur4 Endurance Benchmark (which the original plan scheduled for
   Phase 5).
-* **NFR performance numbers**: not measured. The development machine has a GTX 1050
+* **NFR performance numbers**: not measured. The development machine has a small GPU
   with 4 GB and cannot host the intended workload, which is why the embedded and
   fake backends exist.
 * **FR-11's staleness annotation** on `impact_of_change` reports each caller's current

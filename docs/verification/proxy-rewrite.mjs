@@ -213,7 +213,7 @@ async function main() {
     fetch(`${proxyUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "Qwen3.8-27B", messages, max_tokens: 4, temperature: 0 }),
+      body: JSON.stringify({ model: "a 27B model", messages, max_tokens: 4, temperature: 0 }),
     });
 
   // -------------------------------------------------------------------------

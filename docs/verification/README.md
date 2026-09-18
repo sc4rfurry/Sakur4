@@ -9,11 +9,11 @@ importantly — what it does not.
 | | |
 |---|---|
 | Endpoint | `http://your-llama-server:8080` (remote, reached over a private network) |
-| Model | `a 27B model at Q3_K_XL`, alias `a 27B model` |
-| Build | `the current build` |
+| Model | a 27B model at Q3_K_XL |
+| Build | the llama.cpp build current at the time |
 | Context | 81,920 tokens |
 | Slots | 1 |
-| Platform | Windows (from the model path) |
+| Platform | Windows |
 
 ## Headline results
 

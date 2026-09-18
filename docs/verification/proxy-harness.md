@@ -30,7 +30,7 @@ combination of the extension and a proxy probing a real upstream was.
 ```bash
 sakur4d --db ~/.sakur4/proxy.db --backend http://<host>:8080 \
         proxy --bind 127.0.0.1:8090 --upstream http://<host>:8080
-omp -p "..." --model local/Qwen3.8-27B --no-extensions
+omp -p "..." --model local/a 27B model --no-extensions
 ```
 
 The proxy does the context management; the harness needs no plugin system at all. This is
@@ -85,10 +85,10 @@ available is the configuration rule above, written down where a user will hit it
 sakur4d --db /tmp/a.db --backend http://your-llama-server:8080 --context-window 81920 \
         proxy --bind 127.0.0.1:8162 --upstream http://your-llama-server:8080 &
 # OMP baseUrl → http://127.0.0.1:8162/v1
-omp -p "Reply with exactly: OK" --model local/Qwen3.8-27B \
+omp -p "Reply with exactly: OK" --model local/a 27B model \
     --thinking off --no-session --no-lsp --no-skills --no-extensions
 
 # Hangs — both layers managing context
-omp -p "Reply with exactly: OK" --model local/Qwen3.8-27B \
+omp -p "Reply with exactly: OK" --model local/a 27B model \
     --thinking off --no-session --no-lsp --no-skills
 ```

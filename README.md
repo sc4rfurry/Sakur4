@@ -757,7 +757,7 @@ node docs/bench/ab.mjs --repo . --backend http://host:8080   # real prefill numb
 
 A **live-model** companion — whether a real model actually benefits, rather than whether
 the engine works — is in [docs/bench/live-model.md](docs/bench/live-model.md). Controlled
-A/B/C against a local a 27B model through OMP: plugin-on answered a question only memory
+A/B/C against a locally served 27B model through OMP: plugin-on answered a question only memory
 could answer; plugin-off with the *same store* said UNKNOWN; plugin-on with an empty store
 said UNKNOWN.
 
@@ -903,7 +903,7 @@ Stated plainly, because the alternative is finding out later.
 **Not yet true**
 
 - ~~**No real llama.cpp server has been contacted.**~~ **Now verified** against a
-  live a 27B model on build `the current build` — see
+  a live locally served 27B model — see
   [docs/verification](docs/verification/README.md). That build exposes **no checkpoint
   API** (save/erase return 501, no checkpoint ring), so Sakur4 correctly reports
   `no checkpoint source detected`. Prefix reuse nonetheless works there: a 2,219-token
@@ -933,7 +933,7 @@ Stated plainly, because the alternative is finding out later.
 
 - No MCP conformance run against a reference client, no LoCoMo, no Endurance Benchmark.
 - NFR latency and memory numbers are unmeasured on reference hardware — the development
-  box has a a GPU with 4 GB, which cannot host the target workload at all. That is
+  box has a GPU with 4 GB, which cannot host the target workload at all. That is
   why the embedded and fake backends exist.
 - `cargo deny` / `cargo audit` are not in CI. Review `Cargo.lock` changes by hand.
 
