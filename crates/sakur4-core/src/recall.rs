@@ -702,7 +702,11 @@ fn terms(query: &str) -> Vec<String> {
         .collect()
 }
 
-/// Convenience: the graph edge kinds the recall engine follows.
+/// The graph edge kinds a recall pass may follow.
+///
+/// The doc called this "the graph edge kinds the recall engine follows". The engine does not read
+/// it — the only `EdgeKind::` in this file is inside this constant's own initialiser — so the list
+/// is a statement of intent rather than a description of behaviour.
 pub const RECALL_EDGE_KINDS: &[EdgeKind] =
     &[EdgeKind::DerivedFrom, EdgeKind::DependsOn, EdgeKind::Calls, EdgeKind::Imports];
 

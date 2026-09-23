@@ -1097,8 +1097,12 @@ impl MemoryFabric {
             .await
     }
 
-    /// Facts whose qualified names match any of `names` — used by staleness
-    /// re-resolution in the recall engine.
+    /// Facts whose qualified names match any of `names`.
+    ///
+    /// The doc said "used by staleness re-resolution in the recall engine". It is not: nothing in
+    /// the workspace calls this method. Left in place because it is a plausible accessor for a
+    /// re-resolution path that does not exist yet, and recorded here so the next reader does not
+    /// take the old comment as evidence that the path is implemented.
     pub async fn facts_by_names(&self, names: Vec<String>) -> Result<Vec<SymbolicFact>> {
         if names.is_empty() {
             return Ok(Vec::new());

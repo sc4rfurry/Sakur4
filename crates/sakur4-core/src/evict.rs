@@ -1541,8 +1541,12 @@ pub struct FoldTraceEntry {
     pub content: String,
 }
 
-/// Number of `RenderedPart`s a plan is expected to know about; used by tests to
-/// assert that the engine stays in step with the prompt assembler.
+/// Number of `RenderedPart`s the prompt assembler knows about.
+///
+/// The doc used to say "used by tests to assert that the engine stays in step with the prompt
+/// assembler". No test references it, so it asserts nothing and cannot catch the drift it
+/// describes. Kept as a named constant because the number is meaningful; recorded here as
+/// unchecked rather than implying a guard that does not exist.
 pub const EVICTION_KNOWN_PARTS: usize = 8;
 
 #[cfg(test)]
