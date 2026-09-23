@@ -22,7 +22,7 @@ five.
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/sc4rfurry/Sakur4?style=flat-square&color=22d3ee)](https://github.com/sc4rfurry/Sakur4/stargazers)
 
-[![Tests](https://img.shields.io/badge/tests-256%20passing-34d399?style=flat-square)](#verification)
+[![Tests](https://img.shields.io/badge/tests-257%20passing-34d399?style=flat-square)](#verification)
 [![MCP](https://img.shields.io/badge/MCP-2026--07--28-8b5cf6?style=flat-square)](https://modelcontextprotocol.io)
 [![Rust](https://img.shields.io/badge/rust-1.94%2B-orange?style=flat-square)](https://www.rust-lang.org)
 [![Platforms](https://img.shields.io/badge/platforms-linux%20%C2%B7%20macOS%20%C2%B7%20windows-4b5563?style=flat-square)](#install)
@@ -797,9 +797,13 @@ node verify.mjs --only rust,hermes           # a subset, by group or check id
 node verify.mjs --list                       # what exists, and what each group needs
 ```
 
-A full local run against a real llama.cpp: **12 passed, 0 failed, 1 skipped**, where the
-skip names its reason rather than hiding — SQLCipher needs OpenSSL development files this
-machine does not have.
+**Every group runs on every platform it can, and anything that cannot run is named with its
+reason** rather than silently omitted — a skipped check that reports why is worth more than a
+passing one that tested nothing. Passing `--upstream` adds the live-server checks; without it they
+report as skipped and say so.
+
+`--require-all` turns any skip into a failure, which is what CI uses so a check cannot quietly stop
+running.
 
 | Group | Needs | CI |
 |---|---|---|

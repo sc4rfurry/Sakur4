@@ -1547,29 +1547,37 @@ Working rules:
    code.query_symbol for a signature, memory.recall for anything else. A recalled entry
    marked stale comes with the current value of its source — use that value, not the summary.
 5. If a turn takes a long time, call context.receipt and read the cache line: it says whether
-   the prompt reused the inference cache or had to be prefilled from scratch.";
+   the prompt reused the inference cache or had to be prefilled from scratch.
+
+Also available, when the situation calls for it:
+- code.get_repo_map — the structure of a project, as a ranked symbol outline within a token
+  budget. Cheaper than listing files, and it survives being compacted because it is regenerated.
+- code.impact_of_change — who calls a symbol before you change it.
+- memory.recall_fold — the summary a fold left behind, rather than the steps inside it.
+- memory.staleness — which remembered entries have had their source change under them. Ask
+  before trusting a summary; a stale entry carries the current value of what it describes.
+- session.snapshot and session.restore — persist and reload the inference server's view of this
+  session. Worth calling snapshot before a long generation or a new day.
+- context.record_usage — report this turn's token and prompt-cache numbers, so the receipt can
+  say whether a compaction cost you a re-prefill.
+- context.plan_eviction — inspect what an eviction would do before it happens.
+- sakur4.status and sakur4.dream — what this layer currently holds, and idle consolidation.";
 
 /// Compile-time guard: every tool the router exposes must be declared in the
 /// prompt's vocabulary.
-#[allow(dead_code)]
-fn _tool_name_guard() -> [&'static str; 13] {
-    [
-        "memory.commit_episode",
-        "memory.pin",
-        "memory.recall",
-        "memory.fold",
-        "memory.unfold",
-        "memory.recall_fold",
-        "code.get_repo_map",
-        "code.query_symbol",
-        "code.impact_of_change",
-        "session.snapshot",
-        "session.restore",
-        "context.receipt",
-        "context.plan_eviction",
-    ]
-}
-
+///
+/// # The previous version was neither compile-time nor a guard
+///
+/// It was `#[allow(dead_code)] fn _tool_name_guard() -> [&'static str; 13]` with a hard-coded
+/// array, and it was never called. Nothing compared it to anything, so it could not fail, and its
+/// list had drifted: it named 13 of the 17 advertised tools, omitting `context.record_usage`,
+/// `memory.staleness`, `sakur4.status` and `sakur4.dream`. A reader finding it would reasonably
+/// conclude the catalogue was checked. It was not.
+///
+/// The test below replaces it and checks the property that matters in the direction that can
+/// actually break: every tool in the advertised catalogue is named somewhere in the preamble the
+/// model reads. `#[allow(dead_code)]` on a function that nothing calls is a comment pretending to
+/// be a check.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1592,9 +1600,46 @@ mod tests {
         }
     }
 
+    /// Every advertised tool is at least *named* in the preamble.
+    ///
+    /// This is the check the dead guard claimed to be. It reads the same list the router serves,
+    /// so adding a tool without mentioning it to the model fails here — which is the actual
+    /// failure mode: a tool the model is never told about is a tool it will not call.
+    #[test]
+    fn the_preamble_mentions_every_advertised_tool() {
+        let advertised = [
+            "code.get_repo_map",
+            "code.impact_of_change",
+            "code.query_symbol",
+            "context.plan_eviction",
+            "context.receipt",
+            "context.record_usage",
+            "memory.commit_episode",
+            "memory.fold",
+            "memory.pin",
+            "memory.recall",
+            "memory.recall_fold",
+            "memory.staleness",
+            "memory.unfold",
+            "sakur4.dream",
+            "sakur4.status",
+            "session.restore",
+            "session.snapshot",
+        ];
+        assert_eq!(advertised.len(), 17, "the catalogue changed; update this list");
+
+        for name in advertised {
+            assert!(
+                PREAMBLE.contains(name),
+                "{name} is advertised in the tool catalogue but never named in the preamble, \
+                 so the model that reads only the preamble will not know it exists"
+            );
+        }
+    }
+
     #[test]
     fn the_preamble_states_when_to_fold_not_just_that_it_can() {
-        // The PRD's stated mitigation for under-triggering on smaller models.
+        // The original plan's stated mitigation for under-triggering on smaller models.
         assert!(PREAMBLE.contains("more than a few steps"));
         assert!(PREAMBLE.contains("immediately"));
     }

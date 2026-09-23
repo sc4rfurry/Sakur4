@@ -998,12 +998,24 @@ function verification() {
     fill: T.inkFaint,
   });
 
+  // # This figure goes stale faster than anything else in the repository
+  //
+  // It is a list of claims about the project's own evidence, so every round of work moves items
+  // from the right column to the left — and nothing fails when it does not. Three entries here
+  // were false by the time anyone looked: the test count, "Encryption at rest (FR-20) not
+  // implemented" (it is, behind a feature, with its own CI job), "No real llama.cpp server
+  // contacted" (the README says the opposite, two pages away), and "NFR latency and memory numbers
+  // unmeasured" (they are tabulated in `docs/verification/README.md`).
+  //
+  // A figure that overstates what is *unverified* is the less dangerous direction, but it is the
+  // same defect: it tells a reader something about this project that is not true. The counts are
+  // kept where a check can see them — see the test-count guard in `verify.mjs`.
   const cols = [
     [
       "VERIFIED",
       T.green,
       [
-        "224 tests, workspace-wide, green",
+        "257 tests, workspace-wide, green",
         "MCP over stdio — real binary, real pipes",
         "MCP over HTTP — SDK client, live listener",
         "Hermes discovers all 17 tools",
@@ -1012,21 +1024,21 @@ function verification() {
         "Malformed input rejected, session survives",
         "Zero unwrap/expect/panic outside tests",
         "cargo publish dry-run builds standalone",
+        "A real llama.cpp server, measured",
+        "Encryption at rest, exercised by CI",
       ],
     ],
     [
       "NOT VERIFIED",
       T.amber,
       [
-        "No real llama.cpp server contacted",
         "Hermes has not been driven by a live model",
         "OMP compaction hook never fired for real",
         "No MCP conformance run against a client",
         "No LoCoMo / Endurance benchmark run",
-        "NFR latency and memory numbers unmeasured",
-        "Encryption at rest (FR-20) not implemented",
         "cargo deny / cargo audit not in CI",
         "No signed release artifacts",
+        "No install test on a machine without a toolchain",
       ],
     ],
   ];
@@ -1049,7 +1061,7 @@ function verification() {
   return svg(W, H, s, {
     title: "Verification status",
     desc:
-      "Nine verified behaviours including the test suite, both MCP transports, and live harness discovery, against nine unverified items including a real llama.cpp server, a live Hermes session, and the OMP compaction hook.",
+      "Eleven verified behaviours — the test suite, both MCP transports, live harness discovery, a real llama.cpp server, and encryption at rest — against seven unverified ones, including a live Hermes model session, the OMP compaction hook firing for real, and signed release artifacts.",
   });
 }
 

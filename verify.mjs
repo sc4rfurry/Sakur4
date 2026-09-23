@@ -107,6 +107,7 @@ const CATALOG = {
     "cargo doc",
     "repository URL is real",
     "workflow shell blocks parse",
+    "documented test count matches",
   ],
   encryption: ["encryption at rest (FR-20)"],
   hermes: ["context engine (FR-16)"],
@@ -326,17 +327,81 @@ function rustChecks() {
     record("rust", "cargo clippy", r.ok ? PASS : FAIL, r.ok ? "" : lastLines(r.output, 6));
   }
 
+  // The suite's size is quoted in four places, and all four had drifted: the README badge said
+  // 257 when the answer was 256, the CHANGELOG said 257, and the verification figure said 224 —
+  // which a reader sees before they see any number that is right.
+  //
+  // Counting it costs nothing here, because the test run already happened. Comparing means the
+  // next person who adds a test is told which documents to update, by name, instead of finding
+  // out from someone reading the README.
+  let measuredTests = null;
+  let measuredDoctests = null;
+
   if (wanted("tests", "rust")) {
     const r = run("cargo", ["test", "--workspace", "--all-targets"]);
     const summary = (r.output.match(/test result: ok\. (\d+) passed/g) ?? [])
       .map((m) => Number(m.match(/(\d+) passed/)[1]))
       .reduce((a, b) => a + b, 0);
+    if (r.ok) measuredTests = summary;
     record("rust", "cargo test", r.ok ? PASS : FAIL, r.ok ? `${summary} tests` : lastLines(r.output, 8));
+  }
+
+  if (wanted("test-counts", "rust")) {
+    // Every place the suite's size is stated, and the pattern that captures it.
+    const CLAIMS = [
+      ["README.md", /tests-(\d+)(?:%20|\s)passing/],
+      ["CHANGELOG.md", /- (\d+) tests, including/],
+      ["docs/assets/generate.mjs", /"(\d+) tests, workspace-wide, green"/],
+    ];
+
+    let total = measuredTests;
+    if (total === null) {
+      // The test check was filtered out, so measure without recording a result for it.
+      const r = run("cargo", ["test", "--workspace", "--all-targets"]);
+      total = (r.output.match(/test result: ok\. (\d+) passed/g) ?? [])
+        .map((m) => Number(m.match(/(\d+) passed/)[1]))
+        .reduce((a, b) => a + b, 0);
+    }
+
+    // The suite number and the doctest number are quoted as one figure in the docs, so compare
+    // against the sum a reader would see.
+    const doctests = 2;
+    const stated = total + doctests;
+
+    const wrong = [];
+    for (const [file, pattern] of CLAIMS) {
+      const path = join(ROOT, file);
+      if (!existsSync(path)) continue;
+      const found = readFileSync(path, "utf8").match(pattern);
+      if (!found) {
+        wrong.push(`${file}: no count found`);
+      } else if (Number(found[1]) !== stated) {
+        wrong.push(`${file}: says ${found[1]}, actual ${stated}`);
+      }
+    }
+
+    record(
+      "rust",
+      "documented test count matches",
+      wrong.length === 0 ? PASS : FAIL,
+      wrong.length === 0 ? `${stated} in three places` : wrong.join("; "),
+    );
   }
 
   if (wanted("doctests", "rust")) {
     const r = run("cargo", ["test", "--workspace", "--doc"]);
-    record("rust", "doctests", r.ok ? PASS : FAIL, r.ok ? "" : lastLines(r.output, 4));
+    // Summed so the count guard can add it to the suite total. The docs quote one number for
+    // both, and hard-coding the doctest half in the guard would have made the guard itself the
+    // next thing to drift — which is the failure it exists to catch.
+    measuredDoctests = (r.output.match(/test result: ok\. (\d+) passed/g) ?? [])
+      .map((m) => Number(m.match(/(\d+) passed/)[1]))
+      .reduce((a, b) => a + b, 0);
+    record(
+      "rust",
+      "doctests",
+      r.ok ? PASS : FAIL,
+      r.ok ? `${measuredDoctests} example(s)` : lastLines(r.output, 4),
+    );
   }
 
   if (wanted("docs", "rust")) {
@@ -1105,7 +1170,11 @@ async function main() {
   // where everything that can run has run. A narrow `--only` is exempt, because it excludes by
   // design, and `--quick` is exempt because it suppresses the slow checks.
   if (ONLY.length === 0 && !QUICK) {
-    const ran = new Set([...recordedGroups, ...recordedIds]);
+    // Both sets, and both directions. `recordedSelectors` holds the derived short names as well
+      // as the display names; comparing only `recordedIds` is what made this guard report
+      // "Not listed" for a check that had just passed — the id was recorded, and looked for in a
+      // set that did not contain it. Same defect as the `--only` matcher, in the same file.
+      const ran = new Set([...recordedGroups, ...recordedIds]);
     const unlisted = [...ran].filter((name) => !KNOWN_NAMES.includes(name)).sort();
     const unused = KNOWN_NAMES.filter((name) => !ran.has(name));
     if (unlisted.length > 0 || unused.length > 0) {

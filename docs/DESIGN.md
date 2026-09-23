@@ -318,28 +318,35 @@ nearly-full window.
 
 ## What is not done
 
-* **C9 harness adapters** (FR-16, FR-17, FR-18): the Hermes context-engine plugin, the
-  OMP extension and skill, and the generic reverse proxy. All three are thin over the
-  MCP surface, which is complete.
-* **FR-20** (optional encryption at rest): the `sqlcipher` feature of `libsqlite3-sys`
-  is available but not wired up.
-* **FR-19's acceptance test** (run the suite with network egress blocked at the OS
-  level): the default paths make no network calls, but the test itself has not been
-  run.
-* **Real-server verification.** The llama.cpp adapter is built against the documented
-  contracts with tolerant parsing for the field-name and payload-key variations those
-  revisions have shipped, and the *client* is tested against a fake server over real
-  HTTP. First contact with a real build is still first contact.
-* **Conformance and benchmark runs**: the MCP reference-client conformance suite,
-  LoCoMo, and the Sakur4 Endurance Benchmark (which the original plan scheduled for
-  Phase 5).
-* **NFR performance numbers**: not measured. The development machine has a small GPU
-  with 4 GB and cannot host the intended workload, which is why the embedded and
-  fake backends exist.
-* **FR-11's staleness annotation** on `impact_of_change` reports each caller's current
-  signature but does not yet compute per-edge staleness, because edges do not record
-  the target hash that was current when they were written. The data model change is
-  identified; the feature is partial.
+**This section listed completed work for several rounds.** The harness adapters, encryption at
+rest, real-server verification and the NFR numbers were all done and all still listed here. That is
+the more damaging direction for a document like this: a reader who checks it against the repository
+finds it wrong in the direction of understating the project, and stops trusting the parts that are
+right. Finished items have moved to [the requirement table](#requirements-and-where-each-is-met);
+what follows is what is genuinely outstanding, each with its evidence.
+
+* **FR-19's acceptance test** — the suite run with network egress blocked at the OS level. The
+  default paths make no outbound calls and the live checks are opt-in behind `--upstream`, but the
+  blocked-egress run itself has not been performed. The property is designed for; it is not
+  demonstrated.
+* **MCP reference-client conformance** — no run against the official conformance suite. Both
+  transports are exercised against a real SDK client, which is not the same claim.
+* **LoCoMo and the Endurance Benchmark** — not run. The A/B benchmark in [`bench/`](bench/) is a
+  different and narrower measurement: matched windows, one repository, one model. It does not
+  substitute for a standardised long-conversation benchmark.
+* **FR-11's staleness annotation** — `impact_of_change` reports each caller's current signature but
+  does not compute per-edge staleness, because edges do not record the target hash that was current
+  when they were written. `ImpactEntry.stale` exists and is always `false`; it is the identified
+  data-model change rather than a working feature, and it is left in place so the report shape does
+  not change when it is implemented.
+* **A live Hermes model session** — the engine's 44 contracts run against a live daemon, but driving
+  Hermes with a real model has not succeeded: its provider routing rejects the model string this
+  setup needs. Recorded in
+  [`integrations/hermes-plugin/LIVE-TESTING.md`](../integrations/hermes-plugin/LIVE-TESTING.md).
+* **Signed release artifacts** — the release publishes archives with SHA-256 checksums, which detect
+  corruption and not tampering. There is no GPG signature and no build provenance attestation.
+* **`cargo audit` / `cargo deny` in CI** — neither runs. A small, lockfile-pinned dependency set is
+  not a substitute for a vulnerability feed.
 
 ### Deviations from the original plan, stated
 
