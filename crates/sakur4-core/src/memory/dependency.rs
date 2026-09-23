@@ -163,10 +163,22 @@ impl EdgeKind {
     /// *source*, i.e. whether evicting the destination while the source is live
     /// would lose information.
     ///
-    /// This is what the eviction engine consults before dropping anything. A
-    /// `derived_from` edge means the source was the ground truth for the
-    /// destination; a `calls` edge means the destination's behaviour depends on
-    /// the source's signature.
+    /// # This returns `true` for every kind, deliberately, and the comment used to claim otherwise
+    ///
+    /// The previous wording said "this is what the eviction engine consults before dropping
+    /// anything" and contrasted a `derived_from` edge with a `calls` edge. None of that was true:
+    /// the body was `true`, `self` went unread, and **nothing in the workspace calls this method**.
+    /// The eviction engine does not consult it.
+    ///
+    /// It stays, returning a blanket `true`, rather than being removed or guessed at. A per-kind
+    /// answer is a claim about which relations carry information, and the right classification
+    /// depends on eviction policy this crate has not settled: `supersedes` and `corrects` plainly
+    /// do *not* make the destination depend on the source, `derived_from` plainly does, and
+    /// `depends_on` is defined by whoever writes the edge. Inventing an answer here would put an
+    /// unverified rule into a public API, which is worse than an honest blanket.
+    ///
+    /// `EdgeKind` is re-exported from `memory`, so this is public surface; deleting it would be a
+    /// breaking change.
     pub fn creates_dependency(self) -> bool {
         true
     }

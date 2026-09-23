@@ -155,12 +155,35 @@ tar -xzf "$tmp/$archive" -C "$tmp" || die "could not extract $archive"
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------
+#
+# # Prefer a directory the shell will actually find
+#
+# The header documents the default as "~/.local/bin, or /usr/local/bin when writable and
+# ~/.local/bin is not on PATH". It was neither of those: the code created ~/.local/bin and used it
+# whenever `mkdir` succeeded, never consulting PATH at all.
+#
+# That matters on the distributions where ~/.local/bin is not on the default PATH — Debian and
+# Ubuntu before `~/.profile` has been sourced, and most containers. The install then "succeeds" and
+# `sakur4d` is not on the path, which reads as a broken install rather than as a directory choice.
+#
+# The order is now: whatever the user asked for, then ~/.local/bin if it is already on PATH, then
+# /usr/local/bin if it can be written, then ~/.local/bin regardless. The last fallback is
+# deliberate — somewhere is better than nowhere — but the message below says whether the directory
+# is on PATH, so the user is not left guessing.
 bindir="${SAKUR4_BIN_DIR:-}"
 if [ -z "$bindir" ]; then
-    if [ -d "$HOME/.local/bin" ] || mkdir -p "$HOME/.local/bin" 2>/dev/null; then
+    on_path() {
+        case ":${PATH:-}:" in
+            *":$1:"*) return 0 ;;
+            *) return 1 ;;
+        esac
+    }
+    if on_path "$HOME/.local/bin"; then
         bindir="$HOME/.local/bin"
-    else
+    elif [ -w /usr/local/bin ] 2>/dev/null || mkdir -p /usr/local/bin 2>/dev/null; then
         bindir="/usr/local/bin"
+    else
+        bindir="$HOME/.local/bin"
     fi
 fi
 mkdir -p "$bindir" 2>/dev/null || die "cannot create $bindir; set SAKUR4_BIN_DIR"

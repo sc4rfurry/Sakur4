@@ -898,11 +898,22 @@ impl RepoCortex {
                 line: caller.as_ref().and_then(|f| f.line_start),
                 depth: c.depth,
                 via: c.via.as_str().to_string(),
-                // FR-11: "annotated with whether that caller's own symbolic fact
-                // hash is currently stale relative to the target symbol's
-                // last-known signature". A caller is stale when the graph edge it
-                // holds predates the target's current hash — detected here by
-                // comparing the edge's recorded weight-bearing target hash.
+                // FR-11 asks for each caller to be "annotated with whether that caller's own
+                // symbolic fact hash is currently stale relative to the target symbol's
+                // last-known signature".
+                //
+                // # The comment here used to describe code that was not present
+                //
+                // It said the check is "detected here by comparing the edge's recorded
+                // weight-bearing target hash". No such comparison happens: the value is `false`,
+                // and it cannot be anything else, because edges do not record the target hash
+                // that was current when they were written. There is nothing to compare against.
+                //
+                // The field is kept rather than removed so the report shape does not change when
+                // the edge table gains the column, but every value is `false` today, and
+                // `docs/DESIGN.md` lists this under "What is not done" as a partial feature. A
+                // reader who trusted the old comment would have concluded the annotation worked
+                // and that no caller happened to be stale — the opposite of the truth.
                 stale: false,
                 note: caller
                     .as_ref()
