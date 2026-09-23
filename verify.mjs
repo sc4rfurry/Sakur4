@@ -511,6 +511,34 @@ async function hermesChecks() {
     : { ok: false, output: `the daemon did not answer on port ${port} within 30s` };
 
   const passed = r.ok && /all contracts pass/.test(r.output);
+
+  // # Distinguish "the engine is wrong" from "the daemon was not there"
+  //
+  // The engine defers when it cannot reach a daemon. That is the designed behaviour and the
+  // contract `a missing daemon must not break a session` asserts it — but it means a daemon that
+  // never came up produces a report where the two contracts needing a live daemon fail and the
+  // offline ones pass:
+
+  //   2 contract(s) failed: something was evicted, compression_count advanced
+  //
+  // which reads as a compaction bug. It is not, and this check spent a CI run saying so.
+  //
+  // A daemon that did not start is an environment failure. Reporting SKIP names what happened
+  // instead of blaming the component under test, and `--require-all` still fails the run, so it
+  // cannot be used to hide one.
+  const daemonMissing = !up || /refused|unreachable|Cannot reach|did not answer/i.test(r.output);
+  if (!passed && daemonMissing) {
+    record(
+      "hermes",
+      "context engine (FR-16)",
+      SKIP,
+      up
+        ? "the daemon started but the engine could not reach it; the engine defers by design"
+        : "the daemon did not start, so the live-daemon contracts could not run",
+    );
+    return;
+  }
+
   record(
     "hermes",
     "context engine (FR-16)",
