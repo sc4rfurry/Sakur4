@@ -280,20 +280,48 @@ jobs:
       # no llama.cpp and no OMP, so those groups must be told to stand down rather than
       # being quietly skipped by `--require-all`, which would defeat its purpose.
       - name: Verify everything CI can reach
-        # # Two crates at a time
+        # # One process per group, because sharing one runs out of memory
         #
-        # This job runs the whole verifier, which spawns daemons and runs the test suite. On a
-        # 7 GB runner with default parallelism it was killed with exit 137 — SIGKILL, the OS
-        # reclaiming memory — after eleven minutes, and the failure surfaced as a Hermes contract
-        # failing, which is not what happened. Capping the jobs costs a little wall-clock and
-        # stops the run being killed at an unrelated point.
+        # Running all five groups in a single `verify.mjs` was killed with exit 137 — SIGKILL, the
+        # OS reclaiming memory — and the kill landed during the Hermes group, so the report blamed
+        # a compaction contract. The dedicated Hermes job passes the same 44 contracts against the
+        # same engine in two minutes, which is what ruled the engine out.
+        #
+        # The groups are not independent in one process: the bench group loads twenty thousand
+        # entries to measure recall, the harness group spawns several daemons, and the rust group
+        # runs the whole test suite. Together they exceed what a 7 GB runner will give, and the
+        # process dies wherever it happens to be — pointing at whichever check was in flight.
+        #
+        # Separate processes give each group its own heap and make the failure land on the group
+        # that caused it. `CARGO_BUILD_JOBS` is capped for the same reason.
         env:
           CARGO_BUILD_JOBS: "2"
         run: |
-          node verify.mjs \
-            --only rust,encryption,hermes,bench,harness \
-            --require-all \
-            --json /tmp/verify.json
+          set -uo pipefail
+          failed=""
+          for group in rust encryption hermes bench harness; do
+            echo "::group::verify ${group}"
+            if ! node verify.mjs --only "${group}" --require-all --json "/tmp/verify-${group}.json"; then
+              failed="${failed} ${group}"
+            fi
+            echo "::endgroup::"
+          done
+          node -e '
+            const fs = require("node:fs");
+            const groups = ["rust", "encryption", "hermes", "bench", "harness"];
+            const results = [];
+            for (const g of groups) {
+              try {
+                const d = JSON.parse(fs.readFileSync(`/tmp/verify-${g}.json`, "utf8"));
+                for (const r of d.results ?? []) results.push(r);
+              } catch { /* a group that never wrote a report */ }
+            }
+            fs.writeFileSync("/tmp/verify.json", JSON.stringify({ results }, null, 2));
+          '
+          if [ -n "$failed" ]; then
+            echo "::error::groups that did not pass:${failed}"
+            exit 1
+          fi
 
       - name: Upload the result
         if: always()
