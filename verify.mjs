@@ -508,7 +508,7 @@ async function hermesChecks() {
           SAKUR4_HERMES_PLUGIN: plugin,
         },
       })
-    : { ok: false, output: `the daemon did not answer on port ${port} within 30s` };
+    : { ok: false, output: `the daemon did not answer on port ${port} within 30s: ${daemonStderr(child)}` };
 
   const passed = r.ok && /all contracts pass/.test(r.output);
 
@@ -556,9 +556,36 @@ async function hermesChecks() {
   cleanupDaemon(port, workdir);
 }
 
-/** Spawn a daemon, keeping the handle so it can be killed when the check is done. */
+/**
+ * Spawn a daemon, keeping the handle and capturing its stderr.
+ *
+ * # `stdio: "ignore"` made every daemon failure undiagnosable
+ *
+ * The first version discarded both streams. When a daemon failed to serve, the check reported
+ * `the daemon did not answer on port N within 30s` and nothing else — no reason, no trace, no
+ * clue whether it had failed to bind, failed to migrate, or been killed. The Hermes check failed
+ * that way twice in CI and both times the only way to learn anything would have been to guess.
+ *
+ * stderr is kept in a bounded buffer and attached to the failure note. It is not streamed, because
+ * a healthy daemon is quiet and a noisy one would bury the report.
+ */
 function spawnDaemon(binary, args) {
-  return spawn(binary, args, { stdio: "ignore" });
+  const child = spawn(binary, args, { stdio: ["ignore", "ignore", "pipe"] });
+  child.stderrTail = "";
+  child.on("error", (error) => {
+    child.stderrTail += `spawn error: ${error.message}\n`;
+  });
+  child.stderr?.on("data", (chunk) => {
+    // Keep the last few lines: a fatal message is at the end, after any startup logging.
+    child.stderrTail = (child.stderrTail + chunk.toString()).split("\n").slice(-12).join("\n");
+  });
+  return child;
+}
+
+/** Whatever the daemon last said on stderr, for a failure note. */
+function daemonStderr(child) {
+  const text = (child?.stderrTail ?? "").trim();
+  return text ? text.replace(/\s+/g, " ").slice(0, 240) : "no output on stderr";
 }
 
 /** Wait until something answers on a local port, or give up. */
