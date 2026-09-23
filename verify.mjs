@@ -256,8 +256,23 @@ function available(command, args = ["--version"]) {
   return producedOutput || (!result.error && result.status === 0);
 }
 
+/**
+ * The daemon to spawn, or `null`.
+ *
+ * # An explicit `SAKUR4_BIN` is authoritative
+ *
+ * This was `if (SAKUR4_BIN && existsSync(SAKUR4_BIN)) return SAKUR4_BIN`, falling through to the
+ * default search otherwise. So pointing `SAKUR4_BIN` at a path that does not exist silently used a
+ * *different* binary — whatever was in `target/`, possibly from an older build — and the run then
+ * reported on code that had not been compiled. Setting an override and having it quietly ignored
+ * is worse than not offering one.
+ *
+ * A path that is not there now yields `null`, which the header reports.
+ */
 function daemonBinary() {
-  if (process.env.SAKUR4_BIN && existsSync(process.env.SAKUR4_BIN)) return process.env.SAKUR4_BIN;
+  if (process.env.SAKUR4_BIN) {
+    return existsSync(process.env.SAKUR4_BIN) ? process.env.SAKUR4_BIN : null;
+  }
   const candidates = [
     join(ROOT, "target", "release", EXE),
     join(ROOT, "target", "debug", EXE),
@@ -1238,9 +1253,23 @@ async function main() {
 
   process.stdout.write(`Sakur4 verification\n`);
   process.stdout.write(`  root       ${ROOT}\n`);
-  process.stdout.write(`  daemon     ${daemonBinary() ?? "not built"}\n`);
+  const binary = daemonBinary();
+  process.stdout.write(`  daemon     ${binary ?? "NOT BUILT — the hermes, bench and harness groups need one"}\n`);
   process.stdout.write(`  upstream   ${UPSTREAM ?? "not configured (live checks will skip)"}\n`);
   if (ONLY.length) process.stdout.write(`  only       ${ONLY.join(", ")}\n`);
+  // # Say this once, at the top, rather than three times at the bottom
+  //
+  // Without a daemon three groups fail independently — hermes, bench and harness — and each
+  // reports something about the component under test rather than about the missing binary. On CI
+  // that read as a compaction contract failing. Naming it here, before anything runs, is the
+  // difference between a diagnosis and three symptoms.
+  if (!binary) {
+    process.stdout.write(
+      `\n  \x1b[33mNo sakur4d found.\x1b[0m Build one with \`cargo build --release -p sakur4d\`, or point\n` +
+        `  \`SAKUR4_BIN\` at one. Checks that need to spawn a daemon will fail or skip, and the\n` +
+        `  failure will not be about the code they are testing.\n`,
+    );
+  }
   process.stdout.write("\n");
 
   rustChecks();

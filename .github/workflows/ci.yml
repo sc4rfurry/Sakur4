@@ -276,6 +276,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libssl-dev python3
 
+      # # The verifier needs a daemon, and this job never built one
+      #
+      # `verify.mjs` locates `sakur4d` on `PATH` and under `target/{debug,release}`. This job did
+      # not build it, so the binary it found was whatever the `rust` group's test run happened to
+      # leave in `target/debug` — an undeclared dependency on another group's side effect.
+      #
+      # When that binary was missing, `hermes`, `bench` and `harness` all failed together, each
+      # with a message about the component under test rather than about the missing binary. The
+      # dedicated Hermes job builds one explicitly, which is why it passed the same 44 contracts
+      # while this job reported a compaction contract failing.
+      #
+      # Building it here makes the dependency explicit, and makes the failure — if it comes —
+      # land on the build rather than on three unrelated checks.
+      - name: Build the daemon the verifier spawns
+        run: cargo build --release -p sakur4d
+
       # The verifier runs the live-server and harness checks only when asked. On CI there is
       # no llama.cpp and no OMP, so those groups must be told to stand down rather than
       # being quietly skipped by `--require-all`, which would defeat its purpose.
