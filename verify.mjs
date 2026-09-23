@@ -1315,8 +1315,21 @@ async function main() {
     // The selectors a check answers to are derived from its name, so a term counts as matched if
     // it is one of them. Comparing against the raw display names was why `--only fmt` reported a
     // miss for a check that had just printed PASS.
-    const unmatched = ONLY.filter(
-      (term) => !recordedSelectors.has(term) && !recordedSelectors.has(shortName(term)),
+    //
+    // # This guard has to agree with `wanted`, and twice did not
+    //
+    // `wanted` decides what runs; this decides whether to complain about the filter. When they
+    // disagree, a filter that ran exactly what it asked for is reported as a typo — after every
+    // check has passed. `--only fmt` was that, and `--only hermes --only-group` was it again: the
+    // group ran, printed `1 passed · 0 failed · 0 skipped`, and the run then exited 1 because the
+    // term `hermes` was looked up among check selectors rather than group selectors.
+    //
+    // A user sees a green report and a red exit code, which is the least useful combination there
+    // is. Both decisions now use the same predicate.
+    const unmatched = ONLY.filter((term) =>
+      GROUP_ONLY
+        ? !recordedGroups.has(term)
+        : !recordedSelectors.has(term) && !recordedSelectors.has(shortName(term)),
     );
     if (unmatched.length > 0) {
       const known = [...new Set([...KNOWN_NAMES, ...recordedSelectors])].sort();
