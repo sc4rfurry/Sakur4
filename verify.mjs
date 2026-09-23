@@ -22,6 +22,7 @@
  *   node verify.mjs --quick                  # skip the slow benchmarks
  *   node verify.mjs --only rust,fmt           # a subset, by group or short check name
  *   node verify.mjs --require-all            # fail if anything was skipped
+ *   node verify.mjs --require-all --allow-absent   # ...but not for a missing tool
  *   node verify.mjs --list                   # show what would run
  *
  * # What each kind needs
@@ -78,6 +79,8 @@ const ONLY = (value("only", "") || "")
   .filter(Boolean);
 const QUICK = has("quick");
 const REQUIRE_ALL = has("require-all");
+  // Excuse skips whose reason is an absent prerequisite, rather than only failing on all skips.
+  const ALLOW_ABSENT = has("allow-absent");
 const JSON_OUT = value("json", null);
 
 // ===========================================================================
@@ -1333,10 +1336,45 @@ async function main() {
 
   if (counts[FAIL] > 0) return 1;
   if (REQUIRE_ALL && counts[SKIP] > 0) {
+    // # A machine that lacks a tool is not a failed check
+    //
+    // `--require-all` exists so a check cannot quietly stop running — its purpose is to catch a
+    // check that *should* have run and did not. Applying it to "OMP is not installed on this
+    // runner" fails the build for a fact about the environment, and the consolidated CI job spent
+    // two runs reporting `groups that did not pass: hermes harness` for exactly that: the Hermes
+    // engine passed all 44 contracts on the line above the two skips.
+    //
+    // `--allow-absent` excuses a skip whose reason names something absent — a tool not on PATH, a
+    // server not configured, a feature this build cannot enable — while still failing on a skip
+    // that means "the prerequisite exists and the check declined to use it". The distinction is
+    // in the reason, which is why every skip is required to have one.
+    const ABSENT = /not on PATH|not configured|not installed|not built|not available|no .* found|needs |cannot be enabled|pass --/i;
+    const excused = [];
+    const unexcused = [];
+    for (const r of results) {
+      if (r.status !== SKIP) continue;
+      (ALLOW_ABSENT && ABSENT.test(r.note ?? "") ? excused : unexcused).push(r);
+    }
+
+    if (unexcused.length === 0 && ALLOW_ABSENT) {
+      process.stdout.write(
+        `\n  --require-all: ${excused.length} check(s) skipped because this machine lacks what they\n` +
+          `  need, and ${ALLOW_ABSENT ? "--allow-absent accepts that" : "nothing else was skipped"}. ` +
+          `Each reason is named above.\n`,
+      );
+      return counts[FAIL] > 0 ? 1 : 0;
+    }
+
     process.stdout.write(
       "\n  --require-all was given, and something was skipped. A skipped check is not a\n" +
         "  passed check; see the reasons above.\n",
     );
+    if (ALLOW_ABSENT && unexcused.length > 0) {
+      process.stdout.write(
+        `  ${unexcused.length} of them for a reason that is not "this machine lacks it":\n` +
+          unexcused.map((r) => `    · ${r.id}: ${r.note ?? "no reason given"}\n`).join(""),
+      );
+    }
     return 1;
   }
   return 0;

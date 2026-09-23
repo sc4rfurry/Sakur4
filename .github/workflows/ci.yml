@@ -317,7 +317,17 @@ jobs:
           failed=""
           for group in rust encryption hermes bench harness; do
             echo "::group::verify ${group}"
-            if ! node verify.mjs --only "${group}" --require-all --json "/tmp/verify-${group}.json"; then
+            # # `--allow-absent`, because a runner without OMP is not a failed check
+            #
+            # `--require-all` exists so a check cannot quietly stop running. Applied to "this
+            # machine does not have OMP", it failed the build for a fact about the environment:
+            # two runs reported `groups that did not pass: hermes harness` while the Hermes engine
+            # had passed all 44 contracts on the line above the skips.
+            #
+            # `--allow-absent` excuses a skip whose reason names something absent and still fails
+            # on a skip that means the prerequisite was there and the check declined to use it.
+            if ! node verify.mjs --only "${group}" --require-all --allow-absent \
+                 --json "/tmp/verify-${group}.json"; then
               failed="${failed} ${group}"
             fi
             echo "::endgroup::"
