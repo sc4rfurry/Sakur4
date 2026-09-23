@@ -508,7 +508,7 @@ async function hermesChecks() {
           SAKUR4_HERMES_PLUGIN: plugin,
         },
       })
-    : { ok: false, output: `the daemon did not answer on port ${port} within 30s: ${daemonStderr(child)}` };
+    : { ok: false, output: `the daemon did not answer an MCP call on port ${port} within 30s (last: ${waitForPort.lastStatus}): ${daemonStderr(child)}` };
 
   const passed = r.ok && /all contracts pass/.test(r.output);
 
@@ -588,25 +588,65 @@ function daemonStderr(child) {
   return text ? text.replace(/\s+/g, " ").slice(0, 240) : "no output on stderr";
 }
 
-/** Wait until something answers on a local port, or give up. */
+/**
+ * Wait until the daemon answers a real MCP call, or give up.
+ *
+ * # "Something is listening" is not "the daemon works"
+ *
+ * The first version posted `{}` to `/` and accepted any status above zero, on the reasoning that a
+ * 4xx is the daemon rejecting an empty body and therefore a sign of life. It is a sign of life and
+ * not a sign of function: this transport answers `400 Invalid params` for a request without the
+ * per-request `_meta` the 2026-07-28 revision requires, which is a 4xx, so the probe returned
+ * `true` for a daemon that would fail every real call the engine made.
+ *
+ * That is what happened in CI. The check reported
+ *
+ *     2 contract(s) failed: something was evicted, compression_count advanced
+ *
+ * which reads as the eviction engine being broken, while the standalone Hermes job passed the same
+ * 44 contracts. The daemon was listening and not serving.
+ *
+ * This now posts an actual `tools/call sakur4.status` with the required `_meta` and headers, and
+ * requires a 200. A probe that cannot distinguish "up" from "working" is not a readiness check.
+ */
 async function waitForPort(port, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
+  const probe = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: {
+      name: "sakur4.status",
+      arguments: {},
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    },
+  };
+  let lastStatus = "no answer";
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/`, {
         method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json" },
-        body: "{}",
-        signal: AbortSignal.timeout(2000),
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          "MCP-Protocol-Version": "2026-07-28",
+          "Mcp-Method": "tools/call",
+          "Mcp-Name": "sakur4.status",
+        },
+        body: JSON.stringify(probe),
+        signal: AbortSignal.timeout(4000),
       });
-      // Any HTTP answer means something is listening; a 4xx is the daemon rejecting an
-      // empty body, which is a perfectly good sign of life.
-      if (response.status > 0) return true;
-    } catch {
-      /* not up yet */
+      if (response.status === 200) return true;
+      lastStatus = `HTTP ${response.status}`;
+    } catch (error) {
+      lastStatus = error?.name === "TimeoutError" ? "timed out" : "not up yet";
     }
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
+  waitForPort.lastStatus = lastStatus;
   return false;
 }
 
