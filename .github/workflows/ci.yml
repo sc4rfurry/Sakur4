@@ -326,7 +326,18 @@ jobs:
             #
             # `--allow-absent` excuses a skip whose reason names something absent and still fails
             # on a skip that means the prerequisite was there and the check declined to use it.
-            if ! node verify.mjs --only "${group}" --require-all --allow-absent \
+            #
+            # # `--only-group`, because `--only hermes` reached a harness check
+            #
+            # A selector can match a group or a check name, and the namespaces overlap: `hermes` is
+            # the group holding the context-engine check, and `Hermes plugin` is a check inside
+            # `harness` whose short name is also `hermes`. So the loop's `--only hermes` ran a
+            # harness check, which skipped for a missing binary, and the group was reported as
+            # failing with the engine passing on the line above it.
+            #
+            # `--only-group` compares the group only, so a loop over groups cannot reach outside
+            # the one it names.
+            if ! node verify.mjs --only "${group}" --only-group --require-all --allow-absent \
                  --json "/tmp/verify-${group}.json"; then
               failed="${failed} ${group}"
             fi

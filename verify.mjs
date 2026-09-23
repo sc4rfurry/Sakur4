@@ -81,6 +81,9 @@ const QUICK = has("quick");
 const REQUIRE_ALL = has("require-all");
   // Excuse skips whose reason is an absent prerequisite, rather than only failing on all skips.
   const ALLOW_ABSENT = has("allow-absent");
+  // Match `--only` terms against group names exclusively, so a loop over groups cannot reach a
+  // check in another group that happens to share a name.
+  const GROUP_ONLY = has("only-group");
 const JSON_OUT = value("json", null);
 
 // ===========================================================================
@@ -289,9 +292,23 @@ function daemonBinary() {
  *
  * `name` is the check's display name — the same string passed to `record` — and the selector is
  * derived from it, so a check cannot be renamed out from under its own flag.
+ *
+ * # `--only-group` matches the group and nothing else
+ *
+ * A selector can match a group or a check name, and those namespaces overlap: `hermes` is the group
+ * holding the context-engine check, and `Hermes plugin` is a check inside `harness` whose short
+ * name is also `hermes`. So `--only hermes` also runs a harness check.
+ *
+ * That is fine for a person, who can see what ran. It is wrong for a loop that believes it is
+ * running one group at a time: CI ran `--only hermes`, got the harness check as well, and reported
+ * the group as failing while the context-engine check had passed all 44 contracts on the line above.
+ *
+ * `--only-group` compares the group only, so a loop over groups cannot reach outside the one it
+ * names.
  */
 function wanted(name, group) {
   if (ONLY.length === 0) return true;
+  if (GROUP_ONLY) return ONLY.includes(group);
   const selectors = selectorsFor(name, group);
   return ONLY.some((term) => selectors.has(term) || selectors.has(shortName(term)));
 }
