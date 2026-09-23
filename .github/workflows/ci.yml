@@ -280,6 +280,15 @@ jobs:
       # no llama.cpp and no OMP, so those groups must be told to stand down rather than
       # being quietly skipped by `--require-all`, which would defeat its purpose.
       - name: Verify everything CI can reach
+        # # Two crates at a time
+        #
+        # This job runs the whole verifier, which spawns daemons and runs the test suite. On a
+        # 7 GB runner with default parallelism it was killed with exit 137 — SIGKILL, the OS
+        # reclaiming memory — after eleven minutes, and the failure surfaced as a Hermes contract
+        # failing, which is not what happened. Capping the jobs costs a little wall-clock and
+        # stops the run being killed at an unrelated point.
+        env:
+          CARGO_BUILD_JOBS: "2"
         run: |
           node verify.mjs \
             --only rust,encryption,hermes,bench,harness \
