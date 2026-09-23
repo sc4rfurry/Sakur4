@@ -503,7 +503,7 @@ diff, a JSON body or an exit status becomes deterministic facts rather than pros
 
 | Tool | Required | Optional |
 |---|---|---|
-| `code.get_repo_map` | `token_budget` | `focus_paths` |
+| `code.get_repo_map` | `token_budget` | `focus_paths`, `names_only` |
 | `code.query_symbol` | `qualified_name` | — |
 | `code.impact_of_change` | `qualified_name` | `depth` |
 

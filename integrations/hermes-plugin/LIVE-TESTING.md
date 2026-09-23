@@ -21,9 +21,18 @@ Sakur4ContextEngine
 That is the whole registration path, end to end: discovery → `register(ctx)` →
 `ctx.register_context_engine` → the class Hermes will instantiate. It works.
 
-**`HERMES_HOME` isolates a run completely.** Pointing it at a scratch directory redirects
-both `get_hermes_home()` and config loading, so a test session needs no changes to a real
-profile. This is how the check in `verify.mjs` runs without touching anything.
+**`HERMES_AGENT_DIR` points the automated check at a stubbed Hermes, so it touches nothing real.**
+`verify.mjs` does not run a Hermes session: it generates a minimal stub of `agent.context_engine`
+in a scratch directory and passes the path in `HERMES_AGENT_DIR`, so the engine can be imported and
+exercised without Hermes installed. CI has no Hermes either, which is why the stub exists.
+
+**This paragraph used to name `HERMES_HOME`, say it "isolates a run completely", and claim that is
+how `verify.mjs` runs.** Neither half was true — `HERMES_HOME` appears nowhere in `verify.mjs`, and
+the variable that is used points at a stub rather than at an isolated real profile. Anyone who set
+`HERMES_HOME` expecting the same result would have discovered the difference by running it.
+
+`HERMES_HOME` is still worth setting when you drive a *real* Hermes: it redirects config loading
+away from your profile. That is a separate thing from what the automated check does.
 
 **Three enabling details, each of which cost time to find:**
 

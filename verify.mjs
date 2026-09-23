@@ -108,6 +108,7 @@ const CATALOG = {
     "repository URL is real",
     "workflow shell blocks parse",
     "documented test count matches",
+    "documented tool arguments exist",
   ],
   encryption: ["encryption at rest (FR-20)"],
   hermes: ["context engine (FR-16)"],
@@ -346,7 +347,7 @@ function rustChecks() {
     record("rust", "cargo test", r.ok ? PASS : FAIL, r.ok ? `${summary} tests` : lastLines(r.output, 8));
   }
 
-  if (wanted("test-counts", "rust")) {
+  if (wanted("documented test count matches", "rust")) {
     // Every place the suite's size is stated, and the pattern that captures it.
     const CLAIMS = [
       ["README.md", /tests-(\d+)(?:%20|\s)passing/],
@@ -967,6 +968,24 @@ function harnessChecks() {
   // The repository URL ships inside every published crate's manifest. A placeholder there is a
   // crate nobody can inspect, and it is invisible locally: the build passes, the tests pass, and
   // the wrong string goes out. It sat in sixteen files while everything was green.
+  // The README's tool table is the reference a reader writes a call from, so a missing argument is
+  // not cosmetic: `code.get_repo_map` accepts `names_only`, and without it there is no documented
+  // way to learn the qualified names that `code.query_symbol` requires.
+  if (wanted("tool-args", "rust")) {
+    const script = join(ROOT, "docs", "verification", "tool-args.mjs");
+    if (!existsSync(script)) {
+      record("rust", "documented tool arguments exist", SKIP, "the check is missing");
+    } else {
+      const r = run(process.execPath, [script]);
+      const ok = r.ok && /every argument name matches/.test(r.output);
+      record(
+        "rust",
+        "documented tool arguments exist",
+        ok ? PASS : FAIL,
+        ok ? (r.output.match(/(\d+) documented tool/) ?? ["", "?"])[1] + " tools" : lastLines(r.output, 5),
+      );
+    }
+  }
   if (wanted("repo-url", "rust")) {
     const script = join(ROOT, "docs", "verification", "repo-url.mjs");
     if (!existsSync(script)) {

@@ -67,4 +67,4 @@ sakur4d receipt <session>   # where the context budget went, and the cache verdi
 
 ## License
 
-Apache-2.0. See [LICENSE](https://github.com/sc4rfurry/Sakur4/blob/main/LICENSE).
+Apache-2.0. See [LICENSE](https://github.com/sc4rfurry/Sakur4/blob/master/LICENSE).

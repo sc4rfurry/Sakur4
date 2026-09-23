@@ -150,23 +150,33 @@ obviously exceeded, not that it is met.
 node docs/verification/nfr2-recall.mjs --n 100000     # ~5 minutes of seeding
 ```
 
-## The distribution problem
+## Distribution
 
-Nothing here is installable by anyone but its author, and that is the largest remaining
-gap. Every piece of the release machinery is built and verified — it has simply never
-run, because there is nowhere to push it.
+**Installable, and the release has been exercised end to end.**
 
 | | State |
 |---|---|
-| git remote | **none configured** |
-| GitHub repository | **does not exist** |
-| crates.io | **not published** |
-| `gh` authentication | **not logged in** |
-| release tag | `v0.1.0` exists locally, unpushed |
-| `repository` in `Cargo.toml` | `https://github.com/sc4rfurry/Sakur4` — a **placeholder** |
+| GitHub repository | public — <https://github.com/sc4rfurry/Sakur4> |
+| release | `v0.1.0`, five platforms, with `SHA256SUMS.txt` |
+| install script | `README.md`'s one-liner, confirmed to fetch and verify |
+| `repository` in `Cargo.toml` | the real URL, checked by `repo-url.mjs` on every run |
+| crates.io | **not published** — `sakur4-core` must go first, then `sakur4d` |
+| `cargo audit` / `cargo deny` | **not in CI** |
+| signed artifacts | **no** — checksums detect corruption, not tampering |
 
-This is configuration rather than engineering. But until it is done, "production ready"
-is not a claim that can be made about something nobody can install.
+The last three are the remaining distribution gaps, and none is configuration: one needs a
+crates.io token, one needs a vulnerability feed wired into CI, and one needs a signing identity.
+
+**On the publish order:** `cargo publish -p sakur4d` fails with `no matching package named
+'sakur4-core' found` until `sakur4-core` is published, because the dependency is by version.
+`docs/RELEASING.md` states the order, and `ci.yml` fails if the README stops documenting it. The
+failure it prevents — `sakur4d` consumed before its dependency exists — cannot be undone.
+
+**This section previously said the opposite of every line above.** It reported no remote, no
+repository, an unpushed tag, and `Cargo.toml` holding "a placeholder" — while the same table named
+the real URL, three lines after claiming the repository did not exist. It was written when all of
+that was true and not revisited when it stopped being.
+
 
 ## What is *not* established
 
@@ -270,6 +280,12 @@ node docs/verification/store-purge.mjs --db PATH --archive --dry-run --session N
 
 # Is the repository URL real everywhere it appears?
 node docs/verification/repo-url.mjs
+
+# Do the README's documented tool arguments actually exist on the tools?
+node docs/verification/tool-args.mjs
+
+# Do the workflows' shell blocks parse? Two shipped with syntax errors only CI could see.
+node docs/verification/workflow-shell.mjs
 ```
 
 **`episodic_stream` is append-only by trigger**, so episodes cannot be deleted — that is FR-1 and
