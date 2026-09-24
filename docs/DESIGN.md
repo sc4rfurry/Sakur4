@@ -629,10 +629,42 @@ what follows is what is genuinely outstanding, each with its evidence.
   `Db::write` at the time it appears to — that the tool's answer is produced on a path that does not
   include the write, despite `commit_episode` ending in `.write(…).await?` at `fabric.rs:191`.
 
-  **That is where a fresh attempt should look**, and it is a smaller question than any asked so far:
-  instrument the tool handler entry and `Db::write` entry with a sequence number and see whether the
-  write is entered before the tool answers, in the batched case. Everything needed to answer it is
-  one temporary `tracing::info!` in two places — which is how the last real answer was found.
+  **The order was then measured, and it is the answer.** With a temporary probe at `call_tool`'s
+  entry, after it took the serialising lock, at its exit, and at `Db::write`'s entry:
+
+  ```text
+  +   0ms  call_tool ENTER  sakur4.status
+  +   0ms  call_tool ENTER  memory.commit_episode
+  +   0ms  call_tool LOCKED sakur4.status          <- the READ takes the lock first
+  +   2ms  call_tool EXIT   sakur4.status
+  +   2ms  call_tool LOCKED memory.commit_episode
+  +   2ms  Db::write ENTER                          <- the write has not even started
+  +   6ms  call_tool EXIT   memory.commit_episode
+  ```
+
+  **The status handler runs to completion, including its read, before the commit's transaction is
+  entered.** The write is four milliseconds in the future when the read returns zero — and there is
+  nothing wrong with either of them. `Db::write` is synchronous and correct; the read is correct; the
+  store is correct. **The requests are simply executed in an order the client did not ask for**, and
+  the serialising lock does not fix that because it orders handlers by whichever reaches it first,
+  which is not arrival order once `rmcp` has dispatched them concurrently.
+
+  **So the defect is one sentence after twelve rounds:** a client that pipelines a write and a read
+  gets them executed in an arbitrary order, because request dispatch is concurrent and nothing
+  restores the order the client sent. Every symptom in this entry follows from that — the read one
+  write behind, the reproducibility only when batching, `memory.recall` passing where `status` failed
+  (recall takes long enough to lose the race later), and the failure appearing in CI while passing
+  locally where the harness happened to sequence its calls.
+
+  **The fix is therefore in dispatch, and it is not a lock.** Ordering has to be imposed where
+  requests arrive — reading them in sequence and completing each before reading the next, or
+  otherwise making the service honour arrival order — rather than by synchronising handlers that have
+  already been started. Two locks were tried and neither could work for that reason.
+
+  **The probe was temporary and is removed**, along with a round-31 change that is no longer doing
+  work: `Db::write` still runs its transaction on the calling task rather than in `spawn_blocking`,
+  which the timings show is not what was wrong. It is left in place only because it is correct and
+  tested; the ordering fix will not depend on it.
 
   **The loose end from two rounds ago now has a shape.** Serialising MCP dispatch should have ordered
   the two handlers and did not, which fits an acknowledgement produced outside the handler's own
