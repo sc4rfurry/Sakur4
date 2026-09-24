@@ -252,8 +252,29 @@ Then, against a real repository:
 ```bash
 sakur4d index .                  # build the code graph (incremental; cheap to re-run)
 sakur4d repo-map --budget 1500   # structural outline fitted to a token budget
-sakur4d impact src::auth::validate   # every call site that depends on it
 sakur4d doctor                   # what backend and cache capabilities were detected
+```
+
+**To query a symbol, get its real name first.** Qualified names carry their whole path, so they
+look nothing like a file path:
+
+```bash
+sakur4d repo-map --budget 600 --names          # qualified names instead of signatures
+sakur4d impact crates::sakur4-core::src::engine::Engine::open
+```
+
+That example is the name of a function in *this* repository, so it works if you run these from a
+checkout. Against your own project the names will be yours — `repo-map --names` is how you find
+them, and it exists for exactly this reason: `impact` and `query_symbol` take qualified names while
+the default map shows signatures, so without it there is no way to learn what to pass them.
+
+A name that does not exist is an error rather than an empty result, deliberately — an empty answer
+would read as "nothing depends on this", which is a much worse thing to be told wrongly:
+
+```console
+$ sakur4d impact src::auth::validate
+Error: not found: symbol src::auth::validate is not in the Symbolic Ledger;
+       index the project first (`sakur4d index`) or check the qualified name
 ```
 
 ---

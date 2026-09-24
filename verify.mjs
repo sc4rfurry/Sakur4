@@ -41,7 +41,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -276,6 +276,19 @@ function available(command, args = ["--version"]) {
  * is worse than not offering one.
  *
  * A path that is not there now yields `null`, which the header reports.
+ *
+ * # The newest build wins, not the release one
+ *
+ * The search used to be `release`, then `debug`, then `~/.cargo/bin` by precedence — which meant a
+ * *stale* release binary outranked a fresh debug one. On this machine that was not hypothetical:
+ * `target/release/sakur4d` was six days old and did not contain `gen-key`, while
+ * `target/debug/sakur4d` was a day old and did. Every local check that spawns a daemon was
+ * therefore exercising code from before the last several commits, and the report it produced was
+ * about a build nobody had reason to trust.
+ *
+ * Precedence is the wrong question — age is. The newest of the candidates is the one that most
+ * likely matches the working tree, and `daemonStaleness()` says so when even that is older than
+ * the sources it should have been built from.
  */
 function daemonBinary() {
   if (process.env.SAKUR4_BIN) {
@@ -286,7 +299,43 @@ function daemonBinary() {
     join(ROOT, "target", "debug", EXE),
     join(process.env.USERPROFILE ?? process.env.HOME ?? "", ".cargo", "bin", EXE),
   ];
-  return candidates.find(existsSync) ?? null;
+  const present = candidates.filter(existsSync);
+  if (present.length === 0) return null;
+  // Newest first. `statSync().mtimeMs` rather than trusting the build directory's name.
+  return present
+    .map((path) => ({ path, mtime: statSync(path).mtimeMs }))
+    .sort((a, b) => b.mtime - a.mtime)[0].path;
+}
+
+/**
+ * How much older the daemon is than the sources, in milliseconds; `0` when it is current.
+ *
+ * A daemon older than the code it was built from means the checks that spawn it are reporting on a
+ * build that predates the commits under test — which is exactly what happened here, silently, for
+ * several rounds: a six-day-old `target/release` outranked a one-day-old `target/debug`, and every
+ * daemon-spawning check ran against the older one.
+ */
+function daemonStaleness(binary) {
+  if (!binary) return 0;
+  let newest = 0;
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "target" && entry.name !== ".git") walk(full);
+      } else if (entry.name.endsWith(".rs") || entry.name.endsWith(".toml")) {
+        newest = Math.max(newest, statSync(full).mtimeMs);
+      }
+    }
+  };
+  walk(join(ROOT, "crates"));
+  return Math.max(0, newest - statSync(binary).mtimeMs);
 }
 
 /**
@@ -1332,6 +1381,17 @@ async function main() {
   process.stdout.write(`  root       ${ROOT}\n`);
   const binary = daemonBinary();
   process.stdout.write(`  daemon     ${binary ?? "NOT BUILT — the hermes, bench and harness groups need one"}\n`);
+  // Named before anything runs, because a stale binary makes every daemon-spawning check a report
+  // about code that is not the code under test.
+  const staleness = daemonStaleness(binary);
+  if (staleness > 60_000) {
+    const days = (staleness / 86_400_000).toFixed(1);
+    process.stdout.write(
+      `  \x1b[33mstale\x1b[0m      the daemon is ${days} day(s) older than the newest source;\n` +
+        `             the checks that spawn it are not testing this tree. Rebuild with\n` +
+        `             \`cargo build -p sakur4d\`.\n`,
+    );
+  }
   process.stdout.write(`  upstream   ${UPSTREAM ?? "not configured (live checks will skip)"}\n`);
   if (ONLY.length) process.stdout.write(`  only       ${ONLY.join(", ")}\n`);
   // # Say this once, at the top, rather than three times at the bottom
