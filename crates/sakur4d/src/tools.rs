@@ -681,7 +681,28 @@ fn to_error_kind(e: sakur4_core::error::Error) -> ErrorData {
     to_error(e)
 }
 
-/// Assemble the prompt for a session from the Fabric, the way a harness would.
+/// Assemble the prompt for a session from the Fabric, **the way a harness would** — which is not the
+/// whole request.
+///
+/// # What this is, and what it deliberately leaves out
+///
+/// Every caller is either a diagnostic or a measurement:
+///
+///   * `context.receipt` — shows where the context budget went;
+///   * `context.plan_eviction` — **measures pressure to decide what to evict**.
+///
+/// Neither is the path a real request takes. Sakur4 never assembles the prompt a model receives: the
+/// harness does, and the reverse proxy rewrites what the harness already built. So this is the part of
+/// the request Sakur4 can see, and the model's own tool output — a repo map it asked for, the harness's
+/// tool schemas, a fold's summary — is not in it.
+///
+/// **That is why `with_repo_map`, `with_tool_schemas` and `with_folds` are unpopulated here, and
+/// populating them would be wrong rather than an improvement.** `plan_eviction` evicts against this
+/// value: filling in a repo map would make the engine free up tokens for content the client was never
+/// going to send, evicting sooner for a request that does not exist.
+///
+/// `docs/DESIGN.md` lists the slots as a gap. The correction to that entry is recorded there: the work
+/// is **separating prompt assembly from pressure accounting**, not calling three more builders.
 async fn assemble_parts(
     engine: &Engine,
     session: &str,
