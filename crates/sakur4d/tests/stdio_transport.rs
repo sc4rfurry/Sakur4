@@ -174,6 +174,69 @@ fn sakur4d_binary() -> PathBuf {
     candidate
 }
 
+/// Write every frame, **close stdin**, then collect every reply.
+///
+/// # Why this is a separate helper rather than a mode of `StdioClient`
+///
+/// `StdioClient` sends one request and awaits its answer, which is the right way for a client to behave
+/// and the reason the suite never exercised this path. A batch writes everything first and reads
+/// afterwards, so end-of-file on stdin arrives while responses are still being produced — and that is
+/// where a transport can drop or truncate the last reply without any request-and-await test noticing.
+///
+/// Returns every parsed frame that carried an `id`, in arrival order.
+async fn batched_session(frames: &[Value]) -> Vec<Value> {
+    let exe = sakur4d_binary();
+    let mut child = Command::new(&exe)
+        .args([
+            "--db",
+            ":memory:",
+            "--backend",
+            "none",
+            "serve",
+            "--transport",
+            "stdio",
+            "--no-dream",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        for frame in frames {
+            stdin.write_all(format!("{frame}\n").as_bytes()).await.expect("write frame");
+        }
+        stdin.flush().await.expect("flush");
+        // Dropped here: closing the pipe is what ends input, and a transport must still finish the
+        // responses it has already started.
+    }
+    let mut lines = BufReader::new(child.stdout.take().expect("stdout")).lines();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut out = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remaining, lines.next_line()).await {
+            Ok(Ok(Some(line))) => {
+                if let Ok(parsed) = serde_json::from_str::<Value>(line.trim())
+                    && parsed.get("id").is_some()
+                {
+                    out.push(parsed);
+                }
+            }
+            // End of stream, a read error, or the deadline: all three end collection.
+            _ => break,
+        }
+    }
+    let _ = child.start_kill();
+    let _ = child.wait().await;
+    out
+}
+
 #[tokio::test]
 async fn stdio_handshake_and_tool_catalog() {
     let mut client = StdioClient::spawn().await;
@@ -208,6 +271,50 @@ async fn stdio_handshake_and_tool_catalog() {
     ] {
         assert!(names.contains(&expected.to_string()), "missing {expected}");
     }
+
+    // # And the catalog survives being asked for in a batch, with stdin closed
+    //
+    // The test above sends `tools/list` and awaits it, which never exercises the path where a client
+    // writes several frames, closes stdin, and reads afterwards. **That path is the one a replacement
+    // transport broke, and this suite would not have noticed.**
+    //
+    // Measured on a pump-based stdio transport tried for the ordering defect: `tools/list` is a *large*
+    // response — seventeen tools with their schemas — and with stdin at end-of-file a transport that
+    // shuts its read side on EOF cut the write short. The same transport answered `sakur4.status` and a
+    // 25-request batch correctly, so every symptom pointed at ordering while the actual damage was a
+    // truncated reply. The batch is what exposes it; a request-and-await never will.
+    //
+    // The assertion is deliberately about the *content* rather than the reply count: a truncated
+    // response is still a response, and counting lines would call it a pass.
+    let batched = batched_session(&[
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize",
+               "params":{"protocolVersion":"2025-11-25","capabilities":{},
+                         "clientInfo":{"name":"batch-catalog","version":"1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized","params":{}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}),
+    ])
+    .await;
+    let catalog = batched
+        .iter()
+        .find(|frame| frame.get("id").and_then(Value::as_u64) == Some(2))
+        .unwrap_or_else(|| panic!("no reply to `tools/list` in a closed-stdin batch: {batched:?}"));
+    let batched_names: Vec<String> = catalog["result"]["tools"]
+        .as_array()
+        .map(|tools| {
+            tools.iter().map(|t| t["name"].as_str().unwrap_or_default().to_string()).collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        batched_names.len(),
+        17,
+        "a batch with stdin closed must still deliver the whole catalog, not a truncated one — got \
+         {} of 17: {batched_names:?}",
+        batched_names.len()
+    );
+    assert!(
+        batched_names.contains(&"context.plan_eviction".to_string()),
+        "and the last tool must survive, not just the first few: {batched_names:?}"
+    );
 
     // stdio is the transport that has no port and no restarts: if a tool whose
     // whole purpose is statelessness works here, the server is genuinely usable

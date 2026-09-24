@@ -1063,6 +1063,45 @@ what follows is what is genuinely outstanding, each with its evidence.
   has ever been shown to deliver a single response end to end. The relay test proves the two-channel shape
   in isolation; **nothing proves the pump in front of it**, and that is the smallest unproven thing.
 
+  **A twelfth attempt proved the pump, and found the constraint that had been missing all along.**
+
+  The pump was proved first, in isolation, with no gate attached —
+  `a_pump_in_front_of_two_channels_delivers_one_response`, which passes and is kept. Then the same shell
+  was put in the real daemon with **nothing held back**, only to measure it:
+
+  ```text
+  replies 25/25   statuses 12/12   WRONG 0, 3, 2 across three runs
+  ```
+
+  **25 replies of 25** — the control that says the shell is sound — and the wrongness is exactly the
+  disclosed defect, out of order and never omitted. That is the first time any attempt has reached this
+  point with an intact daemon.
+
+  **And it was still reverted, because it truncated large responses.**
+
+  ```text
+  initialize + notifications/initialized + tools/list   ->  replies 1        (id 2 missing)
+  initialize + notifications/initialized + sakur4.status ->  replies 1,2
+  ```
+
+  The difference is size: `tools/list` returns seventeen tools with their schemas, `sakur4.status` returns
+  a few hundred bytes. With stdin at end-of-file, which is how every batch client terminates, the pump
+  calls `shutdown()` on the server's read side — and **the existing `stdio()` transport evidently drains
+  in-flight responses at EOF where this does not**, so the large write is cut short.
+
+  **That is the constraint eleven attempts were missing, and it is not about ordering at all.** Any
+  replacement transport must preserve `stdio()`'s end-of-file behaviour: EOF ends *input*, it does not
+  abandon output already being produced. A gate layered on a transport that loses the last response would
+  fix ordering by breaking delivery.
+
+  Reverted, with the control restored — `replies 1,2 · tools 17`.
+
+  **What the thirteenth attempt should do, in order:**
+
+  1. Prove the shell answers 25 of 25 **and** that `tools/list` returns seventeen tools, with nothing held
+     back. Both, because the first is what the twelfth attempt measured and the second is what it broke.
+  2. Only then add the gate, re-running both.
+
   **The protocol says the reordering is legal, which reframes the whole entry.** From the JSON-RPC
   2.0 specification:
 

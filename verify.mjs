@@ -1478,7 +1478,6 @@ function harnessChecks() {
       record(
         "harness",
         "install path against the published release",
-    "Windows install path against the published release",
         SKIP,
         "pass --check-release to enable (it downloads from GitHub)",
       );
