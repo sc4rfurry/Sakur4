@@ -205,3 +205,83 @@ fn spawn_consolidator(
     tracing::debug!(quiet_secs, "dream cycle started");
     Some((handle, tx))
 }
+
+#[cfg(test)]
+mod transport_tests {
+    use super::*;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    /// # A round trip over a `duplex`, before anything else is layered on it
+    ///
+    /// Three attempts at serialising the stdio transport have now failed, and the third broke the
+    /// daemon outright. The pattern in all three was the same: build the whole mechanism, wire it
+    /// into the live path, and discover that *the plumbing* was wrong from a test that could not say
+    /// which part.
+    ///
+    /// So this is the smallest thing that can be checked: does a server served over a `duplex` answer
+    /// a request written to the other end? No turnstile, no pump, no ordering — one request, one
+    /// reply.
+    ///
+    /// It is also the check that would have caught the first two attempts. Both gave the server a
+    /// read/write pair derived from the same duplex while something else read the peer end, which puts
+    /// two readers on one buffer; the server then answered nothing. A single message cannot be
+    /// delivered to the wrong reader and still produce a correct reply, so this fails for that — which
+    /// is a far better diagnostic than "the daemon hangs".
+    #[tokio::test]
+    async fn a_server_over_a_duplex_answers_one_request() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let cfg = sakur4_core::EngineConfig {
+            db_path: dir.path().join("duplex.db").to_string_lossy().to_string(),
+            backend: sakur4_core::llama::BackendSpec::Embedded.to_string(),
+            ..Default::default()
+        };
+        let engine = sakur4_core::Engine::open(cfg).await.expect("engine opens");
+        let server = crate::tools::Sakur4Server::new(engine);
+
+        // rmcp splits a combined `AsyncRead + AsyncWrite` itself, so the server takes one end whole.
+        let (server_io, client_io) = tokio::io::duplex(64 * 1024);
+        let serving = tokio::spawn(async move {
+            let running = rmcp::serve_server(server, server_io).await.expect("server starts");
+            let _ = running.waiting().await;
+        });
+
+        let (client_read, mut client_write) = tokio::io::split(client_io);
+        let mut lines = tokio::io::BufReader::new(client_read).lines();
+
+        // The 2026-07-28 revision is stateless: every request carries its protocol version and client
+        // capabilities in `_meta`, with no handshake first. Omitting it is answered with
+        // `-32602 request _meta is missing or has malformed required fields`, which is what this test
+        // did on its first run — correctly, and with a message that named the problem.
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "sakur4.status",
+                "arguments": {},
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {}
+                }
+            }
+        });
+        client_write.write_all(format!("{request}\n").as_bytes()).await.expect("write the request");
+        client_write.flush().await.expect("flush");
+
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(10), lines.next_line())
+            .await
+            .expect("an answer within ten seconds — the three failed attempts hung here")
+            .expect("a line")
+            .expect("not end-of-stream");
+
+        let parsed: serde_json::Value = serde_json::from_str(&reply).expect("valid JSON");
+        assert_eq!(parsed["id"], 1, "the reply must answer the request: {reply}");
+        assert!(parsed["result"].is_object(), "and carry a result rather than an error: {reply}");
+        assert_eq!(
+            parsed["result"]["structuredContent"]["protocol_version"], "2026-07-28",
+            "and be this server's answer: {reply}"
+        );
+
+        serving.abort();
+    }
+}
