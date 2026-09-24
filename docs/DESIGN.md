@@ -433,10 +433,31 @@ what follows is what is genuinely outstanding, each with its evidence.
   differs is the daemon: `sakur4d serve` reaches the store through code the library tests do not,
   and the store it reports on is not the store the tools write to.
 
+  **Narrowed further: the daemon reads fine, and `sakur4.status` alone is wrong.** Three read paths
+  were compared against the same session, after committing one episode to a file store:
+
+  | path | result |
+  |---|---|
+  | `sakur4d doctor` (CLI, same binary, same `--db`) | `episodes 1` |
+  | MCP `memory.recall` | finds the episode |
+  | MCP `memory.staleness` | reads its tables |
+  | **MCP `sakur4.status`** | **`episodes 0`** |
+
+  So the store is reachable, the connection is current, and the fault is in what `sakur4.status`
+  reads — not in the daemon as a whole, which is where the previous entry pointed. `memory.recall`
+  reaches the store through `engine.memory()`, and `sakur4.status` through `engine.status()` →
+  `self.db.stats()`. Both are the same `Db`, cloned from the one `Engine::open` creates, so the
+  difference is not the store.
+
+  **What is left to check**, and the reason this is not fixed: whether `sakur4.status` reaches a
+  *different* engine than the tools do, and what `EngineStatus.db` actually holds at the point the
+  handler maps it. Both are one debug print away, and neither is a guess worth shipping blind.
+
   Ruled out along the way, so the next attempt need not repeat it: `--db` versus `SAKUR4_DB` (both
-  reproduce), a missing `folds` table (present, with the row), the queries themselves (all three
-  answer correctly by hand), and read-after-write within one `Arc<Mutex<Connection>>` (the library
-  tests rely on it and pass).
+  reproduce), a missing `folds` table (present, with the row), the three scalar queries (all answer
+  correctly by hand), read-after-write within one `Arc<Mutex<Connection>>` (the library tests rely on
+  it and pass), the daemon's store path (`build_config` copies `cli.db`, resolved once in `main.rs`,
+  and nothing reassigns it), and the daemon's read path generally (`doctor` sees the row).
 
   **This is also now breaking a check.** `verify.mjs`'s `context engine (FR-16)` fails locally with
   `2 contract(s) failed: something was evicted, compression_count advanced`, which is the same
