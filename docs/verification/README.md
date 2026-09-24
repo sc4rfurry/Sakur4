@@ -269,6 +269,9 @@ node docs/verification/doc-commands.mjs --bin $BIN
 # The install path, against the published release: fetch, verify, refuse a mismatch, extract, place.
 # Needs `--upstream` in `verify.mjs` because it reaches the network.
 sh docs/verification/install-path.sh
+
+# Does every dependency a crate declares appear in its source?
+node docs/verification/unused-deps.mjs
 ```
 ### Diagnostics, for when something looks wrong
 

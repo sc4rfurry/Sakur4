@@ -119,6 +119,7 @@ const CATALOG = {
     "documented environment variables exist",
     "documented catalogue size matches",
     "documented commands exist",
+    "no unused dependencies",
   ],
   encryption: [
     "encryption at rest (FR-20)",
@@ -1237,8 +1238,32 @@ function harnessChecks() {
       record(
         "rust",
         "documented commands exist",
+    "no unused dependencies",
         ok ? PASS : FAIL,
         ok ? (r.output.match(/(\d+) documented command/) ?? ["", "?"])[1] + " commands" : lastLines(r.output, 6),
+      );
+    }
+  }
+
+  // # Every declared dependency is used
+  //
+  // `sakur4d` declared `tower` and `tower-http` — with features — and referenced neither anywhere;
+  // `http` was there too, used only through `axum::http`. All three compiled, shipped in every release
+  // archive, and pinned version ranges the project did not use. Nothing caught it because nothing
+  // looked: the audit had never been run, and it was noticed only by updating `tower-http` to a new
+  // major version and finding that no file mentioned it.
+  if (wanted("unused-deps", "rust")) {
+    const script = join(ROOT, "docs", "verification", "unused-deps.mjs");
+    if (!existsSync(script)) {
+      record("rust", "no unused dependencies", SKIP, "the check is missing");
+    } else {
+      const r = run(process.execPath, [script]);
+      const ok = r.ok && /declared dependencies are referenced/.test(r.output);
+      record(
+        "rust",
+        "no unused dependencies",
+        ok ? PASS : FAIL,
+        ok ? "every crate's manifest matches its source" : lastLines(r.output, 8),
       );
     }
   }
