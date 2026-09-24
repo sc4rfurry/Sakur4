@@ -453,6 +453,18 @@ what follows is what is genuinely outstanding, each with its evidence.
   *different* engine than the tools do, and what `EngineStatus.db` actually holds at the point the
   handler maps it. Both are one debug print away, and neither is a guess worth shipping blind.
 
+  **The in-process path is clean, which is itself the finding.** `status_counts_what_was_written_to_
+  a_file_store` in `crates/sakur4d/tests/gateway.rs` runs the same sequence — a file store, the real
+  `Sakur4Server`, the real HTTP transport, the SDK's own client — and reports the correct count. It
+  was written to reproduce the defect and does not, so it now marks the boundary of the search: the
+  store, the `Db` clone, the tool router and the resolved path are all sound, and whatever the
+  binary does differently is outside what the test harness reaches. The next attempt starts from
+  "the in-process path is clean" instead of re-deriving it.
+
+  Also ruled out since: both backends (`none` and `embedded` reproduce identically), and a second
+  `--db` declaration shadowing the resolved one — `Cli` has exactly one `db` field, which is the bug
+  fixed earlier when a duplicate did exactly that.
+
   Ruled out along the way, so the next attempt need not repeat it: `--db` versus `SAKUR4_DB` (both
   reproduce), a missing `folds` table (present, with the row), the three scalar queries (all answer
   correctly by hand), read-after-write within one `Arc<Mutex<Connection>>` (the library tests rely on

@@ -468,3 +468,95 @@ async fn symbol_and_impact_tools_answer_over_the_wire() {
 
     client.cancel().await.ok();
 }
+
+#[tokio::test]
+async fn status_counts_what_was_written_to_a_file_store() {
+    // # This test passes, and that is the finding
+    //
+    // It was written to reproduce a defect seen from outside the process against the *binary*:
+    //
+    //     sakur4d --db X --backend none serve --transport stdio
+    //       memory.commit_episode {content: "hello"}  -> ep_01a0d19778e0743283d73f2700c871eb
+    //       sakur4.status {}                          -> episodes 0
+    //     sqlite> SELECT COUNT(*) FROM episodic_stream  -> 1
+    //
+    // The same sequence through this test — a file store, the real `Sakur4Server`, the real HTTP
+    // transport, the SDK's own client — reports the correct count. So the store, the `Db` clone, the
+    // tool router and the file path are all sound, and whatever the binary does differently is
+    // outside this harness.
+    //
+    // It is kept, rather than deleted as a non-reproduction, because it is the boundary of the
+    // search: it says the fault is in the daemon's own startup rather than in anything these tests
+    // can reach. The next attempt can start from "the in-process path is clean" instead of
+    // re-deriving it.
+    //
+    // Every other gateway test opens `":memory:"`, against which the counts are also correct —
+    // which is why none of them could have caught this.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db_path = dir.path().join("counts.db");
+
+    let cfg = EngineConfig {
+        db_path: db_path.to_string_lossy().to_string(),
+        backend: BackendSpec::Embedded.to_string(),
+        ..Default::default()
+    };
+    let engine = Arc::new(Engine::open(cfg).await.expect("engine opens"));
+    let server = sakur4d::tools::Sakur4Server::new((*engine).clone());
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let service: rmcp::transport::streamable_http_server::StreamableHttpService<
+        sakur4d::tools::Sakur4Server,
+        rmcp::transport::streamable_http_server::session::local::LocalSessionManager,
+    > = rmcp::transport::streamable_http_server::StreamableHttpService::new(
+        {
+            let server = server.clone();
+            move || Ok(server.clone())
+        },
+        Arc::new(
+            rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
+        ),
+        Default::default(),
+    );
+    let app = axum::Router::new().fallback_service(service);
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    let url = format!("http://{addr}");
+    let client = connect(&url).await;
+
+    // Write one episode through the tool surface, then ask status for the count.
+    call(
+        &client,
+        "memory.commit_episode",
+        serde_json::json!({
+            "session_id": "counts",
+            "content": "the validator lives in src/auth.rs",
+            "role": "user"
+        }),
+    )
+    .await;
+
+    let status = call(&client, "sakur4.status", serde_json::json!({})).await;
+
+    // The store itself, read directly, so the assertion has an independent witness.
+    let direct: i64 = engine
+        .db()
+        .with(|c| Ok(c.query_row("SELECT COUNT(*) FROM episodic_stream", [], |r| r.get(0))?))
+        .await
+        .expect("count episodes");
+
+    assert_eq!(direct, 1, "the episode was not written to the store at all");
+    assert_eq!(
+        status["episodes"].as_i64(),
+        Some(direct),
+        "sakur4.status reports {} episodes for a store holding {} — the counts it reports do not \
+         come from the store the tools write to. Full status: {}",
+        status["episodes"],
+        direct,
+        status
+    );
+
+    client.cancel().await.ok();
+    handle.abort();
+}
