@@ -620,8 +620,40 @@ fn slot_or_default(slot: Option<String>) -> String {
     slot.unwrap_or_else(|| "0".to_string())
 }
 
+/// Every engine error becomes an MCP error, and a backend limitation says so.
+///
+/// # `is_backend_unavailable` existed for this and was never called
+///
+/// `sakur4_core::Error` has a variant for "the llama.cpp server cannot do this", and a predicate —
+/// `is_backend_unavailable` — whose doc comment says it is the thing "callers must degrade around
+/// rather than fail on (NFR-7)". Nothing called it, and every error reached the wire through this
+/// function as `-32603 internal_error`, so the distinction existed in the type system and nowhere
+/// else.
+///
+/// That matters for a model. `internal_error` for a server that does not implement `?action=save`
+/// reads as "Sakur4 is broken"; the honest reading is "this backend cannot do that, carry on without
+/// it", and the difference decides whether an agent retries, gives up, or works around. The
+/// message now says which, because a caller that only sees prose still has to act on it.
+///
+/// It stays `INTERNAL_ERROR` rather than a custom code deliberately: harnesses vary in how they
+/// treat codes they do not know, and the failure is genuine — it is the *description* that was
+/// wrong, not the code.
 fn to_error(e: impl std::fmt::Display) -> ErrorData {
     ErrorData::internal_error(e.to_string(), None)
+}
+
+/// The same, for an error whose kind is known.
+fn to_error_kind(e: sakur4_core::error::Error) -> ErrorData {
+    if e.is_backend_unavailable() {
+        return ErrorData::internal_error(
+            format!(
+                "{e}. The inference backend cannot do this; this is a limitation to degrade around \
+                 rather than a Sakur4 failure, and the operation falls back to its unaligned path."
+            ),
+            None,
+        );
+    }
+    to_error(e)
 }
 
 /// Assemble the prompt for a session from the Fabric, the way a harness would.
@@ -1085,7 +1117,14 @@ impl Sakur4Server {
     ) -> Result<Json<SnapshotOutput>, ErrorData> {
         let session = session_or_default(input.session_id);
         let slot = slot_or_default(input.slot_id);
-        let out = self.engine.coherence().snapshot(&session, &slot).await.map_err(to_error)?;
+        let out = self
+            .engine
+            .coherence()
+            .snapshot(&session, &slot)
+            .await
+            // A backend that cannot save says so, rather than reporting an internal failure — this
+            // is the operation whose limitation NFR-7 is about. See `to_error_kind`.
+            .map_err(to_error_kind)?;
         Ok(Json(SnapshotOutput {
             snapshot_id: out.snapshot_id,
             file_path: out.file_path,
