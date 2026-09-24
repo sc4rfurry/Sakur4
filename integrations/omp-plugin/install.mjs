@@ -172,7 +172,7 @@ if (!flag("skill-only")) {
   const pkgPath = join(pluginsRoot, "package.json");
   const pkg = readJson(pkgPath, { name: "omp-plugins", private: true, dependencies: {} });
   pkg.dependencies ??= {};
-  pkg.dependencies[PLUGIN_NAME] = "0.1.0";
+  pkg.dependencies[PLUGIN_NAME] = "0.2.0";
   writeJson(pkgPath, pkg);
   info(`declared dependency in ${pkgPath}`);
 
@@ -180,7 +180,7 @@ if (!flag("skill-only")) {
   const lock = readJson(lockPath, { plugins: {}, settings: {} });
   lock.plugins ??= {};
   lock.plugins[PLUGIN_NAME] = lock.plugins[PLUGIN_NAME] ?? {
-    version: "0.1.0",
+    version: "0.2.0",
     enabledFeatures: null,
     enabled: true,
   };

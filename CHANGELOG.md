@@ -13,9 +13,44 @@ The Rust APIs in `sakur4-core` and `sakur4d` are published so the daemon has a
 home on crates.io rather than as a stability promise, and may change within a
 `0.x` minor release.
 
-## [Unreleased]
+## [0.2.0] - 2026-09-24
+
+**A minor bump rather than a patch**, per this file's own policy: the MCP tool surface gained an
+argument (`memory.commit_episode`'s `corrects`), and the store gained a column and two migrations
+(`episodic_stream.project_id`, `dependency_graph_edge.target_hash`). Adding to the surface is a minor
+change; nothing was removed or renamed.
+
+**If you are on 0.1.0 and it works for you, the reason to move is that 0.2.0 fixes four defects that
+made advertised behaviour unreachable**, each described in `docs/DESIGN.md`:
+
+* **A subtraction in a log message was panicking the daemon.** `Escalation::Proposed` formatted
+  `tokens_before - tokens_after`, which underflows when a `Masked` stub is longer than the short episode
+  it replaces — the case the ladder deliberately allows. The panic landed on an async worker, so
+  `context.plan_eviction` never answered; the Hermes engine read the 20-second timeout as "Sakur4
+  unreachable" and **left the context uncompacted on every long session**. `context engine (FR-16)` had
+  been failing on this for many releases.
+* **All four prompt-building paths bypassed FR-4's anchor budget check.** They assembled the anchor block
+  with a `join`, so `render_anchor_block` — the only place that refuses when pinned anchors cannot fit,
+  and the only place that orders them — had no production caller.
+* **Projects were not isolated.** `episodic_stream` was the one table with no `project_id`; a session in
+  one project could be handed another's transcript.
+* **A backend limitation reached the wire as an internal failure.** NFR-7's degrade path existed as
+  `Error::is_backend_unavailable` and was never called, so a server without `?action=save` reported
+  `internal_error` — which reads as "Sakur4 is broken" rather than "this backend cannot do that".
+
+**One thing 0.2.0 does not fix** is documented in [Limitations](https://github.com/sc4rfurry/Sakur4/wiki/Limitations)
+and in `docs/DESIGN.md`: a **pipelined batch is dispatched in an arbitrary order**, so a read can be
+served before a write it was sent after. Await each answer. Eight fixes were attempted and reverted.
 
 ### Added
+
+**Corrections can be recorded (`memory.commit_episode`'s `corrects`)**
+
+- Naming an episode in `corrects` marks it `superseded_by` the new turn and flags it **droppable**, which
+  makes it a safe eviction candidate rather than something the engine keeps for lack of a reason to let
+  it go. `MemoryFabric::mark_superseded` had no caller before this, so the eviction engine's −3.0 rule
+  for superseded episodes could never fire.
+- An id that matches nothing is a `NotFound` error, not a silent success.
 
 **FR-11's caller staleness annotation (schema v4)**
 
@@ -295,5 +330,6 @@ The first release. Everything below is new.
 - **`cargo deny` and `cargo audit` are not wired into CI.** Review `Cargo.lock`
   changes in a pull request.
 
-[Unreleased]: https://github.com/sc4rfurry/Sakur4/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/sc4rfurry/Sakur4/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/sc4rfurry/Sakur4/releases/tag/v0.2.0
 [0.1.0]: https://github.com/sc4rfurry/Sakur4/releases/tag/v0.1.0
