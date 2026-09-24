@@ -47,9 +47,14 @@ function filesUnder(dir, filter, out = []) {
 
 const rustSources = filesUnder(join(ROOT, "crates"), (n) => n.endsWith(".rs"));
 const sourceText = new Map(rustSources.map((p) => [p, readFileSync(p, "utf8")]));
-// Everything that could call something: Rust, the plugins, the skill, and the docs' examples.
+// # Only the *other* languages, not Rust again
+//
+// This used to begin with every Rust source, so the per-file pass below — which is careful about
+// declarations, comments and fields — was undone by a blunt second pass over the same text. The doc
+// comment in `tools.rs` that *mentions* `open_folds` in backticks matched a bare `open_folds(`, and
+// the anchor case was filtered out of its own report. A filter that re-reads the corpus with a weaker
+// rule than the pass that produced the candidates is worse than no filter.
 const elsewhere =
-  rustSources.map((p) => sourceText.get(p)).join("\n") +
   filesUnder(join(ROOT, "integrations"), (n) => n.endsWith(".py") || n.endsWith(".ts"))
     .map((p) => readFileSync(p, "utf8"))
     .join("\n") +
@@ -78,24 +83,50 @@ for (const path of rustSources) {
     if (inTraitImpl) continue;
     if (["new", "default", "fmt", "from", "drop"].includes(name)) continue;
 
-    // # A call site looks like `.name(` or `::name(`, not `name(`
+    // # Two calling conventions, and the first version only handled one
     //
-    // The first version accepted a bare `name(` preceded by any non-word character, so a **struct
-    // field** counted as a call: `pub open_folds: i64` in the status output, and a doc comment
-    // mentioning the name in backticks, both read as callers. It reported "0 public functions with no
-    // caller" while `EvictionEngine::open_folds` — the only code that can list a session's open
-    // folds — had none. A detector that counts a field name as a use is the same failure as the
-    // dependency audit's, and it is the reason that audit is now checked against a known case before
-    // being believed.
-    const callRe = new RegExp(`(\\.|::)${name}\\s*\\(`, "g");
+    // A method is called `x.name(` or `Type::name(`. A **free function** is imported with `use` and
+    // then called bare: `snap_to_checkpoint(requested_cut, …)`. Requiring `.` or `::` therefore
+    // reported `snap_to_checkpoint` as having no caller while `cache/mod.rs` called it — a false
+    // positive, which is the failure mode that gets a list ignored.
+    //
+    // The earlier version made the opposite mistake: it accepted a bare `name(`, so the struct field
+    // `pub open_folds: i64` counted as a use and `open_folds` — genuinely uncalled — was missed.
+    //
+    // Handling both means accepting a bare call again, and excluding the two things that are not
+    // calls but do look like one: a **definition** (`fn name(`) and a **field** (`name:`). Comments
+    // are a residual source of false negatives, and that direction is deliberate — a list with a few
+    // extra entries gets read, while one that hides a real case does not get read at all.
+    const callRe = new RegExp(
+      `(\\.|::)${name}\\s*\\(|(^|[^A-Za-z0-9_.:])${name}\\s*\\(`,
+      "g",
+    );
+    // The declaration pattern has to be line-anchored at **both** ends. Without the trailing `$` it
+    // matched `pub open_folds:` inside a doc comment that merely *mentions* the field, so a comment
+    // cancelled a real call and the anchor case disappeared from the list entirely — the check
+    // silently becoming blind to the very thing it was built for.
+    const notACall = new RegExp(
+      `^\\s*(pub(\\([^)]*\\))?\\s+)?(async\\s+)?fn\\s+${name}\\s*[(<]|^\\s*(pub\\s+)?${name}\\s*:.*$`,
+      "m",
+    );
     let inSource = 0;
     let inTests = 0;
     for (const other of rustSources) {
-      const isOwnFile = other === path;
-      const occurrences = sourceText.get(other).match(callRe) ?? [];
-      if (!occurrences.length) continue;
-      // Subtract the definition itself where it lands in the same file.
-      const count = occurrences.length - (isOwnFile ? 1 : 0);
+      const body = sourceText.get(other);
+      // # Per line, because a declaration matches the call pattern
+      //
+      // `fn open_folds(` *is* `open_folds(`. Counting declarations separately and subtracting them
+      // made this miss its own anchor: `evict.rs` matched once as a call and once as a declaration,
+      // the subtraction produced zero, and `open_folds` — the function with no caller this was built
+      // to find — read as called. Deciding per line removes the arithmetic and the class of mistake
+      // with it. Two earlier versions of this predicate were wrong in opposite directions; that is
+      // why the known case is asserted rather than assumed.
+      let count = 0;
+      for (const line of body.split(/\r?\n/)) {
+        if (!callRe.test(line)) continue;
+        if (notACall.test(line)) continue;
+        count += 1;
+      }
       if (count <= 0) continue;
       if (isTest(other)) inTests += count;
       else inSource += count;
@@ -108,7 +139,7 @@ for (const path of rustSources) {
 
 // Docs and plugins count as callers too, so filter those out of the "no caller" bucket.
 const real = candidates.filter((c) => {
-  const re = new RegExp(`(\\.|::)${c.name}\\s*\\(`, "m");
+  const re = new RegExp(`(\\.|::)${c.name}\\s*\\(|(^|[^A-Za-z0-9_.:])${c.name}\\s*\\(`, "m");
   return !re.test(elsewhere);
 });
 

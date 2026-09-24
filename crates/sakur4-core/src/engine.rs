@@ -73,40 +73,36 @@ impl Default for EngineConfig {
 
 impl EngineConfig {
     /// Load from a TOML file, falling back to defaults for absent keys.
+    ///
+    /// # A library entry point, not something `sakur4d` uses
+    ///
+    /// The daemon takes its configuration from flags, and those flags carry `env = "SAKUR4_…"` in
+    /// their clap definitions, so the environment is read at the CLI boundary. This is here for a
+    /// program embedding `sakur4-core` that would rather read a file, which is why it is public and
+    /// why having no caller in this workspace is expected rather than a defect.
+    ///
+    /// Recorded because the scan that finds uncalled functions cannot tell this case from the four
+    /// real ones it has found — `open_folds`, `last_indexed`, `ImpactEntry.stale` and
+    /// `render_anchor_block`, each of which had a stated purpose and no code serving it. This one has
+    /// a stated purpose that is served the moment somebody outside this repository calls it.
     pub fn from_toml_path(path: &std::path::Path) -> Result<Self> {
         let raw = std::fs::read_to_string(path)?;
         Ok(toml::from_str(&raw)?)
     }
 
-    /// Apply environment overrides (`SAKUR4_*`), then CLI overrides.
-    pub fn with_env(mut self) -> Self {
-        if let Ok(v) = std::env::var("SAKUR4_DB")
-            && !v.trim().is_empty()
-        {
-            self.db_path = v;
-        }
-        if let Ok(v) = std::env::var("SAKUR4_BACKEND")
-            && !v.trim().is_empty()
-        {
-            self.backend = v;
-        }
-        if let Ok(v) = std::env::var("SAKUR4_PROJECT_ROOT")
-            && !v.trim().is_empty()
-        {
-            self.project_root = Some(v);
-        }
-        if let Ok(v) = std::env::var("SAKUR4_EMBED_URL")
-            && !v.trim().is_empty()
-        {
-            self.embed_url = Some(v);
-        }
-        if let Ok(v) = std::env::var("SAKUR4_EMBED_MODEL")
-            && !v.trim().is_empty()
-        {
-            self.embed_model = Some(v);
-        }
-        self
-    }
+    // # `with_env` was here, and was deleted
+    //
+    // It read `SAKUR4_DB`, `SAKUR4_BACKEND`, `SAKUR4_PROJECT_ROOT`, `SAKUR4_EMBED_URL` and
+    // `SAKUR4_EMBED_MODEL` — **the same five the CLI reads** — through a second implementation that
+    // nothing called. The live path is clap's `env = "SAKUR4_…"` on the argument definitions, so this
+    // was not a missing feature but a duplicate one, and the duplicate was the one that looked
+    // maintainable: it sat in the library beside `from_toml_path` with a doc comment describing an
+    // ordering ("environment overrides, then CLI overrides") that the real path implements in clap.
+    //
+    // Left in place it would have been worse than clutter. Anyone adding `SAKUR4_EVICTION_PROFILE`
+    // here — the obvious place, next to the other five — would have seen a green test suite and no
+    // behaviour change, because the function is never called. A second code path for the same
+    // concern is a trap whether or not it is reachable.
 
     /// Resolve the default project id for the configured root.
     pub fn resolved_project_id(&self) -> String {
