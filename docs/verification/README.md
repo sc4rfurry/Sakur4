@@ -265,6 +265,10 @@ node docs/verification/catalog-counts.mjs --bin $BIN
 
 # Does every command the docs tell a reader to run actually exist?
 node docs/verification/doc-commands.mjs --bin $BIN
+
+# The install path, against the published release: fetch, verify, refuse a mismatch, extract, place.
+# Needs `--upstream` in `verify.mjs` because it reaches the network.
+sh docs/verification/install-path.sh
 ```
 ### Diagnostics, for when something looks wrong
 

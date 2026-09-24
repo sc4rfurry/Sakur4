@@ -135,6 +135,7 @@ const CATALOG = {
     "integration tool names exist",
     "snapshot and restore",
     "usage accounting round trip",
+    "install path against the published release",
     "Hermes plugin",
   ],
 };
@@ -1307,6 +1308,38 @@ function harnessChecks() {
           ? "cold, growing, resent, and broken-prefix turns"
           : lastLines(r.output, 8),
       );
+    }
+  }
+
+  // # The install path, against the published release
+  //
+  // Reported unverified for many rounds because `install.sh` refuses Windows by design and this
+  // machine is Windows. What *can* run here is the part that does the work — fetch, verify, refuse
+  // a mismatch, extract, place — and that is identical on every platform but two variables. It
+  // reaches the network, so it is gated on `--upstream` like the other live checks, and it runs
+  // against the real release rather than a fixture.
+  if (wanted("install-path", "harness")) {
+    if (!UPSTREAM) {
+      record("harness", "install path against the published release", SKIP, "pass --upstream to enable");
+    } else {
+      const script = join(ROOT, "docs", "verification", "install-path.sh");
+      // Git for Windows ships a POSIX shell; so does every CI runner.
+      const shell = ["sh", "C:/Program Files/Git/bin/sh.exe", "/bin/sh"].find((candidate) => {
+        const probe = spawnSync(candidate, ["-c", "exit 0"], { encoding: "utf8" });
+        return !probe.error && probe.status === 0;
+      });
+      if (!existsSync(script) || !shell) {
+        record("harness", "install path against the published release", SKIP, "needs a POSIX shell");
+      } else {
+        const r = run(shell, [script], { timeout: 300_000 });
+        const ok = r.ok && /VERDICT: PASS/.test(r.output);
+        record(
+          "harness",
+          "install path against the published release",
+          ok ? PASS : FAIL,
+          ok ? "fetch, checksum, tamper detection, extract, place" : lastLines(r.output, 6),
+        );
+      }
     }
   }
 
