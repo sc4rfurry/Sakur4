@@ -43,6 +43,7 @@ pub const MIGRATIONS: &[Migration] = &[
     Migration { version: 1, name: "initial_memory_fabric", sql: V1 },
     Migration { version: 2, name: "receipt_records_its_context_window", sql: V2 },
     Migration { version: 3, name: "episodes_record_their_project", sql: V3 },
+    Migration { version: 4, name: "edges_record_their_target_hash", sql: V4 },
 ];
 
 /// V2 — the receipt keeps the context window it was measured against.
@@ -92,6 +93,29 @@ ALTER TABLE receipt ADD COLUMN context_window INTEGER NOT NULL DEFAULT 0;
 const V3: &str = r#"
 ALTER TABLE episodic_stream ADD COLUMN project_id TEXT;
 CREATE INDEX idx_episodic_project_seq ON episodic_stream(project_id, seq);
+"#;
+
+/// V4 — a dependency edge records the target signature it was written against.
+///
+/// # Why FR-11 needed a column rather than a computation
+///
+/// FR-11 asks that each caller be "annotated with whether that caller's own symbolic fact hash is
+/// currently stale relative to the target symbol's last-known signature". `ImpactEntry.stale`
+/// existed and could only ever be `false`, because the edge table recorded no target hash — there was
+/// nothing to compare a caller against. The field was kept so the report shape would not change when
+/// the column arrived, and `docs/DESIGN.md` listed it as a partial feature rather than letting the
+/// shape imply a working one.
+///
+/// Nullable, and `NULL` is meaningful: an edge written before this migration has no basis for a
+/// staleness verdict. Reporting such an edge as *fresh* would be the original defect — a confident
+/// `false` for something never checked — so a null target hash reads as "unknown", and the read path
+/// distinguishes it from "checked and unchanged".
+///
+/// Existing rows keep `NULL` rather than being backfilled from today's signature. Filling them in
+/// would assert that every edge is currently fresh, which is exactly the claim there is no evidence
+/// for.
+const V4: &str = r#"
+ALTER TABLE dependency_graph_edge ADD COLUMN target_hash TEXT;
 "#;
 
 const V1: &str = r#"

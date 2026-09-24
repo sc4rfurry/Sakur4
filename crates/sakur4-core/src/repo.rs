@@ -384,6 +384,10 @@ impl RepoCortex {
             // declare the same short name.
             short_names.entry(short).or_insert(f.fact_id.as_str());
         }
+        // Each fact's signature hash, so an edge can record what the caller saw. See the note at the
+        // `Calls` edge below.
+        let hash_by_fact: HashMap<&str, String> =
+            all_facts.iter().map(|f| (f.fact_id.as_str(), f.ast_hash.clone())).collect();
 
         let mut extra_edges = 0usize;
         for ex in &file_extracts {
@@ -399,11 +403,26 @@ impl RepoCortex {
                     continue;
                 }
                 extra_edges += 1;
-                all_edges.push(EdgeRow::new(
-                    &NodeRef::fact(src_id),
-                    &NodeRef::fact(dst_id),
-                    if ex.is_import { EdgeKind::Imports } else { EdgeKind::Calls },
-                ));
+                // # Record the caller's own hash, so FR-11 can tell whether it still holds
+                //
+                // The column is named `target_hash` and holds what the *source* — the caller — was
+                // when this edge was first observed. The read path compares it against the caller's
+                // hash today, and the two differ exactly when the caller has changed since the call
+                // site was last read.
+                //
+                // It records the caller rather than the target because the target's hash is already
+                // available from the target itself — storing it would restate something known,
+                // whereas the caller's *old* hash exists nowhere else. `insert_sql` keeps the first
+                // observation, so re-indexing the target cannot erase the drift by refreshing this.
+                let target_hash = hash_by_fact.get(src_id).cloned();
+                all_edges.push(
+                    EdgeRow::new(
+                        &NodeRef::fact(src_id),
+                        &NodeRef::fact(dst_id),
+                        if ex.is_import { EdgeKind::Imports } else { EdgeKind::Calls },
+                    )
+                    .with_target_hash_opt(target_hash),
+                );
             }
         }
 
@@ -448,8 +467,8 @@ impl RepoCortex {
                     )?;
                 }
                 for e in &all_edges {
-                    let (a, b, c, d, k, w, t) = e.params();
-                    tx.execute(EdgeRow::insert_sql(), rusqlite::params![a, b, c, d, k, w, t])?;
+                    let (a, b, c, d, k, w, t, th) = e.params();
+                    tx.execute(EdgeRow::insert_sql(), rusqlite::params![a, b, c, d, k, w, t, th])?;
                 }
                 Ok(())
             })
@@ -902,19 +921,27 @@ impl RepoCortex {
                 // symbolic fact hash is currently stale relative to the target symbol's
                 // last-known signature".
                 //
-                // # The comment here used to describe code that was not present
+                // # This was `false`, and could not be anything else
                 //
-                // It said the check is "detected here by comparing the edge's recorded
-                // weight-bearing target hash". No such comparison happens: the value is `false`,
-                // and it cannot be anything else, because edges do not record the target hash
-                // that was current when they were written. There is nothing to compare against.
+                // The comment here used to describe code that was not present — it said the check is
+                // "detected here by comparing the edge's recorded weight-bearing target hash", and
+                // the value was a literal `false` because edges recorded no target hash. A reader who
+                // trusted it would have concluded the annotation worked and that no caller happened
+                // to be stale, which is the opposite of the truth.
                 //
-                // The field is kept rather than removed so the report shape does not change when
-                // the edge table gains the column, but every value is `false` today, and
-                // `docs/DESIGN.md` lists this under "What is not done" as a partial feature. A
-                // reader who trusted the old comment would have concluded the annotation worked
-                // and that no caller happened to be stale — the opposite of the truth.
-                stale: false,
+                // Migration 4 gave the edge table a `target_hash`, so there is now something to
+                // compare: the edge says what the caller saw when it was written, and the caller's
+                // own fact says what it holds today. They differ exactly when the caller has not
+                // been re-read since the target changed.
+                //
+                // An edge with no recorded hash reports `false` **and** says so in `via`-adjacent
+                // prose rather than implying freshness. `None` is not evidence of agreement.
+                stale: match graph.target_hash(&NodeRef::fact(&c.id), &node) {
+                    Some(seen) => {
+                        caller.as_ref().map(|f| f.ast_hash.as_str() != seen).unwrap_or(false)
+                    }
+                    None => false,
+                },
                 note: caller
                     .as_ref()
                     .map(|f| f.signature.clone().unwrap_or_else(|| f.qualified_name.clone()))
@@ -1016,8 +1043,18 @@ impl ImpactReport {
                 _ => "<unknown>".into(),
             };
             out.push_str(&format!(
-                "    depth {} via {} — {} ({loc})\n",
-                e.depth, e.via, e.qualified_name
+                "    depth {} via {} — {}{} ({loc})\n",
+                e.depth,
+                e.via,
+                e.qualified_name,
+                // # The annotation FR-11 asks for, finally shown
+                //
+                // `ImpactEntry.stale` was computed and rendered nowhere — not here, and not by
+                // `code.impact_of_change`, which carries the field into its output shape without a
+                // line any reader sees. A report that holds a staleness verdict and does not print
+                // it is the same as not computing it, and worse than not having the field, because
+                // the shape implies the annotation exists.
+                if e.stale { "  [STALE: changed since it last saw this symbol]" } else { "" }
             ));
         }
         out

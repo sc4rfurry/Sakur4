@@ -929,8 +929,8 @@ impl MemoryFabric {
     pub async fn add_edge(&self, edge: EdgeRow) -> Result<()> {
         self.db
             .write(move |tx| {
-                let (a, b, c, d, e, f, g) = edge.params();
-                tx.execute(EdgeRow::insert_sql(), rusqlite::params![a, b, c, d, e, f, g])?;
+                let (a, b, c, d, e, f, g, h) = edge.params();
+                tx.execute(EdgeRow::insert_sql(), rusqlite::params![a, b, c, d, e, f, g, h])?;
                 Ok(())
             })
             .await
@@ -952,14 +952,15 @@ impl MemoryFabric {
                 // radius at the depths Sakur4 exposes.
                 let mut stmt = c.prepare(
                     "WITH seed AS (
-                         SELECT src_type, src_id, dst_type, dst_id, edge_kind, weight
+                         SELECT src_type, src_id, dst_type, dst_id, edge_kind, weight, target_hash
                          FROM dependency_graph_edge
                          WHERE (src_type = ?1 AND src_id = ?2)
                             OR (dst_type = ?1 AND dst_id = ?2)
                          LIMIT ?3
                      ),
                      hop2 AS (
-                         SELECT e.src_type, e.src_id, e.dst_type, e.dst_id, e.edge_kind, e.weight
+                         SELECT e.src_type, e.src_id, e.dst_type, e.dst_id, e.edge_kind, e.weight,
+                                e.target_hash
                          FROM dependency_graph_edge e
                          JOIN seed s ON (e.src_type = s.dst_type AND e.src_id = s.dst_id)
                                      OR (e.dst_type = s.src_type AND e.dst_id = s.src_id)
@@ -976,11 +977,12 @@ impl MemoryFabric {
                         r.get::<_, String>(3)?,
                         k,
                         r.get::<_, f64>(5)?,
+                        r.get::<_, Option<String>>(6)?,
                     ))
                 })?;
                 let mut out = Vec::new();
                 for row in rows {
-                    let (st, si, dt, di, k, w) = row?;
+                    let (st, si, dt, di, k, w, th) = row?;
                     let kind = EdgeKind::parse(&k)?;
                     out.push(EdgeRow {
                         src_type: st,
@@ -989,6 +991,7 @@ impl MemoryFabric {
                         dst_id: di,
                         edge_kind: kind,
                         weight: w,
+                        target_hash: th,
                     });
                 }
                 Ok(out)
@@ -1244,7 +1247,7 @@ pub(crate) fn insert_edge_tx(
     kind: EdgeKind,
 ) -> Result<()> {
     let edge = EdgeRow::new(src, dst, kind);
-    let (a, b, c, d, e, f, g) = edge.params();
-    tx.execute(EdgeRow::insert_sql(), rusqlite::params![a, b, c, d, e, f, g])?;
+    let (a, b, c, d, e, f, g, h) = edge.params();
+    tx.execute(EdgeRow::insert_sql(), rusqlite::params![a, b, c, d, e, f, g, h])?;
     Ok(())
 }

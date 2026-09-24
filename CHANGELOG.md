@@ -17,6 +17,22 @@ home on crates.io rather than as a stability promise, and may change within a
 
 ### Added
 
+**FR-11's caller staleness annotation (schema v4)**
+
+- dependency_graph_edge records the hash the caller held when a call site was first observed, and
+  impact_of_change compares it with the caller's hash today, so each affected site can be marked
+  [STALE: changed since it last saw this symbol]. The field existed and was a constant alse
+  because there was nothing to compare against.
+- The annotation is now rendered. It was computed and shown nowhere — not by sakur4d impact and not
+  by code.impact_of_change — which is a separate defect from the field being constant: a report
+  that carries a verdict and does not print it is worse than one without the field, because the shape
+  implies the annotation exists.
+- Edges written before migration 4 have no recorded hash and report not-stale rather than
+  not-checked; the value is left NULL rather than backfilled, because backfilling would assert that
+  every existing call site is current, which is the claim there is no evidence for.
+- The column is deliberately not refreshed on conflict: re-indexing the target says nothing about
+  whether the caller re-read it, and refreshing would erase the drift the column detects.
+
 **Episodes record their project (schema v3)**
 
 - `episodic_stream` gained a `project_id` column and an index on `(project_id, seq)`. It was the one

@@ -445,11 +445,22 @@ what follows is what is genuinely outstanding, each with its evidence.
 * **LoCoMo and the Endurance Benchmark** — not run. The A/B benchmark in [`bench/`](bench/) is a
   different and narrower measurement: matched windows, one repository, one model. It does not
   substitute for a standardised long-conversation benchmark.
-* **FR-11's staleness annotation** — `impact_of_change` reports each caller's current signature but
-  does not compute per-edge staleness, because edges do not record the target hash that was current
-  when they were written. `ImpactEntry.stale` exists and is always `false`; it is the identified
-  data-model change rather than a working feature, and it is left in place so the report shape does
-  not change when it is implemented.
+* **FR-11's staleness annotation is implemented** — migration 4 gave `dependency_graph_edge` a
+  `target_hash`, the indexing pass records the caller's own hash when it first observes a call site,
+  and `impact_of_change` compares it with the caller's hash today. The annotation is rendered by
+  `ImpactReport::render`; it was computed and displayed nowhere before, which is a separate defect
+  from the field being a constant.
+
+  Verified on a two-function crate: a clean index shows no marker, changing the caller's signature
+  and re-indexing shows `[STALE: changed since it last saw this symbol]`, and a further no-op
+  re-index leaves it marked — because `insert_sql` deliberately does not refresh the column on
+  conflict, since re-indexing the *target* is no evidence about the caller.
+
+  The old note, kept because the reasoning still explains the design: *it reported each caller's
+  current signature but did not compute per-edge staleness, because edges did not record the target
+  hash that was current when they were written. `ImpactEntry.stale` existed and was always `false`;
+  it was the identified data-model change rather than a working feature, and it was left in place so
+  the report shape would not change when it was implemented.*
 * **A live Hermes model session** — the engine's 44 contracts run against a live daemon, but driving
   Hermes with a real model has not succeeded: its provider routing rejects the model string this
   setup needs. Recorded in

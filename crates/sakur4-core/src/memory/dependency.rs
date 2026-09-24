@@ -193,6 +193,13 @@ pub struct EdgeRow {
     pub dst_id: String,
     pub edge_kind: EdgeKind,
     pub weight: f64,
+    /// The target's signature hash when this edge was written, if it was known then.
+    ///
+    /// This is what FR-11's caller annotation needs: with it, a reader can say whether the caller's
+    /// view of the target is older than the target's current signature. Without it — the state of
+    /// every edge written before migration 4 — the honest answer is "not known", which is `None`
+    /// rather than a hash that happens to match today and would read as fresh.
+    pub target_hash: Option<String>,
 }
 
 impl EdgeRow {
@@ -204,6 +211,7 @@ impl EdgeRow {
             dst_id: dst.id.clone(),
             edge_kind: kind,
             weight: 1.0,
+            target_hash: None,
         }
     }
 
@@ -212,16 +220,39 @@ impl EdgeRow {
         self
     }
 
+    /// Record the signature hash the target had when this edge was established.
+    pub fn with_target_hash(mut self, hash: impl Into<String>) -> Self {
+        self.target_hash = Some(hash.into());
+        self
+    }
+
+    /// The same, for a hash that may not be known.
+    ///
+    /// A caller resolving a reference to a symbol it has no fact row for gets `None`, and `None` is
+    /// the honest value: an edge with no recorded hash reports "no verdict" rather than "fresh".
+    pub fn with_target_hash_opt(mut self, hash: Option<String>) -> Self {
+        self.target_hash = hash;
+        self
+    }
+
     /// The SQL to insert this edge idempotently.
+    ///
+    /// # `target_hash` is deliberately *not* refreshed on conflict
+    ///
+    /// It holds what the **caller** held when it was last read. Re-observing the same call site is
+    /// not evidence that the caller has re-read the target — indexing the target again proves nothing
+    /// about the caller — so refreshing the column here would erase the very drift it exists to
+    /// detect. The first observation wins, and the read path compares it against the caller's hash
+    /// today.
     pub fn insert_sql() -> &'static str {
         "INSERT INTO dependency_graph_edge
-             (src_type, src_id, dst_type, dst_id, edge_kind, weight, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             (src_type, src_id, dst_type, dst_id, edge_kind, weight, created_at, target_hash)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT(src_type, src_id, dst_type, dst_id, edge_kind)
          DO UPDATE SET weight = excluded.weight"
     }
 
-    pub fn params(&self) -> (String, String, String, String, String, f64, String) {
+    pub fn params(&self) -> (String, String, String, String, String, f64, String, Option<String>) {
         (
             self.src_type.clone(),
             self.src_id.clone(),
@@ -230,17 +261,27 @@ impl EdgeRow {
             self.edge_kind.as_str().to_string(),
             self.weight,
             now_rfc3339(),
+            self.target_hash.clone(),
         )
     }
 }
+
+/// One edge as the graph holds it: the neighbour's key, the kind, the neighbour, and what the
+/// *source* held when the edge was first observed.
+///
+/// A named type rather than an inline tuple because the tuple appears in the struct fields, the
+/// accessors and the traversal, and `clippy::type_complexity` is right that four elements spelled out
+/// four times stops being readable. CI builds with `-D warnings`, so an unnamed version of this fails
+/// the build rather than merely annoying a reader.
+pub type GraphEdge = (String, EdgeKind, NodeRef, Option<String>);
 
 /// An in-memory, per-query view of the graph.
 #[derive(Debug, Default, Clone)]
 pub struct DependencyGraph {
     /// src key -> outgoing edges
-    out: HashMap<String, Vec<(String, EdgeKind, NodeRef)>>,
+    out: HashMap<String, Vec<GraphEdge>>,
     /// dst key -> incoming edges
-    inc: HashMap<String, Vec<(String, EdgeKind, NodeRef)>>,
+    inc: HashMap<String, Vec<GraphEdge>>,
 }
 
 /// A node reached during traversal, with the hop count that reached it.
@@ -266,15 +307,24 @@ impl DependencyGraph {
             let dst_kind = NodeKind::parse(&e.dst_type).unwrap_or(NodeKind::Episode);
             let src = NodeRef::new(src_kind, e.src_id.clone());
             let dst = NodeRef::new(dst_kind, e.dst_id.clone());
-            g.out.entry(src.key()).or_default().push((dst.key(), e.edge_kind, dst.clone()));
-            g.inc.entry(dst.key()).or_default().push((src.key(), e.edge_kind, src.clone()));
+            // The target hash travels with the *outgoing* edge, because it describes the
+            // destination as the source saw it. On the reverse edge it would describe the wrong
+            // end, so the incoming side records `None` rather than a hash that would be read as
+            // referring to the source.
+            g.out.entry(src.key()).or_default().push((
+                dst.key(),
+                e.edge_kind,
+                dst.clone(),
+                e.target_hash.clone(),
+            ));
+            g.inc.entry(dst.key()).or_default().push((src.key(), e.edge_kind, src.clone(), None));
         }
         g
     }
 
     pub fn add_edge(&mut self, src: &NodeRef, dst: &NodeRef, kind: EdgeKind) {
-        self.out.entry(src.key()).or_default().push((dst.key(), kind, dst.clone()));
-        self.inc.entry(dst.key()).or_default().push((src.key(), kind, src.clone()));
+        self.out.entry(src.key()).or_default().push((dst.key(), kind, dst.clone(), None));
+        self.inc.entry(dst.key()).or_default().push((src.key(), kind, src.clone(), None));
     }
 
     /// Nodes this node depends on (outgoing), transitively.
@@ -309,8 +359,22 @@ impl DependencyGraph {
     }
 
     /// Edges leaving `node`, for display.
-    pub fn out_edges(&self, node: &NodeRef) -> &[(String, EdgeKind, NodeRef)] {
+    pub fn out_edges(&self, node: &NodeRef) -> &[GraphEdge] {
         self.out.get(&node.key()).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    /// What `src` saw `dst`'s signature as, when the edge was written.
+    ///
+    /// `None` covers two cases that both mean "no verdict is available": the edge predates migration
+    /// 4 and recorded nothing, or there is no such edge. FR-11's annotation needs to tell those apart
+    /// from a hash that was recorded and still matches — reporting an unchecked edge as *fresh* is
+    /// the defect the annotation exists to prevent.
+    pub fn target_hash(&self, src: &NodeRef, dst: &NodeRef) -> Option<&str> {
+        self.out
+            .get(&src.key())?
+            .iter()
+            .find(|(key, _, _, _)| key == &dst.key())
+            .and_then(|(_, _, _, hash)| hash.as_deref())
     }
 
     /// Number of stored edges.
@@ -339,7 +403,7 @@ impl DependencyGraph {
             Direction::In => &self.inc,
         };
         if let Some(neighbors) = first.get(&start.key()) {
-            for (key, kind, node) in neighbors {
+            for (key, kind, node, _hash) in neighbors {
                 if !kinds.map(|k| k.contains(kind)).unwrap_or(true) {
                     continue;
                 }
@@ -359,7 +423,7 @@ impl DependencyGraph {
                 Direction::In => &self.inc,
             };
             if let Some(neighbors) = next.get(&node.key()) {
-                for (key, kind, n) in neighbors {
+                for (key, kind, n, _hash) in neighbors {
                     if !kinds.map(|k| k.contains(kind)).unwrap_or(true) {
                         continue;
                     }

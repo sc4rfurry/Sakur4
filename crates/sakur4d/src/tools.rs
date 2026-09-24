@@ -323,6 +323,12 @@ pub struct ImpactCaller {
     pub line: Option<i64>,
     pub depth: usize,
     pub via: String,
+    /// True when this caller's code has changed since it last saw the target symbol (FR-11).
+    ///
+    /// Structured rather than left to `rendered`, because a model reading prose to decide whether a
+    /// call site is stale is a model that will sometimes decide wrong — and this is the field the
+    /// requirement is about.
+    pub stale: bool,
 }
 
 /// `session.snapshot` input.
@@ -1041,6 +1047,7 @@ impl Sakur4Server {
                     line: e.line,
                     depth: e.depth,
                     via: e.via.clone(),
+                    stale: e.stale,
                 })
                 .collect(),
             rendered: report.render(),
