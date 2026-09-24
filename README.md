@@ -965,9 +965,12 @@ before the write in front of it. `memory.commit_episode` then answers with a rea
 while a `sakur4.status` in the same batch reports the count from before it. Sending each call and
 awaiting its answer is correct, and is what every harness tested here does.
 
-This is a live defect rather than a disclaimer. The cause is established and recorded in
-[docs/DESIGN.md](docs/DESIGN.md): request dispatch is concurrent and nothing restores the order the
-client sent. Four fixes were attempted and reverted, and the honest state is that it is outstanding.
+This is a live defect rather than a disclaimer. The cause is established: the server dispatches
+queued requests in an **arbitrary order** — measured, over repeated runs, as neither first-in-first-out
+nor last-in-first-out but a different permutation each time — so a read can begin before a write it was
+sent after. Awaiting each answer is the workaround, and it is what every harness tested here does.
+The full elimination, including five fixes that were tried and reverted, is in
+[docs/DESIGN.md](docs/DESIGN.md).
 
 **Not yet true**
 

@@ -822,6 +822,51 @@ what follows is what is genuinely outstanding, each with its evidence.
   Instrumenting `call_tool`'s entry, the lock acquisition and `Db::write`'s entry *together* — as was
   done to find the original trace — would settle whether the two handlers ever overlap at all.
 
+  **Instrumented, and the answer is that the server dispatches in an arbitrary order.** Six probes —
+  `call_tool`'s entry, the dispatch lock, `Db::with`'s entry and lock, `Db::write`'s entry and lock —
+  each recording a thread id, on a batched commit-then-status:
+
+  ```text
+  +0ms  ENTER  sakur4.status            thread=ThreadId(9)
+  +0ms  LOCKED sakur4.status            thread=ThreadId(9)   <- dispatch lock, held by the READ
+  +0ms  ENTER  memory.commit_episode    thread=ThreadId(6)   <- the commit has not started work
+  +0ms  Db::with ENTER  (status reads)
+  +5ms  LOCKED memory.commit_episode    thread=ThreadId(6)   <- only after status finishes
+  +5ms  Db::write ENTER / LOCKED
+  ```
+
+  **The dispatch lock works exactly as intended.** It serialises the two handlers — the commit cannot
+  take it until the status has released it. What it cannot do is decide *which handler starts first*,
+  and the server begins the read before the commit's handler has done anything.
+
+  **The execution order is arbitrary, and varies run to run.** Three commits sent in the order
+  `0,1,2`, recording the `seq` each was assigned, over four runs:
+
+  ```text
+  2,0,1  |  2,0,1  |  2,0,1  |  0,2,1
+  ```
+
+  Five calls, over four runs:
+
+  ```text
+  0,1,2,4,3  |  0,1,4,2,3  |  0,1,2,4,3  |  4,0,2,1,3
+  ```
+
+  Not LIFO, not FIFO, not a stable permutation — **arbitrary**. That single fact explains the whole
+  entry: why the failure is probabilistic rather than deterministic, why nineteen commits in one batch
+  all survived a `SIGKILL` (they mostly run in order), why `memory.recall` passed where
+  `sakur4.status` failed (recall does more work, so it loses the race less often), and why CI
+  reproduced it while a hand-typed session did not.
+
+  **So the fix is not a lock, and this is the last thing that was missing.** Serialising handlers
+  cannot impose an order on handlers the server has already started in its own order — which is what
+  five failed fixes all assumed, in one form or another. Order has to be imposed *before* dispatch: a
+  request must not be handed to the server until the previous one has been answered.
+
+  That is a bounded, well-specified change now: a queue at the receive point that holds request N+1
+  until request N's response has been emitted, which is what the two transport attempts were reaching
+  for without this constraint to tell them when to release the next message.
+
   **The protocol says the reordering is legal, which reframes the whole entry.** From the JSON-RPC
   2.0 specification:
 
