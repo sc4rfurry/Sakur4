@@ -45,9 +45,35 @@ impl Db {
     /// another. Filtering here rather than in the caller means every route into episodic recall gets
     /// it, including the LIKE fallback for builds without FTS5.
     ///
-    /// Rows written before migration 3 have `project_id IS NULL`. A scoped search **excludes** them
-    /// rather than treating `NULL` as a match: an unattributed row belongs to no project, and showing
-    /// it to whichever project happens to be asking is the defect this filter exists to remove.
+    /// `NULL` means **no filter**, and rows written before migration 3 have `project_id IS NULL`.
+    ///
+    /// # This paragraph used to claim the opposite, and a reviewer measured the SQL
+    ///
+    /// It read: *"A scoped search **excludes** them rather than treating `NULL` as a match: an
+    /// unattributed row belongs to no project, and showing it to whichever project happens to be asking
+    /// is the defect this filter exists to remove."*
+    ///
+    /// That is a description of the right behaviour and **not** of this code. The predicate is
+    /// `(?{p} IS NULL OR e.project_id = ?{p})`, so passing `None` binds SQL `NULL`, `NULL IS NULL` is
+    /// true, and the row matches — **including every row belonging to another project**, not merely the
+    /// unattributed ones. `None` is a wildcard; it is not "unattributed only".
+    ///
+    /// The distinction matters because the two are different features, and only one of them was built:
+    ///
+    ///   * **Search across every project** — implemented, reached by passing `None`.
+    ///   * **Search one project plus its unattributed legacy rows** — described here, and **not**
+    ///     implemented. Nothing can ask for it, because `project_id = ?` cannot match `NULL`.
+    ///
+    /// It is not a leak through the MCP surface: `memory.recall` binds
+    /// `input.project_id.or_else(|| Some(self.engine.project_id().to_string()))`, so an omitted argument
+    /// scopes to the daemon's project rather than becoming `None`, and asking across projects requires
+    /// naming one. The defect is that this comment promised a property no test was checking, which is the
+    /// same shape as the anchor budget, the supersession rule and `ImpactEntry::stale` — a guarantee
+    /// stated in prose that the code does not provide.
+    ///
+    /// Left as `None` meaning wildcard rather than changed, because "search everything" is genuinely
+    /// useful and the migration-3 rows are reachable through it. **What was wrong was the claim, not the
+    /// query.**
     pub async fn search_episodes(
         &self,
         query: &str,
@@ -652,5 +678,72 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].source_id, "e0");
         assert!(hits[0].score > 0.0, "scores are normalised so larger is better");
+    }
+
+    /// Pin what a `NULL` project filter actually does, because nothing did.
+    ///
+    /// # The property this replaces was stated in a doc comment and was false
+    ///
+    /// `search_episodes`' own docs said a scoped search *"**excludes**"* the migration-3 rows whose
+    /// `project_id IS NULL` *"rather than treating `NULL` as a match"*. The predicate is
+    /// `(?p IS NULL OR project_id = ?p)`, so `None` binds SQL `NULL`, `NULL IS NULL` is true, and the
+    /// row matches — **along with every row belonging to every other project.** `None` is a wildcard, not
+    /// "unattributed only".
+    ///
+    /// Three assertions, because the interesting content is the *pair* of behaviours and the difference
+    /// between them:
+    ///
+    ///   * a named project sees its own rows and no other project's — the filter works, and this is what
+    ///     project isolation rests on;
+    ///   * a named project does **not** see the unattributed rows, which is the part the old comment got
+    ///     backwards and the part nobody can currently ask for;
+    ///   * `None` sees everything, which is a real feature and is why the query was left alone.
+    #[tokio::test]
+    async fn a_null_project_filter_is_a_wildcard_not_an_unattributed_match() {
+        let db = Db::open_in_memory().await.unwrap();
+        db.write(|tx| {
+            // One row per project, plus a legacy row with no project at all — the shape migration 3 left
+            // behind for everything written before it.
+            for (index, (id, project)) in
+                [("a", Some("alpha")), ("b", Some("beta")), ("legacy", None::<&str>)]
+                    .into_iter()
+                    .enumerate()
+            {
+                tx.execute(
+                    "INSERT INTO episodic_stream
+                     (episode_id, seq, session_id, role, content, token_count, created_at, project_id)
+                     VALUES (?1, ?2, 's1', 'user', 'the coherent boundary', 4, '2026-01-01T00:00:00Z', ?3)",
+                    rusqlite::params![id, index as i64 + 1, project],
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let ids = |hits: Vec<LexicalHit>| {
+            let mut v: Vec<String> = hits.into_iter().map(|h| h.source_id).collect();
+            v.sort();
+            v
+        };
+
+        let alpha = ids(db
+            .search_episodes("coherent boundary", 10, None, Some("alpha"), false)
+            .await
+            .unwrap());
+        assert_eq!(alpha, vec!["a"], "a named project sees its own rows and nothing else");
+
+        let everything =
+            ids(db.search_episodes("coherent boundary", 10, None, None, false).await.unwrap());
+        assert_eq!(
+            everything,
+            vec!["a", "b", "legacy"],
+            "`None` is a wildcard: it returns every project's rows, not only the unattributed ones"
+        );
+        assert!(
+            !alpha.contains(&"legacy".to_string()),
+            "and a named project does not pick up the unattributed row — which is the behaviour the \
+             doc comment claimed and the query has never provided"
+        );
     }
 }
