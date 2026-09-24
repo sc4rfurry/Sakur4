@@ -342,8 +342,9 @@ impl ReceiptLog {
                 tx.execute(
                     "INSERT INTO receipt
                         (receipt_id, session_id, slot_id, turn, total_tokens, breakdown_json,
-                         cache_status, cache_detail, prompt_eval_ms, eviction_json, created_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                         cache_status, cache_detail, prompt_eval_ms, eviction_json, created_at,
+                         context_window)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                     rusqlite::params![
                         row.receipt_id,
                         row.session_id,
@@ -359,6 +360,10 @@ impl ReceiptLog {
                             None => None,
                         },
                         row.created_at,
+                        // The window the receipt was measured against. Without it a stored receipt
+                        // can say how many tokens went out but not out of how many, and
+                        // `pressure()` — the fraction used — returns nothing.
+                        row.context_window as i64,
                     ],
                 )?;
                 Ok(())
@@ -375,7 +380,8 @@ impl ReceiptLog {
             .with(move |c| {
                 Ok(c.query_row(
                     "SELECT receipt_id, session_id, slot_id, turn, total_tokens, breakdown_json,
-                            cache_status, cache_detail, prompt_eval_ms, eviction_json, created_at
+                            cache_status, cache_detail, prompt_eval_ms, eviction_json, created_at,
+                            context_window
                      FROM receipt WHERE session_id = ?1 ORDER BY turn DESC LIMIT 1",
                     [session],
                     map_receipt_row,
@@ -395,7 +401,8 @@ impl ReceiptLog {
             .with(move |c| {
                 let mut stmt = c.prepare(
                     "SELECT receipt_id, session_id, slot_id, turn, total_tokens, breakdown_json,
-                            cache_status, cache_detail, prompt_eval_ms, eviction_json, created_at
+                            cache_status, cache_detail, prompt_eval_ms, eviction_json, created_at,
+                            context_window
                      FROM receipt WHERE session_id = ?1 ORDER BY turn ASC LIMIT ?2",
                 )?;
                 let rows = stmt.query_map(rusqlite::params![session, limit], map_receipt_row)?;
@@ -539,6 +546,7 @@ type ReceiptRow = (
     Option<i64>,
     Option<String>,
     String,
+    i64,
 );
 
 fn map_receipt_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReceiptRow> {
@@ -554,6 +562,7 @@ fn map_receipt_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReceiptRow> {
         r.get(8)?,
         r.get(9)?,
         r.get(10)?,
+        r.get(11)?,
     ))
 }
 
@@ -576,7 +585,11 @@ fn row_to_receipt(row: ReceiptRow) -> Result<Receipt> {
         prompt_eval_ms: row.8,
         eviction,
         created_at: row.10,
-        context_window: 0,
+        // Read from the store, not defaulted. This was a hard-coded `0`, so every receipt read back
+        // reported no window and `pressure()` — the fraction of the window used — returned nothing.
+        // A receipt that cannot say what it was measured against is missing the half of the number
+        // that makes the other half mean anything.
+        context_window: row.11 as usize,
         prompt_tokens_reused: None,
         prompt_tokens_prefilled: None,
         tokenizer: String::new(),

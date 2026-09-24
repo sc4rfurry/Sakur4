@@ -39,8 +39,33 @@ pub struct Migration {
 }
 
 /// The ordered migration list. Never edit a shipped migration; append instead.
-pub const MIGRATIONS: &[Migration] =
-    &[Migration { version: 1, name: "initial_memory_fabric", sql: V1 }];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration { version: 1, name: "initial_memory_fabric", sql: V1 },
+    Migration { version: 2, name: "receipt_records_its_context_window", sql: V2 },
+];
+
+/// V2 — the receipt keeps the context window it was measured against.
+///
+/// # Why this is a migration and not a field left out
+///
+/// `Receipt::context_window` is one of the two numbers that make a receipt readable: 12,446 tokens
+/// means nothing without "of 32,768", and `Receipt::pressure()` divides by it. The column was
+/// never in the schema, so the field survived only inside the process that built the receipt.
+/// Anything read back from the store — which is what `context.receipt` does — reported a window of
+/// **zero**, and `pressure()` returns 0.0 when the window is zero, so the fraction used was
+/// silently unavailable on every stored receipt.
+///
+/// Nothing caught it because the in-process path is exercised and the round trip is not: the
+/// receipt tests build one and assert on it directly, and the one test that read a receipt back
+/// asserted only on `total_tokens`.
+///
+/// Added as a nullable column with a default of 0 rather than backfilled, because a stored receipt
+/// genuinely does not know the window it was measured against and inventing one would be worse
+/// than admitting the gap. A receipt read back with a window of 0 now says so, and 0 is a value
+/// `pressure()` already handles by reporting nothing.
+const V2: &str = r#"
+ALTER TABLE receipt ADD COLUMN context_window INTEGER NOT NULL DEFAULT 0;
+"#;
 
 const V1: &str = r#"
 -- ---------------------------------------------------------------------------

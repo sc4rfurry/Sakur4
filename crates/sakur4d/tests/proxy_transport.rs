@@ -113,9 +113,23 @@ async fn spawn_upstream() -> (String, Seen) {
     (format!("http://{addr}"), seen)
 }
 
-async fn spawn_proxy(upstream: &str, manage: bool) -> String {
+/// Start a proxy over a temporary store, returning its URL and that store's path.
+///
+/// # Why the store is on disk
+///
+/// These tests used `db_path: ":memory:"`, which is right for isolation and wrong for the one
+/// thing worth asserting about the proxy's *records*: a receipt it wrote cannot be read back from
+/// outside the engine that holds it. The path is returned so a test can reopen the store and check
+/// what the proxy persisted, which is how `a_rewritten_turn_records_a_receipt` proves the wiring
+/// rather than trusting it.
+///
+/// `tempfile::TempDir` is leaked deliberately: the store must outlive the spawned task, and the
+/// OS reclaims it when the test process exits.
+async fn spawn_proxy_with_store(upstream: &str, manage: bool) -> (String, std::path::PathBuf) {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db_path = dir.keep().join("proxy.db");
     let engine = Engine::open(EngineConfig {
-        db_path: ":memory:".into(),
+        db_path: db_path.to_string_lossy().to_string(),
         backend: "embedded".into(),
         // Small, so a synthetic transcript can exceed it and the rewriting path is
         // reachable in a test rather than only in production.
@@ -142,7 +156,11 @@ async fn spawn_proxy(upstream: &str, manage: bool) -> String {
         let _ = sakur4d::proxy::serve_on(engine, listener, config).await;
     });
     wait_until_listening(addr).await;
-    format!("http://{addr}")
+    (format!("http://{addr}"), db_path)
+}
+
+async fn spawn_proxy(upstream: &str, manage: bool) -> String {
+    spawn_proxy_with_store(upstream, manage).await.0
 }
 
 fn chat_body(messages: serde_json::Value) -> String {
@@ -466,5 +484,68 @@ async fn every_turn_of_a_multi_turn_session_is_recorded() {
         last["messages"].as_array().map(|a| a.len()),
         Some(5),
         "the final turn carries the whole conversation"
+    );
+}
+
+#[tokio::test]
+async fn a_rewritten_turn_records_a_receipt() {
+    // `context.receipt` reads the *latest* receipt for a session and falls back to an assembled
+    // preview when there is none. The proxy recorded nothing, so on the one path where a real
+    // prompt reaches a real server, the receipt a user saw described a preview instead — and two
+    // of its categories (`repo_map`, `folds`) can only ever be zero there, because the preview
+    // assembler never fills them. A field that is always zero is indistinguishable from a
+    // measurement, which is the opposite of what this receipt is for.
+    //
+    // This is the check that the wiring exists. Without it, a later refactor that dropped the
+    // `record` call would leave every receipt silently describing the wrong prompt.
+    let (upstream, _seen) = spawn_upstream().await;
+    let (proxy, db_path) = spawn_proxy_with_store(&upstream, true).await;
+
+    let mut messages =
+        vec![serde_json::json!({"role": "system", "content": "you are a coding agent"})];
+    for i in 0..60 {
+        messages.push(serde_json::json!({"role": "user", "content": format!("turn {i}: {}", "x".repeat(400))}));
+        messages.push(serde_json::json!({"role": "assistant", "content": format!("answer {i}: {}", "y".repeat(400))}));
+    }
+
+    reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(chat_body(serde_json::Value::Array(messages)))
+        .send()
+        .await
+        .expect("forward");
+
+    // Reopen the store the proxy wrote to. The receipt must be there, and it must describe a
+    // prompt with content in it — a receipt whose total is zero would mean the wiring stored an
+    // empty assembler result and called it the turn.
+    let engine = Engine::open(EngineConfig {
+        db_path: db_path.to_string_lossy().to_string(),
+        backend: "embedded".into(),
+        default_n_ctx: 2048,
+        context_window_explicit: true,
+        ..Default::default()
+    })
+    .await
+    .expect("reopen engine");
+
+    let receipt = engine
+        .receipts()
+        .latest("proxy-test")
+        .await
+        .expect("read receipts")
+        .expect("the proxy recorded no receipt for a turn it rewrote");
+
+    assert!(
+        receipt.total_tokens > 0,
+        "the receipt measures zero tokens for a 121-message transcript"
+    );
+    assert!(
+        receipt.breakdown.raw_recent_history > 0,
+        "no timeline tokens: the receipt does not describe the transcript as sent"
+    );
+    assert_eq!(
+        receipt.context_window, 2048,
+        "the receipt reports a window other than the one the proxy planned against; got {}",
+        receipt.context_window
     );
 }

@@ -415,6 +415,33 @@ async fn rewrite_request(state: &ProxyState, body: &[u8]) -> Option<Bytes> {
     // whether the transcript still contains evicted content is this function's.
     let _ = state.engine.eviction().apply(&plan, &parts).await;
 
+    // # Record a receipt for the prompt that is actually going upstream
+    //
+    // `context.receipt` reads the *latest* receipt for a session and falls back to an assembled
+    // preview when there is none. The proxy recorded nothing, so on the one path where a real
+    // prompt goes to a real server, the receipt a user saw was the preview — and two of its
+    // categories could only ever be zero, because the preview assembler never fills `repo_map` or
+    // `folds`. A field that is always zero is indistinguishable from a measurement, which is the
+    // opposite of what this receipt is for.
+    //
+    // `parts` already holds the transcript exactly as it will be sent, which is the same thing the
+    // planner is measured against, so the breakdown describes the request rather than a rendering
+    // of the fabric. Recording is best-effort: a receipt that could not be stored must not fail a
+    // turn that is otherwise ready to forward.
+    {
+        let receipt = sakur4_core::receipt::Receipt::build(
+            &state.config.session_id,
+            Some("0"),
+            0,
+            &parts,
+            state.engine.tokens(),
+            window,
+        );
+        if let Err(error) = state.engine.receipts().record(&receipt).await {
+            tracing::warn!(%error, "could not record the turn's receipt; forwarding anyway");
+        }
+    }
+
     if plan.planned_savings == 0 {
         tracing::info!(
             advanced = plan.updates.len(),
