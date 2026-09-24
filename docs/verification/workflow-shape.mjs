@@ -47,6 +47,29 @@ for (const name of readdirSync(workflowsDir).filter((n) => n.endsWith(".yml") ||
   const text = readFileSync(path, "utf8");
   const lines = text.split(/\r?\n/);
 
+  // # This check cannot see a malformed YAML file, and that is recorded rather than papered over
+  //
+  // Adding a `concurrency` block to `release.yml` left a stranded `default: true` indented under
+  // `cancel-in-progress` — a fragment of the `workflow_dispatch` input the block was inserted in front
+  // of. The file stopped being valid YAML, **GitHub discarded the trigger configuration**, and the
+  // release workflow ran on every push to master for eight commits instead of only on tags.
+  //
+  // Neither check in this directory saw it. `workflow-shell.mjs` reads the `run:` blocks and the shell
+  // was fine. This file's step-indentation and concurrency rules were satisfied, because the orphaned
+  // line is not a step and the concurrency keys were intact.
+  //
+  // **A structural heuristic was written for it and removed.** It flagged a key indented deeper than
+  // the previous one when that key had no `|`/`>` body — and reported **fifty-nine problems across valid
+  // files**, because `on:` → `push:` → `branches:` and `concurrency:` → `group:` are exactly that shape.
+  // A check that flags correct files is one that gets switched off, and this project has the scars to
+  // say so. There is no YAML parser in this toolchain and adding a dependency to a verification script
+  // that otherwise needs only Node would be the wrong trade.
+  //
+  // So the failure mode is documented where the next person will be standing — in a file about workflow
+  // shape — and the check that would catch it is the one that notices *behaviour*: a workflow whose runs
+  // do not match its declared triggers. That belongs against the API rather than against the file, and
+  // it is not written yet.
+
   // # Every step entry at one indent, per job
   let jobIndent = null;
   let jobName = null;
