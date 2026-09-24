@@ -472,15 +472,35 @@ what follows is what is genuinely outstanding, each with its evidence.
   both `Db::with` and `Db::write` lock the same `Arc<Mutex<Connection>>`, so a committed write on
   that connection would be visible to the next reader of it.
 
-  **The remaining explanation is that the write has not committed when the read runs** — the commit
-  reports success either way, because `commit_episode` mints its `ep_…` identifier before the
-  transaction and returns it with the outcome, so a returned identifier is not evidence that a commit
-  landed. The row reaching disk afterwards is consistent with that: a later process opens the file
-  and sees it.
+  **The write is acknowledged before it becomes visible, and it does land.** One session, three
+  requests:
 
-  That also means the serialised-dispatch experiment should have fixed it and did not, which is the
-  one loose end — either the lock did not span the whole handler, or the commit outlives the
-  handler's future. That is where the next attempt should start.
+  ```text
+  commit answered          : ep_01a0d1b97abb71a197651ec6be3
+  status, pipelined behind : 0
+  status, 1.5s later       : 1     <- the same session, the same connection
+  ```
+
+  So this is neither a lost write nor a stale-snapshot read: the row arrives, and a read that comes
+  after it does see it. What is wrong is the **ordering of the acknowledgement** — the tool returns
+  before the write is observable to the next reader.
+
+  **And the write is awaited**, which is what makes this hard to place. `commit_episode` closes its
+  transaction at `fabric.rs:191` with `.await?` and only then builds `CommitOutcome` at 201, so the
+  handler's future completes *after* the transaction. The await is correct, the transaction commits,
+  the row lands, and the acknowledgement still precedes visibility — so what remains is inside
+  `Db::write`'s `spawn_blocking` and the runtime it runs on, none of which is visible from outside
+  the process.
+
+  **The loose end from two rounds ago now has a shape.** Serialising MCP dispatch should have ordered
+  the two handlers and did not, which fits an acknowledgement produced outside the handler's own
+  await chain rather than a race between handlers.
+
+  **Why this matters beyond one status field.** `commit_episode` is FR-1's only write path, and the
+  preamble tells the model to commit every turn. An agent that commits and then asks what it
+  remembers is told nothing — and the same window means the acknowledgement does not imply
+  durability, which is the property NFR-5/NFR-6 exist to provide. **Whether a write survives a crash
+  inside that window is untested, and is now the more important question than the status field.**
 
   **A caution for the next attempt.** `rmcp` dispatches requests concurrently and this project does
   not control that, so a fix reasoned from "the calls must have interleaved" has to be *tested*
