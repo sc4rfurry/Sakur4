@@ -54,7 +54,14 @@ function declared(toml) {
       continue;
     }
     if (!table || !line || line.startsWith("#")) continue;
-    const m = line.match(/^([A-Za-z0-9_-]+)\s*=/);
+    // # The key may contain a dot
+    //
+    // `tokio.workspace = true` is how a workspace-inherited dependency is written, and the first
+    // version of this matched `^([A-Za-z0-9_-]+)\s*=` — no dot allowed — so it skipped every
+    // inherited dependency. That is **most** of them here: the check reported "all 3 declared
+    // dependencies, across 3 crate(s)" while `sakur4-core` alone declares thirty. An audit that reads
+    // a fraction of the manifest and prints a clean result is worse than no audit.
+    const m = line.match(/^([A-Za-z0-9_-]+)(\.[A-Za-z0-9_-]+)?\s*=/);
     if (m) out[table].push(m[1]);
   }
   return out;
@@ -64,6 +71,7 @@ function declared(toml) {
 const NOT_A_LIBRARY = new Set(["sakur4-core", "sakur4d", "sakur4-testkit"]);
 
 const problems = [];
+let crateCount = 0;
 let checked = 0;
 
 for (const crate of readdirSync(cratesDir)) {
@@ -75,6 +83,7 @@ for (const crate of readdirSync(cratesDir)) {
     continue;
   }
 
+  crateCount += 1;
   const { dependencies, dev } = declared(readFileSync(manifest, "utf8"));
   const all = rustFiles(crateDir);
   const source = all.filter((p) => !p.includes(`${join("", "tests")}`) && !p.includes(`${join("", "benches")}`));
@@ -85,17 +94,21 @@ for (const crate of readdirSync(cratesDir)) {
   const testText = text(testOnly.length ? testOnly : all) + "\n" + sourceText;
 
   const used = (name, haystack) => {
-    if (NOT_A_LIBRARY.has(name)) return true;
     const module = name.replace(/-/g, "_");
-    // # `:` must not precede the name, or `axum::http::` counts as using the `http` crate
+    // # A `use` line counts, and it is the common case
     //
-    // The first version of this excluded only word characters, so a *re-exported* module path read as
-    // a direct dependency: `use axum::http::{HeaderMap}` matched `http::`, `http` was reported as
-    // used, and the check passed for a crate the source never names. Found by asking why `http` was
-    // not flagged when a grep showed no `http::` anywhere — the same "does the guard actually fire"
-    // question that has caught every other checker in this directory.
-    const re = new RegExp(`(^|[^A-Za-z0-9_:])${module}::`, "m");
-    return re.test(haystack);
+    // The first version looked only for `module::`, which misses `use serde::{Deserialize, Serialize}`
+    // — the name is followed by `::{` not `::`. That produced *false positives*: `serde` (92 uses),
+    // `tracing` (33) and `toml` (3) were all reported unused, which is the failure mode that gets a
+    // check switched off. Caught before anything was removed, by grepping the names the report
+    // claimed were absent.
+    //
+    // The `:` exclusion still matters: without it `axum::http::` reads as a use of `http`.
+    return (
+      new RegExp(`(^|[^A-Za-z0-9_:])${module}::`, "m").test(haystack) ||
+      new RegExp(`^\\s*use\\s+${module}\\b`, "m").test(haystack) ||
+      new RegExp(`^\\s*(pub\\s+)?use\\s+${module}\\b`, "m").test(haystack)
+    );
   };
 
   for (const name of dependencies) {
@@ -113,8 +126,8 @@ for (const crate of readdirSync(cratesDir)) {
 }
 
 if (problems.length) {
-  console.log(`  ${checked} declared, ${problems.length} unused`);
+  console.log(`  ${checked} declared across ${crateCount} crate(s), ${problems.length} unused`);
   for (const p of problems) console.log(`    ${p}`);
   process.exit(1);
 }
-console.log(`  all ${checked} declared dependencies are referenced`);
+console.log(`  all ${checked} declared dependencies, across ${crateCount} crate(s), are referenced`);

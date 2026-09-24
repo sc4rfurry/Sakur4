@@ -33,27 +33,22 @@ tokio.workspace = true
 tokio-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-toml.workspace = true
 
 rmcp.workspace = true
 axum = "0.8"
-# Needed by the reverse proxy (FR-18), which forwards to the real inference server.
+# The reverse proxy (FR-18) forwards to the real inference server with this.
 reqwest.workspace = true
 parking_lot.workspace = true
 blake3.workspace = true
 schemars.workspace = true
 
 anyhow.workspace = true
-thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 clap.workspace = true
-chrono.workspace = true
-uuid.workspace = true
 
 [dev-dependencies]
 axum = "0.8"
-# Needed by the reverse proxy (FR-18), which forwards to the real inference server.
 reqwest.workspace = true
 parking_lot.workspace = true
 blake3.workspace = true

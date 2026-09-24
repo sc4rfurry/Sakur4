@@ -1258,7 +1258,11 @@ function harnessChecks() {
       record("rust", "no unused dependencies", SKIP, "the check is missing");
     } else {
       const r = run(process.execPath, [script]);
-      const ok = r.ok && /declared dependencies are referenced/.test(r.output);
+      // Matches the script's own summary. Loose on the numbers, strict on the shape, so rewording the
+      // count does not silently pass a failure — the mistake this line made once already, when the
+      // script's message changed and the check reported FAIL while printing a passing summary.
+      const ok =
+        r.ok && /declared dependencies, across \d+ crate\(s\), are referenced/.test(r.output);
       record(
         "rust",
         "no unused dependencies",

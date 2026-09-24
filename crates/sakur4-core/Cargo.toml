@@ -54,10 +54,7 @@ encryption = ["rusqlite/bundled-sqlcipher"]
 
 [dependencies]
 tokio.workspace = true
-tokio-util.workspace = true
 async-trait.workspace = true
-futures.workspace = true
-bytes.workspace = true
 parking_lot.workspace = true
 
 rusqlite.workspace = true
@@ -70,7 +67,6 @@ schemars.workspace = true
 blake3.workspace = true
 uuid.workspace = true
 chrono.workspace = true
-humantime.workspace = true
 
 tree-sitter.workspace = true
 tree-sitter-python.workspace = true
@@ -78,17 +74,11 @@ tree-sitter-typescript.workspace = true
 tree-sitter-rust.workspace = true
 tree-sitter-go.workspace = true
 ignore.workspace = true
-walkdir.workspace = true
-notify.workspace = true
-notify-debouncer-full.workspace = true
-rayon.workspace = true
 
 reqwest.workspace = true
 
-anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-tokio-test.workspace = true
