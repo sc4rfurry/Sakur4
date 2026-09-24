@@ -269,6 +269,8 @@ node docs/verification/doc-commands.mjs --bin $BIN
 # The install path, against the published release: fetch, verify, refuse a mismatch, extract, place.
 # Needs `--upstream` in `verify.mjs` because it reaches the network.
 sh docs/verification/install-path.sh
+# The Windows counterpart, in -DryRun: resolve, download, checksum, report.
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -DryRun
 
 # Does every dependency a crate declares appear in its source?
 node docs/verification/unused-deps.mjs
@@ -281,6 +283,9 @@ node docs/verification/anchor-wiring.mjs
 
 # Are the GitHub workflows shaped the way they read? (step indentation, concurrency)
 node docs/verification/workflow-shape.mjs
+
+# Does the wiki hold together — links to real pages, every page reachable, every sakur4d X real?
+node docs/verification/wiki-check.mjs
 
 # Candidates for reading, not a verdict: public functions nothing here calls. Not wired into
 # erify.mjs, because most of what it lists is legitimate library surface — read the doc comments.

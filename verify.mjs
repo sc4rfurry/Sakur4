@@ -144,6 +144,7 @@ const CATALOG = {
     "snapshot and restore",
     "usage accounting round trip",
     "install path against the published release",
+    "Windows install path against the published release",
     "Hermes plugin",
   ],
 };
@@ -1477,6 +1478,7 @@ function harnessChecks() {
       record(
         "harness",
         "install path against the published release",
+    "Windows install path against the published release",
         SKIP,
         "pass --check-release to enable (it downloads from GitHub)",
       );
@@ -1499,6 +1501,41 @@ function harnessChecks() {
           ok ? "fetch, checksum, tamper detection, extract, place" : lastLines(r.output, 6),
         );
       }
+    }
+  }
+
+  // # And the Windows installer gets the same treatment
+  //
+  // `install.sh` refuses Windows by design — `uname` there is `MINGW64_NT-…`, not `Linux` or `Darwin` —
+  // and `install.ps1` is its counterpart. The release has published the Windows archive since v0.1.0, so
+  // for several releases Windows had an artifact and **no installer**, while the README's platform badge
+  // said Windows and CI tested it. This runs the PowerShell installer in `-DryRun`, which resolves the
+  // release, downloads the archive, checks it against `SHA256SUMS.txt`, and reports where things would
+  // go — everything but writing to the machine, so a check can run on any host.
+  if (wanted("install-path-windows", "harness")) {
+    const script = join(ROOT, "install.ps1");
+    const shell = ["pwsh", "powershell.exe"].find((candidate) => {
+      const probe = spawnSync(candidate, ["-NoProfile", "-Command", "exit 0"], { encoding: "utf8" });
+      return !probe.error && probe.status === 0;
+    });
+    if (!existsSync(script) || !shell) {
+      record(
+        "harness",
+        "Windows install path against the published release",
+        SKIP,
+        "needs PowerShell",
+      );
+    } else {
+      const r = run(shell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-DryRun"], {
+        timeout: 300_000,
+      });
+      const ok = r.ok && /checksum\s+ok/.test(r.output) && /would put/.test(r.output);
+      record(
+        "harness",
+        "Windows install path against the published release",
+        ok ? PASS : FAIL,
+        ok ? "resolve, download, checksum, report" : lastLines(r.output, 6),
+      );
     }
   }
 

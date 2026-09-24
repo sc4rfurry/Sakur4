@@ -158,12 +158,19 @@ embedded backend simulates a llama.cpp checkpoint ring in-process, so everything
 anywhere.
 
 <table>
-<tr><th>Method</th><th>Command</th><th>Notes</th></tr>
-<tr><td><b>Install script</b></td><td><code>curl -fsSL https://raw.githubusercontent.com/sc4rfurry/Sakur4/master/install.sh | sh</code></td><td>Detects your platform, <b>verifies the checksum</b>, installs the binary, and <b>places the Agent Skill</b> in <code>~/.agents/skills/</code>. An existing skill is left alone unless <code>SAKUR4_FORCE=1</code>.</td></tr>
-<tr><td><b>Release binary</b></td><td>Download from <a href="https://github.com/sc4rfurry/Sakur4/releases">Releases</a></td><td>Archives carry <code>sakur4d</code>, the skill and both integrations. The script installs the binary and the skill; the plugins are unpacked alongside, because each harness keeps plugins elsewhere.</td></tr>
+<tr><th>Platform</th><th>Command</th><th>Notes</th></tr>
+<tr><td><b>Linux · macOS</b></td><td><code>curl -fsSL https://raw.githubusercontent.com/sc4rfurry/Sakur4/master/install.sh | sh</code></td><td>Detects your platform, <b>verifies the checksum</b>, installs the binary, and <b>places the Agent Skill</b> in <code>~/.agents/skills/</code>. An existing skill is left alone unless <code>SAKUR4_FORCE=1</code>.</td></tr>
+<tr><td><b>Windows</b></td><td><code>irm https://raw.githubusercontent.com/sc4rfurry/Sakur4/master/install.ps1 | iex</code></td><td>The same steps for PowerShell, with the same refusals. Installs to <code>%USERPROFILE%\.sakur4\bin</code> and adds it to your user <code>PATH</code>. <code>-DryRun</code> downloads and verifies without installing.</td></tr>
+<tr><td><b>Release binary</b></td><td>Download from <a href="https://github.com/sc4rfurry/Sakur4/releases">Releases</a></td><td>Archives carry <code>sakur4d</code>, the skill and both integrations. The installers place the binary and the skill; the plugins are unpacked alongside, because each harness keeps plugins elsewhere.</td></tr>
 <tr><td><b>From a checkout</b></td><td><code>cargo install --path crates/sakur4d</code></td><td>Builds and installs in one step. About eight minutes from cold; verified.</td></tr>
 <tr><td><b>From source</b></td><td><code>cargo build --release</code></td><td>Then copy <code>target/release/sakur4d</code> onto your <code>PATH</code>.</td></tr>
 </table>
+
+Five platforms are published — `x86_64` and `aarch64` for Linux, both for macOS, and
+`x86_64-pc-windows-msvc`. **Windows shipped from v0.1.0 with no installer for it**: `install.sh`
+refuses Windows by design, because `uname` there is `MINGW64_NT-…` rather than `Linux` or `Darwin`. This
+badge said Windows and the only automated path was a shell script Windows users cannot run, which is a
+gap a reader finds only after the download.
 
 The installer **refuses to install an archive it cannot verify**. If `SHA256SUMS.txt` is
 unreachable, or does not list your platform's archive, it stops rather than continuing — an
