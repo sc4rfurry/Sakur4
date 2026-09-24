@@ -788,6 +788,40 @@ what follows is what is genuinely outstanding, each with its evidence.
   otherwise making the service honour arrival order — rather than by synchronising handlers that have
   already been started. Two locks were tried and neither could work for that reason.
 
+  **A serialising transport was tried, for the second time, and improved this by 1/6.** `serve_stdio`
+  was rewired to feed the server through a bounded pair of one-way channels — requests in, responses
+  out — so stdin is read only as fast as the server drains messages. Measured over six runs of the
+  same batched probe:
+
+  ```text
+  before (direct stdio):   0/8 runs correct
+  after  (serialised):     1/6 runs correct
+  ```
+
+  The first attempt at this, two rounds earlier, answered *nothing* — it built a one-way pipe and gave
+  the server nowhere to write its replies. That was a plumbing bug, and fixing it produced a real but
+  unreliable improvement rather than a fix. **Reverted**: a marginal gain that I cannot reproduce
+  reliably is not worth rewiring the transport that every stdio harness depends on.
+
+  **What that rules out.** Reading messages one at a time is not sufficient, because the server reads
+  ahead and then *dispatches* what it has read concurrently. Serialising delivery does not serialise
+  execution — the dispatch happens after the read, so a bounded buffer changes how fast messages
+  arrive and not the order they run in.
+
+  **The dispatch lock is already in place and does not help either.** `Sakur4Server::call_tool` holds a
+  `tokio::sync::Mutex` across the whole handler, and `Db::write` completes inside its own handler since
+  round 31 — so the two conditions that should have made handler ordering sufficient are both met, and
+  the probe still reports the pre-write count most of the time. That is worth stating plainly: the
+  evidence contradicts the model of the failure I have been reasoning from, which is why five fixes
+  have failed.
+
+  **What is left, and it is a narrower question than any asked so far.** The commit's response is
+  produced somewhere other than the code path the lock guards — `commit_episode` mints its `ep_…`
+  identifier *before* the transaction and returns it with the outcome, so a returned identifier is not
+  evidence that a commit landed, and the answer may be emitted from a task that never took the lock.
+  Instrumenting `call_tool`'s entry, the lock acquisition and `Db::write`'s entry *together* — as was
+  done to find the original trace — would settle whether the two handlers ever overlap at all.
+
   **The protocol says the reordering is legal, which reframes the whole entry.** From the JSON-RPC
   2.0 specification:
 
