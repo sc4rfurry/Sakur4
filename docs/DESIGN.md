@@ -373,6 +373,23 @@ what follows is what is genuinely outstanding, each with its evidence.
   Recorded rather than changed: putting a repo map into the prompt is a product decision with a
   measurable cost, and the A/B benchmark is what would measure it. That is its own piece of work,
   not an edit at the end of an audit.
+* **Nothing ever marks an episode superseded.** The eviction engine's scoring reads
+  `episode_row.superseded_by` and subtracts 3.0 from an episode's value when it is set, with the
+  note *"superseded by a later episode"* — that is, it is built to drop a stale copy before its
+  replacement. The only writer of that column is `MemoryFabric::mark_superseded`, and **nothing
+  calls it**: the field, the column, the `EdgeKind::Supersedes` variant and the scoring rule all
+  exist, and no code path produces the value they act on.
+
+  So the rule is inert. An episode that a later one has replaced looks exactly like one that has
+  not, and the eviction engine pays the cost of a comparison that can never be true. The two
+  variants that would express the same relation — `Corrects` and `FoldedFrom` — are declared for
+  the same purpose and are likewise never constructed.
+
+  Not deleted, and not wired up here. Deleting `mark_superseded` would remove the only statement of
+  intent for a relation the scoring code is written against; wiring it up needs a decision about
+  *who* decides an episode is superseded — the agent, a re-read of the same file, or a fold — and
+  that is a product question, not a cleanup. Recorded so the next reader finds it in the list of
+  things known to be missing rather than discovering that a scoring rule never fires.
 
   Worth naming how this entry was written: the audit found "no production caller" and I recorded it
   as a wiring gap. Reading the assembler showed it is a preview path, and the claim had to be

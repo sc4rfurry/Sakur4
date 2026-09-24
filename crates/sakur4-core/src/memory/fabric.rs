@@ -933,23 +933,6 @@ impl MemoryFabric {
             .await
     }
 
-    /// Add many edges in one transaction (bulk index writes).
-    pub async fn add_edges(&self, edges: Vec<EdgeRow>) -> Result<usize> {
-        if edges.is_empty() {
-            return Ok(0);
-        }
-        let n = edges.len();
-        self.db
-            .write(move |tx| {
-                for edge in &edges {
-                    let (a, b, c, d, e, f, g) = edge.params();
-                    tx.execute(EdgeRow::insert_sql(), rusqlite::params![a, b, c, d, e, f, g])?;
-                }
-                Ok(n)
-            })
-            .await
-    }
-
     /// Load the graph neighbourhood around a node.
     ///
     /// Bounded by `limit` edges so a pathological graph cannot make an eviction
@@ -1074,6 +1057,11 @@ impl MemoryFabric {
     }
 
     /// Total number of episodes in the store (for stats and receipts).
+    ///
+    /// Nothing calls this: `Db::stats()` supplies the same number to `sakur4.status`, and the
+    /// receipt's breakdown counts tokens rather than episodes. Left in place rather than deleted,
+    /// because it is a one-line query with a clear purpose and no cost — unlike a comment claiming
+    /// a caller it does not have.
     pub async fn episode_count(&self) -> Result<i64> {
         self.db
             .with(|c| Ok(c.query_row("SELECT COUNT(*) FROM episodic_stream", [], |r| r.get(0))?))
