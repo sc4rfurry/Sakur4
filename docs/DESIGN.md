@@ -457,11 +457,36 @@ what follows is what is genuinely outstanding, each with its evidence.
   order. What remains is that `sakur4.status` reads something the others do not — and the candidates
   are narrower than they were.
 
+  **Instrumented from inside the store, which is the evidence that settles it.** A temporary
+  `tracing::info!` in `Db::stats()` — reporting both the `scalar()` result and a direct
+  `query_row` — was run against both cases and then removed:
+
+  | case | response | store on disk | `stats()` saw |
+  |---|---|---|---|
+  | pipelined | `episodes 0` | 1 | `scalar=0, direct=Ok(0)` |
+  | sequential | `episodes 1` | 1 | `scalar=1, direct=Ok(1)` |
+
+  So the discrepancy is **inside the store layer, on the connection**, and not in the mapping from
+  `DbStats` to the response: the connection genuinely does not hold the row when the read runs in the
+  pipelined case, and does in the sequential one. `episodic_stream` is a real table, not a view, and
+  both `Db::with` and `Db::write` lock the same `Arc<Mutex<Connection>>`, so a committed write on
+  that connection would be visible to the next reader of it.
+
+  **The remaining explanation is that the write has not committed when the read runs** — the commit
+  reports success either way, because `commit_episode` mints its `ep_…` identifier before the
+  transaction and returns it with the outcome, so a returned identifier is not evidence that a commit
+  landed. The row reaching disk afterwards is consistent with that: a later process opens the file
+  and sees it.
+
+  That also means the serialised-dispatch experiment should have fixed it and did not, which is the
+  one loose end — either the lock did not span the whole handler, or the commit outlives the
+  handler's future. That is where the next attempt should start.
+
   **A caution for the next attempt.** `rmcp` dispatches requests concurrently and this project does
   not control that, so a fix reasoned from "the calls must have interleaved" has to be *tested*
-  against a pipelined probe rather than argued. Three rounds of reasoning have now produced three
-  wrong causes; the experiments that produced real information were the ones comparing paths against
-  each other, and the ones that produced none were the ones reasoning about the framework.
+  against a pipelined probe rather than argued. Four rounds of reasoning have produced four wrong
+  causes; the experiments that produced real information compared paths against each other or read
+  the store from inside, and the ones that produced nothing reasoned about the framework.
 
   Ruled out along the way, so the next attempt need not repeat it: `--db` versus `SAKUR4_DB`, both
   backends (`none` and `embedded` behave identically), a missing `folds` table, the scalar queries
