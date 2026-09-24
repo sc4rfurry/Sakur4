@@ -159,8 +159,8 @@ anywhere.
 
 <table>
 <tr><th>Method</th><th>Command</th><th>Notes</th></tr>
-<tr><td><b>Install script</b></td><td><code>curl -fsSL https://raw.githubusercontent.com/sc4rfurry/Sakur4/master/install.sh | sh</code></td><td>Detects your platform, <b>verifies the checksum</b>, installs, and says where the skill went.</td></tr>
-<tr><td><b>Release binary</b></td><td>Download from <a href="https://github.com/sc4rfurry/Sakur4/releases">Releases</a></td><td>Archives carry <code>sakur4d</code>, the skill and the OMP plugin together.</td></tr>
+<tr><td><b>Install script</b></td><td><code>curl -fsSL https://raw.githubusercontent.com/sc4rfurry/Sakur4/master/install.sh | sh</code></td><td>Detects your platform, <b>verifies the checksum</b>, installs the binary, and <b>places the Agent Skill</b> in <code>~/.agents/skills/</code>. An existing skill is left alone unless <code>SAKUR4_FORCE=1</code>.</td></tr>
+<tr><td><b>Release binary</b></td><td>Download from <a href="https://github.com/sc4rfurry/Sakur4/releases">Releases</a></td><td>Archives carry <code>sakur4d</code>, the skill and both integrations. The script installs the binary and the skill; the plugins are unpacked alongside, because each harness keeps plugins elsewhere.</td></tr>
 <tr><td><b>From a checkout</b></td><td><code>cargo install --path crates/sakur4d</code></td><td>Builds and installs in one step. About eight minutes from cold; verified.</td></tr>
 <tr><td><b>From source</b></td><td><code>cargo build --release</code></td><td>Then copy <code>target/release/sakur4d</code> onto your <code>PATH</code>.</td></tr>
 </table>
@@ -605,6 +605,8 @@ Everything is optional. The defaults work.
 | `SAKUR4_EVICTION_PROFILE` | chosen from the backend | `cache-first` · `window-first` · `balanced` — overrides the automatic choice |
 | `SAKUR4_SQLITE_VEC_PATH` | searched | Path to a `sqlite-vec` extension, for vector search without the fallback scan |
 | `SAKUR4_TRANSPORT` | `stdio` | Transport for `serve`, when `--transport` is not given |
+| `SAKUR4_SKILL_DIR` | `~/.agents/skills` | Where `install.sh` places the Agent Skill |
+| `SAKUR4_FORCE` | unset | `install.sh` replaces an existing skill instead of leaving it alone |
 
 **A variable that is set and does nothing is worse than one that does not exist**, so the table above
 is checked: `docs/verification/env-vars.mjs` fails if a name documented here appears nowhere in the

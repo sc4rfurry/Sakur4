@@ -212,17 +212,55 @@ case ":${PATH}:" in
         ;;
 esac
 
-# The archives carry the skill and the integrations, so a download is a complete install
-# rather than a binary and a scavenger hunt.
-if [ -d "$tmp/$BIN-$version-$target/skills/sakur4" ]; then
-    say "The Agent Skill came with it:"
-    say ""
-    say "  mkdir -p ~/.agents/skills"
-    say "  cp -r \"$tmp/$BIN-$version-$target/skills/sakur4\" ~/.agents/skills/"
-    say ""
-    say "Contact the daemon:"
-    say ""
-    say "  $BIN doctor"
-    say "  $BIN config hermes"
-    say ""
+# ---------------------------------------------------------------------------
+# The skill, which used to be thrown away
+# ---------------------------------------------------------------------------
+#
+# # The instruction this replaces could not be followed
+#
+# The old code printed:
+#
+#     cp -r "$tmp/$BIN-$version-$target/skills/sakur4" ~/.agents/skills/
+#
+# and `$tmp` is a directory this script deletes on exit — `trap 'rm -rf "$tmp"' EXIT`. So the one
+# step it told the user to run referenced a path that no longer existed, and the only file that
+# survived the install was the binary. The archives ship the skill and both integrations precisely
+# so a download is a complete install; everything but the binary was being discarded.
+#
+# It installs the skill now. `SAKUR4_SKILL_DIR` overrides the destination, and the copy is skipped
+# when the destination already holds a `sakur4` skill unless `SAKUR4_FORCE` is set — replacing a
+# skill a user has edited is worse than telling them it is already there.
+release_root="$tmp/$BIN-$version-$target"
+skill_dst="${SAKUR4_SKILL_DIR:-$HOME/.agents/skills}"
+if [ -d "$release_root/skills/sakur4" ]; then
+    if [ -e "$skill_dst/sakur4" ] && [ -z "${SAKUR4_FORCE:-}" ]; then
+        say "  skill      already at $skill_dst/sakur4 (set SAKUR4_FORCE=1 to replace)"
+    else
+        mkdir -p "$skill_dst" 2>/dev/null || true
+        if rm -rf "$skill_dst/sakur4" 2>/dev/null && \
+           cp -r "$release_root/skills/sakur4" "$skill_dst/" 2>/dev/null; then
+            say "  skill      installed to $skill_dst/sakur4"
+        else
+            say "  skill      could not be written to $skill_dst; set SAKUR4_SKILL_DIR"
+        fi
+    fi
 fi
+
+# The integrations ship in the archive too. They are not installed, because where a harness keeps
+# its plugins differs per harness and guessing wrong is worse than saying where to look — but the
+# first version of this note named a path inside `$tmp`, which is deleted on exit, so it repeated
+# the exact defect the block above exists to fix. A directory this script removes is not somewhere
+# to send a reader.
+if [ -d "$release_root/integrations" ]; then
+    say "  plugins    the archive also carries the OMP and Hermes integrations; this script does"
+    say "             not place them, because each harness keeps plugins elsewhere. They are in"
+    say "             the same release archive you just installed from:"
+    say "             https://github.com/sc4rfurry/Sakur4/releases/tag/$version"
+fi
+
+say ""
+say "Contact the daemon:"
+say ""
+say "  $BIN doctor"
+say "  $BIN config hermes"
+say ""
