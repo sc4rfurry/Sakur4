@@ -1029,6 +1029,40 @@ what follows is what is genuinely outstanding, each with its evidence.
   a signal is worse than useless; and the reply count (25 of 25) is the control — a correct gate must
   still answer every request, because the disclosed defect reorders answers and never omits them.
 
+  **An eleventh attempt found the second lost-release bug by reading `tokio`'s source rather than by
+  guessing, and still stalled.**
+
+  `tokio::io::copy` does **not** flush per message. From `tokio-1.53.1/src/io/util/copy.rs`:
+
+  ```rust
+  Poll::Pending => {
+      // Ignore pending reads when our buffer is not empty, because we can try to write data
+      // immediately.
+      if self.pos == self.cap {
+          // Try flushing when the reader has no progress to avoid deadlock
+          if self.need_flush {
+              ready!(writer.as_mut().poll_flush(cx))?;
+  ```
+
+  It sets `need_flush = true` after a write and flushes only when a read comes back `Pending` with a full
+  buffer. So **counting flushes counts the wrong thing**, and any gate built on `poll_flush` fires at a
+  moment determined by the reader's behaviour rather than by a response being complete.
+
+  That also named the `AtomicBool` failure exactly: `swap(false)` **clears** the flag, so a store landing
+  in the window between the writer's store and the reader's next check is erased — the same lost-release
+  class as `try_send` on a full channel, which is why the flag "moved the stall rather than fixing it".
+
+  The fix attempted was a **monotonic counter** — `AtomicUsize`, incremented once per newline accepted by
+  the transport writer, compared and never cleared by the pump, with a 120-second release so a stall
+  becomes an error rather than a hang. That is the right shape for a release mechanism, and it is recorded
+  because it removes a whole class of failure rather than a symptom.
+
+  **It still produced 0 replies of 25**, and was reverted. So the counter is not sufficient, which means
+  the next attempt should question the layering rather than the release mechanism: the transport is
+  hand-wired as two one-way duplexes plus a pump plus a counting writer, and nothing in that arrangement
+  has ever been shown to deliver a single response end to end. The relay test proves the two-channel shape
+  in isolation; **nothing proves the pump in front of it**, and that is the smallest unproven thing.
+
   **The protocol says the reordering is legal, which reframes the whole entry.** From the JSON-RPC
   2.0 specification:
 
