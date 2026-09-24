@@ -306,9 +306,11 @@ The same document is unusually direct about the places where a mechanism exists 
 code but not in its behaviour. These are collected on [Limitations](Limitations); the architectural
 ones are:
 
-- **Nothing ever marks an episode superseded.** `MemoryFabric::mark_superseded` has no caller, so the
-  eviction engine's −3.0 "superseded by a later episode" adjustment can never fire. The column, the
-  edge kind and the scoring rule all exist and are inert.
+- **Supersession fires now.** `MemoryFabric::mark_superseded` is called by `memory.commit_episode` when a
+  turn names what it corrects, so the eviction engine's −3.0 "superseded by a later episode" adjustment
+  reaches a corrected turn and makes it a safe `Drop` candidate. Until this release no code path produced
+  the value that rule acts on — the column, the edge kind and the scoring rule all existed and were
+  unreachable, and this entry said so.
 - **A read can observe the store before a pipelined write in front of it has landed.** In a **pipelined
   batch** — several frames at once, stdin closed — a read is executed in an **arbitrary order** relative
   to the write. `memory.commit_episode` answers with a real `ep_…` identifier while a `sakur4.status` in

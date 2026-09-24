@@ -162,11 +162,12 @@ receipt to understand a slow turn, the `reason` is where the four verdicts are d
 It is computed live, on every read, from a hash comparison, and it is a working mechanism.
 
 **Supersession** is about **episodes**: a later turn replacing an earlier one. The eviction engine's
-scoring reads `episode_row.superseded_by` and subtracts 3.0 from a marked episode's value — but the only
-writer of that column is `MemoryFabric::mark_superseded`, and **nothing calls it**. The field, the
-column, the `EdgeKind::Supersedes` variant and the scoring rule all exist, and no code path produces the
-value they act on. The rule is **inert**, and `docs/DESIGN.md` records it as an open item rather than a
-feature. See [Limitations](Limitations) and [Memory Model](Memory-Model).
+scoring reads `episode_row.superseded_by` and subtracts 3.0 from a marked episode's value, so a corrected
+turn is a safe `Drop` candidate rather than something kept for lack of a reason to let it go.
+`MemoryFabric::mark_superseded` writes that column, and it is called when a turn names what it corrects.
+
+The distinction from staleness is worth holding onto: **staleness is computed** from hashes on every
+read, and **supersession is declared** by the caller. See [Memory Model](Memory-Model).
 
 ---
 

@@ -184,7 +184,7 @@ Three practical rules:
 wrong.**
 
 **Staleness** is about the Atlas, is computed live, and works. **Supersession** is about episodes — a
-later turn replacing an earlier one — and it is **inert**.
+later turn replacing an earlier one — and it **works as of this release**, having been inert before.
 
 Here is the state of it, stated exactly:
 
@@ -192,16 +192,20 @@ Here is the state of it, stated exactly:
 - The eviction engine's scoring **reads** it: an episode with `superseded_by` set has **3.0 subtracted**
   from its value, with the note *"superseded by a later episode"*. The rule is built to drop a stale
   copy **before** its replacement.
-- The **only** writer of that column is `MemoryFabric::mark_superseded` — and **nothing calls it**.
-- The two edge kinds that would express the same relation, `Corrects` and `FoldedFrom`, are declared for
-  the same purpose and are **likewise never constructed**.
+- `MemoryFabric::mark_superseded` is the only writer of that column, and it is now called by
+  `memory.commit_episode` when a turn names what it corrects. It sets the column, flags the episode
+  **droppable**, and writes a `Supersedes` edge.
+- `Corrects` and `FoldedFrom` are declared for adjacent purposes and are still never constructed.
 
-So the rule never fires, an episode that a later one replaced looks exactly like one that was not, and
-the eviction engine pays the cost of a comparison that can never be true. `docs/DESIGN.md` records this
-as **not deleted and not wired up**: deleting `mark_superseded` would remove the only statement of intent
-for a relation the scoring code is written against, and wiring it up needs a decision about **who**
-decides an episode is superseded — the agent, a re-read of the same file, or a fold. That is a product
-question, not a cleanup.
+So a corrected turn is now **a safe eviction candidate** rather than something the engine keeps for lack
+of a reason to let it go. `docs/DESIGN.md` records how it got here: the column, the edge kind, the
+scoring rule and the note string all existed for the life of the project with **no way to produce the
+value they act on**, because nothing could say "this corrects that".
+
+**The decision that was open is now made, and it is the agent's.** Turning supersession on required
+choosing *who* decides an episode is superseded — the agent, a re-read of the same file, or a fold. It is
+the caller: a turn passes `corrects` naming the episode it replaces, and an id that matches nothing is an
+error rather than a silent no-op.
 
 **One name collision to be aware of.** `memory.recall` returns a field called `stale_flags`, which is
 populated from `RecallResult::stale_superseded`. Despite the name it has nothing to do with episode

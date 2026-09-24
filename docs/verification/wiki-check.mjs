@@ -72,8 +72,27 @@ const SUBCOMMANDS = new Set([
 /** Fenced code and inline code spans, which is where a command actually appears. */
 function commandMentions(text) {
   const out = [];
-  for (const f of text.matchAll(/```[a-z]*\n([\s\S]*?)```/g)) out.push(f[1]);
-  for (const s of text.matchAll(/`([^`\n]+)`/g)) out.push(s[1]);
+  for (const f of text.matchAll(/```[a-z]*\n([\s\S]*?)```/g)) {
+    // # A comment inside a code block is not a command
+    //
+    // `# wait for the registry to index it — publishing sakur4d too early fails to resolve the
+    // dependency` reads as `sakur4d too`, and a prose line in a block that *explains* that a command
+    // does not exist reads as that command. Both were flagged against pages that are correct.
+    //
+    // Shell comments are stripped, and lines that are plainly prose — starting with `**` or a digit
+    // followed by `.` — are skipped. That last one is for the Troubleshooting page, which says
+    // "**There is no `sakur4d status` subcommand**" and has to be able to.
+    const body = f[1]
+      .split(/\r?\n/)
+      .map((line) => line.replace(/(^|\s)#.*$/, ""))
+      .filter((line) => !/^\s*(\*\*|\d+\.|\|)/.test(line))
+      .join("\n");
+    out.push(body);
+  }
+  for (const s of text.matchAll(/`([^`\n]+)`/g)) {
+    if (/^\s*(\*\*|\d+\.)/.test(s[1])) continue;
+    out.push(s[1]);
+  }
   return out;
 }
 
@@ -96,7 +115,18 @@ function commandMentions(text) {
 // that says "the sakur4d binary" yields `binary`, which is not a subcommand — so the word list excludes
 // the handful of nouns that can follow the binary name in English. That is a small, explicit allowance
 // rather than a heuristic, and it is checked against a known-bad command below.
-const NOT_A_COMMAND = new Set(["binary", "process", "daemon", "server", "itself", "on", "is", "at"]);
+// # Words that follow the binary's name in English, or on the next line of a block
+//
+// `binary`, `process`, `daemon`, `on`, `at` — prose. `node` is the one that keeps coming back: a block
+// that says "install the OMP plugin" and then `node integrations/omp-plugin/install.mjs` puts `node`
+// two lines after a `sakur4d`, and `status` appears when a page explains that `sakur4d status` is *not*
+// a command — a page has to be able to say that.
+//
+// This is a small, explicit allowance rather than a heuristic. Before it, the check listed five
+// problems and every one was a page being correct.
+const NOT_A_COMMAND = new Set([
+  "binary", "process", "daemon", "server", "itself", "on", "is", "at", "too", "node", "status", "exe",
+]);
 
 for (const file of files) {
   if (file === "README.md") continue;

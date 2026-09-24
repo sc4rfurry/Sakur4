@@ -500,12 +500,37 @@ what follows is what is genuinely outstanding, each with its evidence.
   Recorded rather than changed: putting a repo map into the prompt is a product decision with a
   measurable cost, and the A/B benchmark is what would measure it. That is its own piece of work,
   not an edit at the end of an audit.
-* **Nothing ever marks an episode superseded.** The eviction engine's scoring reads
-  `episode_row.superseded_by` and subtracts 3.0 from an episode's value when it is set, with the
-  note *"superseded by a later episode"* — that is, it is built to drop a stale copy before its
-  replacement. The only writer of that column is `MemoryFabric::mark_superseded`, and **nothing
-  calls it**: the field, the column, the `EdgeKind::Supersedes` variant and the scoring rule all
-  exist, and no code path produces the value they act on.
+
+  **And there is a constraint on doing it that this entry did not state.** `assemble_parts` has four
+  callers, and one of them is `context.plan_eviction` — which uses the result for **pressure
+  measurement**, not for display:
+
+  ```rust
+  let parts = assemble_parts(&self.engine, &input.session_id, input.pending_recall.as_deref()).await?;
+  let plan = self.engine.eviction().plan(…, &parts).await?;   // decides what to evict
+  ```
+
+  So populating `with_repo_map` there would make the engine plan against a prompt the client never
+  sends — evicting sooner because of tokens that were never going to be in the request. The slots are
+  unpopulated partly because the one assembler serves two purposes: a preview and a measurement. Wiring
+  the map in is therefore not "call the builder"; it is **separating prompt assembly from pressure
+  accounting**, with the plan measuring what the client will actually send.
+
+  That is a smaller and better-specified piece of work than "add a repo map", and it is the reason this
+  has stayed open rather than being a one-line change nobody got to.
+* **Nothing ever marks an episode superseded — and now something does.** The eviction engine's scoring
+  reads `episode_row.superseded_by` and subtracts 3.0 from an episode's value when it is set, with the
+  note *"superseded by a later episode"* — built to drop a stale copy before its replacement. The only
+  writer of that column is `MemoryFabric::mark_superseded`, and **nothing called it**: the field, the
+  column, the `EdgeKind::Supersedes` variant and the scoring rule all existed, and no code path produced
+  the value they act on.
+
+  **Fixed.** `memory.commit_episode` takes an optional `corrects`, which names the episode this turn
+  replaces; the handler calls `mark_superseded` after the commit (a separate transaction, so a
+  correction that fails to record cannot lose the turn that was already accepted), and the response
+  echoes `supersedes` back so a caller can confirm the reference landed. A correction whose id matches
+  nothing is a `NotFound` error rather than a silent success — the first version ignored the update's
+  row count and reported success for an episode that did not exist.
 
   So the rule is inert. An episode that a later one has replaced looks exactly like one that has
   not, and the eviction engine pays the cost of a comparison that can never be true. The two
