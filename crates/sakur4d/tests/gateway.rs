@@ -175,6 +175,54 @@ async fn resources_and_prompts_are_listed_with_the_prd_uris() {
     client.cancel().await.ok();
 }
 
+/// The repo map says when it was built, because nothing rebuilds it.
+///
+/// # Why this asserts a sentence rather than a behaviour
+///
+/// Every existing test here *lists* resources; none read a body. That gap is why the repo-map
+/// resource could advertise a TTL that "tracks Repo Cortex's last re-index" — a claim about a
+/// constant, and one a caching client would rely on — and why `RepoCortex::last_indexed`, written
+/// for exactly that purpose, could sit with no caller while the map went out undated.
+///
+/// A structural map with no date reads as current. It is built from the last index, nothing watches
+/// the filesystem (`notify` and `notify-debouncer-full` were declared for that and never used), and
+/// `code.impact_of_change` reasons over the same stored facts — so an undated map is a confident
+/// answer about a tree that may have moved. The date is the whole safeguard, so it is what the test
+/// checks.
+#[tokio::test]
+async fn the_repo_map_dates_itself() {
+    let (url, _engine, _handle) = start_gateway().await;
+    let client = connect(&url).await;
+
+    let resources = client.list_resources(None).await.expect("resources/list");
+    let uri = resources
+        .resources
+        .iter()
+        .map(|r| r.uri.as_str().to_string())
+        .find(|u| u.starts_with("sakur4://repo-map/"))
+        .expect("a repo-map resource");
+
+    let read = client
+        .read_resource_once(rmcp::model::ReadResourceRequestParams::new(uri.clone()))
+        .await
+        .expect("resources/read");
+    let body = format!("{read:?}");
+
+    // Nothing has indexed in this test, so the map must say exactly that rather than implying it is
+    // current. `never indexed` is the only truthful thing to report here.
+    assert!(
+        body.contains("never indexed") || body.contains("as of the last index"),
+        "the repo map must date itself; got {}",
+        &body[..body.len().min(400)]
+    );
+    assert!(
+        body.contains("sakur4d index"),
+        "and it must say what to do about being out of date; got {}",
+        &body[..body.len().min(400)]
+    );
+    client.cancel().await.ok();
+}
+
 #[tokio::test]
 async fn a_full_session_round_trips_through_the_gateway() {
     let (url, engine, _handle) = start_gateway().await;

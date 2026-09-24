@@ -155,6 +155,18 @@ home on crates.io rather than as a stability promise, and may change within a
 
 ### Fixed
 
+- **The repo map dates itself, and its resource stops claiming a TTL it does not have.** The map is
+  built from the last index and nothing re-indexes automatically — `notify` and
+  `notify-debouncer-full` were declared for filesystem watching and referenced by no code path — so
+  after an edit it describes the tree as it was, and `code.impact_of_change` reasons over the same
+  stored facts. A map with no date reads as current, which is the condition under which a structural
+  answer is most confidently wrong. The body now carries the index time, or says it has never been
+  indexed, and names `sakur4d index`.
+- The repo-map resource description said its TTL "tracks Repo Cortex's last re-index". It does not:
+  the TTL is a constant, and a client would reasonably infer that a cached map is refreshed whenever
+  the index moves. `RepoCortex::last_indexed` existed for exactly that and had no caller.
+- No gateway test read a resource *body* — every existing one lists resources — which is why both
+  survived. `the_repo_map_dates_itself` closes the gap.
 - A debug `eprintln!` in `ToolOutputParser::parse_any` printed a line per parse to stderr.
   Pinned by a test asserting a normal session writes nothing there at all.
 - The proxy re-committed a harness's whole transcript every turn, so a stateless client's 242
@@ -261,7 +273,7 @@ The first release. Everything below is new.
 
 ### Verified
 
-- 259 tests, including integration tests
+- 260 tests, including integration tests
   that spawn the real binary and speak JSON-RPC over its pipes, and contract tests
   for the cache-coherence claim.
 - `hermes mcp test sakur4` connects and discovers all 17 tools against Hermes Agent

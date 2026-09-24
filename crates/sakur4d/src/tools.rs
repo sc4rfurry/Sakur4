@@ -1539,8 +1539,16 @@ impl ServerHandler for Sakur4Server {
         Ok(ListResourcesResult::with_all_items(vec![
             Resource::new(format!("sakur4://repo-map/{project}"), "repo-map")
                 .with_description(
-                    "Cacheable structural outline of the repository. TTL tracks Repo Cortex's \
-                     last re-index.",
+                    // # This said the TTL "tracks Repo Cortex's last re-index"
+                    //
+                    // It does not: `REPO_MAP_TTL_MS` is a constant. A client reading the old wording
+                    // would reasonably infer that a cached map is refreshed whenever the index moves,
+                    // which would make caching it safe. What the client can actually rely on is that
+                    // the *body* dates itself, so a stale map is recognisable after the fact rather
+                    // than prevented beforehand.
+                    "Structural outline of the repository from the last index. Cached briefly \
+                     (seconds); the body records when that index ran, and nothing re-indexes \
+                     automatically.",
                 )
                 .with_mime_type("text/plain"),
             Resource::new("sakur4://receipt/latest", "context-receipt")
@@ -1576,7 +1584,27 @@ impl ServerHandler for Sakur4Server {
                 .repo_map(2_000, None, self.engine.tokens())
                 .await
                 .map_err(to_error)?;
-            format!("{map}\n({used} tokens)")
+            // # A structural map that does not date itself reads as current
+            //
+            // The map is built from the last index, and nothing re-indexes on its own — `notify` and
+            // `notify-debouncer-full` were declared for that and never referenced, and no code path
+            // watches the filesystem. So after an edit the map describes the tree as it was, and
+            // `code.impact_of_change` reasons over the same stored facts. A model reading it has no
+            // way to tell a map from a minute ago from one from a week ago, which is the condition
+            // under which a structural answer is most confidently wrong.
+            //
+            // `RepoCortex::last_indexed` existed for this and had no caller — the resource advertised
+            // a TTL that "tracks Repo Cortex's last re-index" while the TTL was the constant below.
+            // The date now travels with the map, so a reader can weigh it.
+            let indexed = self.engine.repo().last_indexed().await.ok().flatten();
+            let freshness = match indexed {
+                Some(at) => format!(
+                    "\n(as of the last index, {at} — nothing re-indexes automatically; run \
+                     `sakur4d index` after changing files)"
+                ),
+                None => "\n(never indexed — run `sakur4d index`) ".to_string(),
+            };
+            format!("{map}\n({used} tokens){freshness}")
         } else if uri == "sakur4://receipt/latest" {
             match self.engine.receipts().latest("default").await.map_err(to_error)? {
                 Some(r) => r.render(),
