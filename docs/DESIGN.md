@@ -867,6 +867,29 @@ what follows is what is genuinely outstanding, each with its evidence.
   until request N's response has been emitted, which is what the two transport attempts were reaching
   for without this constraint to tell them when to release the next message.
 
+  **A sixth fix was attempted and reverted — the third at the transport.** It built the right thing and
+  wired it wrong: a `turnstile` semaphore with one permit, held by the pump while a request is in
+  flight and released by the handler when it finishes, so the server is never handed message N+1 until
+  N has been answered. The control flow was correct and the plumbing was not — the server stopped
+  answering entirely, which is strictly worse than the defect it was meant to fix, so it did not ship.
+
+  Three things were learned that the next attempt should start from, and none of them is a guess:
+
+  * **The pump must read freely and gate the *write*.** Gating the read deadlocks against exactly the
+    client shape that reproduces this: one that writes its whole batch and closes stdin.
+  * **`tokio::io::split` on a `duplex` cannot be used to give the server one half and the pump the
+    other.** A duplex is one bidirectional channel; splitting it and then also reading the peer end
+    gives two readers on one buffer, and the inbound/outbound split that looks obvious does not work.
+    The server needs a genuine read side and write side, which means `tokio::io::simplex` or a stream
+    wrapper rather than a split duplex.
+  * **The permit has to be released by a guard**, not at the end of the handler. `call_tool` returns
+    from the middle on a panic and has two exit paths; a permit that is not released stops the
+    transport reading anything else, and the session hangs rather than fails.
+
+  Recorded because all three are mistakes about plumbing rather than about the idea, and the idea is
+  now measured and sound. Six fixes have failed; the last one failed by wiring, having for the first
+  time had the right constraint to satisfy.
+
   **The protocol says the reordering is legal, which reframes the whole entry.** From the JSON-RPC
   2.0 specification:
 
