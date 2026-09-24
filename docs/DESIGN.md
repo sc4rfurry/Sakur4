@@ -4,6 +4,51 @@ This document records how each requirement is met, and — more usefully — the
 corrections taken along the way. Requirements that are *not* met are listed at the end rather than
 omitted.
 
+## Projects are not isolated, and the store makes that structural
+
+Reported from use, not from a test: working in OMP in one project surfaces material from another.
+The cause is in the store's shape, and it is worth stating before the requirement-by-requirement
+notes because it is the most consequential gap in the project.
+
+**`episodic_stream` has no `project_id` column.** Its scoping keys are `session_id` and `slot_id`.
+Everything else that matters does have one — `semantic_atlas`, `symbolic_fact`, `repo_file` and
+`project` are all keyed by `project_id`, and `db.rs` filters on it in a dozen places — so episodic
+memory is the exception rather than the rule, and it is the table the tools write on every turn.
+
+What that produces, measured against one store with two project roots:
+
+```text
+A commits, with --project-root pointing at A
+B asks with --project-root pointing at B
+  B sees project_id: proj_cd0ca725b7a54d40   <- a different project, correctly detected
+  B recall results: 0                        <- semantic recall IS isolated
+  A recall results: 1
+```
+
+So the project *is* detected — `Engine::open` derives `proj_<hash(project_root)>` and semantic recall
+honours it — and the leak is narrower and more specific than "everything is shared":
+
+* `sakur4.status` counts are **global**. `DbStats` runs bare `SELECT COUNT(*)` against
+  `episodic_stream`, `symbolic_fact`, `semantic_atlas` and `anchor_set` with no project predicate, so
+  a session in project B is told how many episodes exist *across every project in the store*. One
+  of those counts, `anchors`, is exactly what a caller would use to see what has been pinned for
+  this work.
+* **Episodic recall cannot be project-filtered at all**, because the column does not exist.
+  `RecallFilters` carries a `project_id`, `search_semantic` applies it, and `recall.rs:557`
+  post-filters semantic entries by it — but the episodic retriever has only a `session_id` filter, so
+  a caller that does not pass one gets matches from every project.
+* The `session_id` the OMP plugin derives is `omp-${basename(cwd)}`. Two projects whose directories
+  share a name share a session id, and with no project column they share episodic memory too.
+
+**What a fix requires**, recorded rather than attempted because it is a schema change and a tool
+contract change at once: a `project_id` column on `episodic_stream` (migration, indexed, backfilled
+from the owning project where derivable and left null where not), episodic recall filtering on it,
+and `DbStats` taking a project so the counts describe the caller's work rather than the store's
+contents. Until then the honest description is that Sakur4 keeps **one memory per store**, and the
+project dimension exists for semantic memory but not for the transcript.
+
+That is a worse position than the notes below imply, and it is the first thing to fix.
+
 **The requirements are listed here rather than in a separate specification.** There was a
 `sakur4_prd.json` in this repository: the document this was originally written against. It was
 removed from the published tree, and this is why.
