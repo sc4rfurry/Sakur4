@@ -453,9 +453,16 @@ hallucinate. No model is in the decision path.
 checkpoint is taken at fold open, the intermediate steps leave the window at fold close,
 and the full trace stays retrievable with `memory.recall_fold`.
 
-### Every plan ends in one of four reported verdicts
+### Every plan ends in one of five reported verdicts
 
-`aligned` · `snapped` · `partial-reuse` · `full-re-prefill`
+`unknown` · `cold` · `full-re-prefill` · `partial-reuse` · `warm-restored`
+
+Those are the values of `cache_status` that `context.plan_eviction` and `context.receipt`
+actually return. **`aligned` and `snapped` are not among them** — this table said they were
+for several releases. They describe *how* a boundary was reached, not the verdict: snapping
+onto a checkpoint produces `partial-reuse` either way, and whether the cut moved (and by how
+much) is in the plan's `reason` and its structured `snap` field. A reader who filtered on
+`aligned` would have matched nothing.
 
 **The fallback is first class.** With no server, an older build without `/slots`, or a
 sliding-window model whose checkpoints carry only partial state, the plan is still

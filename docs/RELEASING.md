@@ -197,7 +197,9 @@ yank it, and publish a patch that supersedes it.
 
 ## What is not automated yet
 
-- `cargo deny` / `cargo audit` for dependency advisories. Until they are wired up,
-  review `Cargo.lock` changes in a pull request.
+- `cargo deny`, for licences and duplicate versions — a policy question this project has not answered.
+  **`cargo audit` now runs in the lint job**: it found a medium-severity `rustls` advisory on its first
+  hand-run, ten days after that advisory was published. Advisory checking is covered; licence policy is
+  open.
 - Homebrew, Scoop, or any package-manager formula.
 - A signed release. The artifacts are checksummed but not GPG- or cosign-signed.

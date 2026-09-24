@@ -620,15 +620,27 @@ function coherence() {
     family: MONO,
   });
 
-  // --- The four verdicts --------------------------------------------------
+  // --- The verdicts --------------------------------------------------------
+  //
+  // # These were `aligned` and `snapped`, and neither is a value the code emits
+  //
+  // `cache_status` is `CacheStatus::as_str()` — `unknown`, `cold`, `full-re-prefill`,
+  // `partial-reuse`, `warm-restored`. `aligned` and `snapped` describe *how* a boundary was
+  // reached: `BoundaryPlan::aligned(..)` is called for both, and it returns `partial-reuse`
+  // either way. The distinction lives in the plan's `reason` and its structured `snap` field,
+  // so a reader who filtered on `aligned` would have matched nothing at all.
+  //
+  // Four labels for five values, because `unknown` and `cold` are the no-information ends and
+  // this figure is about what a plan reports when it has something to say. `warm-restored` is
+  // fourth — a restore from a save file, which is the best case, not a fallback.
   const vy = 348;
-  s += text(64, vy - 12, "EVERY PLAN ENDS IN ONE OF THESE", { size: 11, weight: 700, fill: T.inkFaint, spacing: 1.4 });
+  s += text(64, vy - 12, "THE VERDICT A PLAN REPORTS", { size: 11, weight: 700, fill: T.inkFaint, spacing: 1.4 });
 
   const verdicts = [
-    ["aligned", "the prefix is preserved exactly at a checkpoint", T.green],
-    ["snapped", "moved back onto an older checkpoint, within tolerance", T.cyan],
+    ["warm-restored", "a save file was restored — the whole prefix is live", T.green],
     ["partial-reuse", "some prefix survives; the rest is prefilled", T.amber],
     ["full-re-prefill", "nothing survived — reported, with the reason", T.red],
+    ["cold / unknown", "no information: nothing cached, or nothing probeable", T.inkDim],
   ];
   let vx = 64;
   const vw = 288;

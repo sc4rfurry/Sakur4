@@ -183,9 +183,17 @@ for (const { line, where } of commands) {
   let subIndex = -1;
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i];
+    // # A bracketed group is a placeholder, not a word
+    //
+    // `sakur4d index [OPTIONS] [PATH]` and `sakur4d [--db <DB>] index` are **usage** lines, and
+    // `[--db <DB>]` starts with `-`, so the flag branch skipped it and the loop took it for the
+    // subcommand. Anything enclosed in `[…]` or `<…>` is a gap to be filled, so it is stepped over
+    // before any of the rest of this runs.
+    if (/^[[<].*[\]>]$/.test(token)) continue;
     if (token.startsWith("--")) {
       // `--flag=value` is self-contained; `--flag value` consumes the next token.
-      if (!token.includes("=") && tokens[i + 1] !== undefined && !tokens[i + 1].startsWith("-")) {
+      const next = tokens[i + 1];
+      if (!token.includes("=") && next !== undefined && !next.startsWith("-")) {
         i += 1;
       }
       continue;

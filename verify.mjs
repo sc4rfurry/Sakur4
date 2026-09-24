@@ -1286,12 +1286,12 @@ function harnessChecks() {
       record("rust", "documentation links resolve", SKIP, "the check is missing");
     } else {
       const r = run(process.execPath, [script]);
-      const ok = r.ok && /relative link\(s\) across the docs resolve/.test(r.output);
+      const ok = r.ok && /wiki link\(s\) resolve/.test(r.output);
       record(
         "rust",
         "documentation links resolve",
         ok ? PASS : FAIL,
-        ok ? (r.output.match(/all (\d+) relative/) ?? ["", "?"])[1] + " links" : lastLines(r.output, 6),
+        ok ? (r.output.match(/(\d+) file link/) ?? ["", "?"])[1] + " file + " + (r.output.match(/(\d+) wiki link/) ?? ["", "?"])[1] + " wiki links" : lastLines(r.output, 6),
       );
     }
   }

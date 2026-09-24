@@ -49,14 +49,39 @@ function markdownFiles(dir, out = []) {
 const broken = [];
 const skipped = [];
 let checked = 0;
+let wikiChecked = 0;
+
+// # GitHub Wiki links are filenames, not paths
+//
+// `[Limitations](Limitations)` is how a wiki page links to another wiki page, and it resolves to
+// `Limitations.md` on github.com. It is not a filesystem path, so resolving it against the directory —
+// which is right for every other file in this repository — reported 109 broken links the moment `wiki/`
+// existed, every one of them a page that is present and correct.
+//
+// So wiki pages are checked against their **siblings**: a link is valid if `<name>.md` exists beside
+// the page. Links that are not page links — a URL, an anchor — are skipped as everywhere else, and a
+// link out of the wiki is left alone because the wiki is published as its own repository and its
+// `../` means something different there.
+const isWiki = (file) => relative(ROOT, file).startsWith(`wiki${sep}`);
 
 for (const file of markdownFiles(ROOT)) {
   const text = readFileSync(file, "utf8");
+  const wiki = isWiki(file);
   for (const match of text.matchAll(/\]\(([^)\s]+)\)/g)) {
     const link = match[1];
     if (/^(https?:|mailto:|#|tel:)/.test(link)) continue;
     const target = link.split("#")[0];
     if (!target) continue;
+
+    if (wiki) {
+      // A wiki link is a page name; anything with a path separator is not one.
+      if (target.includes("/")) continue;
+      wikiChecked += 1;
+      if (!existsSync(join(dirname(file), `${target}.md`))) {
+        broken.push(`${relative(ROOT, file)} -> ${link} (no such wiki page)`);
+      }
+      continue;
+    }
 
     const resolved = resolve(dirname(file), target);
     checked += 1;
@@ -80,11 +105,12 @@ for (const file of markdownFiles(ROOT)) {
 }
 
 if (broken.length) {
-  console.log(`  ${checked} relative link(s) checked, ${broken.length} broken`);
-  for (const b of broken) console.log(`    ${b}`);
+  console.log(`  ${checked} file link(s) and ${wikiChecked} wiki link(s) checked, ${broken.length} broken`);
+  for (const b of broken.slice(0, 20)) console.log(`    ${b}`);
+  if (broken.length > 20) console.log(`    … and ${broken.length - 20} more`);
   process.exit(1);
 }
 console.log(
-  `  all ${checked} relative link(s) across the docs resolve` +
+  `  ${checked} file link(s) and ${wikiChecked} wiki link(s) resolve` +
     (skipped.length ? ` (${skipped.length} left the repository and were not checked)` : ""),
 );
