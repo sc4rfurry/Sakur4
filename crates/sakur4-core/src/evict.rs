@@ -1023,6 +1023,9 @@ impl EvictionEngine {
                     tool_name: None,
                     fold_id: None,
                     droppable: false,
+                    // A fold summary belongs to the project its folded turns came from, so it stays
+                    // visible to that project and not to another sharing the store.
+                    project_id: episodes.first().and_then(|e| e.project_id.clone()),
                     meta: Some(serde_json::json!({
                         "fold_id": fold_id,
                         "goal": goal,

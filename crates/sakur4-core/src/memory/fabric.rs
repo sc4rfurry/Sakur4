@@ -108,6 +108,7 @@ impl MemoryFabric {
         let slot_id = new.slot_id.clone();
         let fold_id = new.fold_id.clone();
         let droppable = new.droppable;
+        let project_for_tx = new.project_id.clone();
         let meta_json =
             new.meta.as_ref().map(|m| serde_json::to_string(m).unwrap_or_else(|_| "null".into()));
 
@@ -149,8 +150,9 @@ impl MemoryFabric {
                 tx.execute(
                     "INSERT INTO episodic_stream
                         (episode_id, seq, session_id, slot_id, role, content, tool_name,
-                         token_count, created_at, fold_id, eviction_tier, droppable, meta_json)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'live', ?11, ?12)",
+                         token_count, created_at, fold_id, eviction_tier, droppable, meta_json,
+                         project_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'live', ?11, ?12, ?13)",
                     rusqlite::params![
                         episode_id_for_tx,
                         seq,
@@ -164,6 +166,7 @@ impl MemoryFabric {
                         fold_id,
                         i64::from(droppable),
                         meta_json,
+                        project_for_tx,
                     ],
                 )?;
 
@@ -1112,7 +1115,8 @@ impl MemoryFabric {
 
 /// Column list for episodes, kept in one place so every mapper agrees.
 const EPISODE_COLS: &str = "episode_id, seq, session_id, slot_id, role, content, tool_name, \
-                            token_count, created_at, fold_id, eviction_tier, droppable, superseded_by";
+                            token_count, created_at, fold_id, eviction_tier, droppable, superseded_by, \
+                            project_id";
 
 const FACT_COLS: &str = "fact_id, kind, qualified_name, file_path, line_start, line_end, \
                          signature, ast_hash, source, project_id, parent_name, body, updated_at";
@@ -1133,6 +1137,7 @@ fn map_episode(r: &Row<'_>) -> rusqlite::Result<EpisodeRow> {
         eviction_tier: EpisodeTier::parse(&tier).unwrap_or(EpisodeTier::Live),
         droppable: r.get::<_, i64>(11)? != 0,
         superseded_by: r.get(12)?,
+        project_id: r.get(13)?,
     })
 }
 

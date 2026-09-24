@@ -42,6 +42,7 @@ pub struct Migration {
 pub const MIGRATIONS: &[Migration] = &[
     Migration { version: 1, name: "initial_memory_fabric", sql: V1 },
     Migration { version: 2, name: "receipt_records_its_context_window", sql: V2 },
+    Migration { version: 3, name: "episodes_record_their_project", sql: V3 },
 ];
 
 /// V2 — the receipt keeps the context window it was measured against.
@@ -65,6 +66,32 @@ pub const MIGRATIONS: &[Migration] = &[
 /// `pressure()` already handles by reporting nothing.
 const V2: &str = r#"
 ALTER TABLE receipt ADD COLUMN context_window INTEGER NOT NULL DEFAULT 0;
+"#;
+
+/// V3 — the Episodic Stream records which project it belongs to.
+///
+/// # Why this is a migration and not a setting
+///
+/// `episodic_stream` was the one table with no `project_id`. Its scoping keys were `session_id` and
+/// `slot_id`, while `semantic_atlas`, `symbolic_fact`, `repo_file` and `project` were all keyed by
+/// project and filtered on it throughout `store::db`.
+///
+/// That made the project dimension half-exist, and the half that was missing is the half the tools
+/// write on every turn. Measured against one store with two project roots, a session in project B
+/// could not be told apart from a session in project A sharing a directory name — the OMP plugin
+/// derives `session_id` as `omp-${basename(cwd)}`, so two checkouts of `src` share both a session id
+/// and, with no column to filter on, the transcript itself.
+///
+/// Nullable on purpose, and not backfilled with a guess. An existing row's project is not
+/// recoverable: the episode table records no root, and inventing one from the session id would
+/// attribute old rows to whichever project happened to be open when the migration ran. Rows written
+/// before this migration keep `NULL`, which reads as "not attributable" — and a scoped query
+/// excludes them rather than showing them to the wrong project.
+///
+/// The partial index covers the read that matters: recall for one project, newest first.
+const V3: &str = r#"
+ALTER TABLE episodic_stream ADD COLUMN project_id TEXT;
+CREATE INDEX idx_episodic_project_seq ON episodic_stream(project_id, seq);
 "#;
 
 const V1: &str = r#"

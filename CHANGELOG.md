@@ -17,6 +17,23 @@ home on crates.io rather than as a stability promise, and may change within a
 
 ### Added
 
+**Episodes record their project (schema v3)**
+
+- `episodic_stream` gained a `project_id` column and an index on `(project_id, seq)`. It was the one
+  table without one — `semantic_atlas`, `symbolic_fact`, `repo_file` and `project` were all keyed by
+  project — and it is the table the tools write on every turn, so a store holding several projects
+  could not keep their transcripts apart. Reported from use: working in OMP in one project surfaced
+  material from another.
+- `sakur4.status` reports `project_episodes`, `project_facts` and `project_atlas` scoped to the
+  project the daemon was started for, alongside the store-wide totals it already had — and
+  `store_holds_other_projects`, so a count that looks low is explained rather than surprising. The
+  store-wide fields remain for `doctor`, which is asking about the store.
+- Existing rows keep `NULL` rather than being backfilled with a guess: an old episode's project is
+  not recoverable, and attributing it to whichever project happened to be open at migration time
+  would be worse than leaving it unattributed. A project-scoped query excludes those rows.
+- **Still open:** episodic recall filters on `session_id` alone, so it does not yet use the new
+  column. Semantic recall is project-scoped; the transcript is not.
+
 **Hermes ContextEngine (`integrations/hermes-plugin/`)**
 
 - Replaces Hermes' summarising context engine with Sakur4's eviction engine, and closes a

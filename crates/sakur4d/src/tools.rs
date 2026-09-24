@@ -537,6 +537,22 @@ pub struct StatusOutput {
     pub stale_entries: i64,
     pub anchors: i64,
     pub repo_files: i64,
+    /// Episodes belonging to *this project*, not to the store.
+    ///
+    /// The `episodes`/`symbolic_facts`/`atlas_entries`/`anchors` fields above are store-wide: one
+    /// Sakur4 store holds every project a user has worked on, so reporting its totals to a session
+    /// tells that session about the others. These are the same counts scoped to the project the
+    /// daemon was started for, and they are the ones to read when asking "what does this project
+    /// remember".
+    ///
+    /// Episodes written before migration 3 have no project and are excluded rather than attributed
+    /// to whoever asks. See `docs/DESIGN.md` on project isolation.
+    pub project_episodes: i64,
+    pub project_facts: i64,
+    pub project_atlas: i64,
+    /// True when the store holds rows this project cannot see, so a count that looks low is
+    /// explained rather than surprising.
+    pub store_holds_other_projects: bool,
     /// Folds the agent opened and has not closed.
     ///
     /// # The model is told to fold, and could not find out what it had open
@@ -682,6 +698,10 @@ impl Sakur4Server {
             fold_id: None,
             droppable: false,
             meta: None,
+            // Which project this turn belongs to. Without it the row is stored unattributed and a
+            // project-scoped query cannot return it — which is how a session in one project came to
+            // see another's transcript. See `docs/DESIGN.md` on project isolation.
+            project_id: Some(self.engine.project_id().to_string()),
         };
         let out = self
             .engine
@@ -1331,6 +1351,12 @@ impl Sakur4Server {
             anchors: s.db.anchors,
             repo_files: s.repo_files,
             open_folds: s.db.folds_open,
+            project_episodes: s.project_episodes,
+            project_facts: s.project_facts,
+            project_atlas: s.project_atlas,
+            store_holds_other_projects: s.db.episodes > s.project_episodes
+                || s.db.symbolic_facts > s.project_facts
+                || s.db.semantic_entries > s.project_atlas,
         }))
     }
 

@@ -152,6 +152,13 @@ pub struct NewEpisode {
     /// Marked droppable only by the producer, e.g. a duplicate file read.
     pub droppable: bool,
     pub meta: Option<serde_json::Value>,
+    /// Which project this turn belongs to, so one store can hold more than one.
+    ///
+    /// Optional because the fabric is also driven without a project — tests, the `--ephemeral`
+    /// demo — and because episodes written before migration 3 have no recoverable value. A row with
+    /// `None` is *not attributable* rather than "belongs to whoever is asking": a project-scoped
+    /// query excludes it instead of showing one project another's transcript.
+    pub project_id: Option<String>,
 }
 
 impl NewEpisode {
@@ -165,6 +172,7 @@ impl NewEpisode {
             fold_id: None,
             droppable: false,
             meta: None,
+            project_id: None,
         }
     }
 
@@ -183,6 +191,7 @@ impl NewEpisode {
             fold_id: None,
             droppable: false,
             meta: None,
+            project_id: None,
         }
     }
 
@@ -196,11 +205,22 @@ impl NewEpisode {
             fold_id: None,
             droppable: false,
             meta: None,
+            project_id: None,
         }
     }
 
     pub fn with_slot(mut self, slot: impl Into<String>) -> Self {
         self.slot_id = Some(slot.into());
+        self
+    }
+
+    /// Attribute this turn to a project.
+    ///
+    /// Set where the engine knows its project — the MCP tools and the CLI — so a store holding more
+    /// than one project can keep their transcripts apart. Left unset, the row is stored as not
+    /// attributable and a project-scoped query will not return it.
+    pub fn with_project(mut self, project: impl Into<String>) -> Self {
+        self.project_id = Some(project.into());
         self
     }
 
@@ -236,6 +256,8 @@ pub struct EpisodeRow {
     pub eviction_tier: EpisodeTier,
     pub droppable: bool,
     pub superseded_by: Option<String>,
+    /// The project this turn belongs to, absent for rows written before migration 3.
+    pub project_id: Option<String>,
 }
 
 impl EpisodeRow {

@@ -124,7 +124,16 @@ impl EngineConfig {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EngineStatus {
     pub project_id: String,
+    /// Store-wide counts. Right for `doctor`, wrong for a session — use the `project_*` fields
+    /// below to describe the caller's own work.
     pub db: crate::store::DbStats,
+    /// Episodes attributed to this project. Rows written before migration 3 are unattributed and
+    /// excluded.
+    pub project_episodes: i64,
+    /// Symbolic facts belonging to this project.
+    pub project_facts: i64,
+    /// Semantic Atlas entries belonging to this project.
+    pub project_atlas: i64,
     pub backend_name: String,
     pub backend_spec: String,
     pub backend_note: String,
@@ -345,6 +354,58 @@ impl Engine {
     pub async fn status(&self) -> Result<EngineStatus> {
         let db = self.db.stats().await?;
         let caps = self.backend.capabilities();
+        // # Counts that describe this project rather than the store
+        //
+        // `DbStats` is a store inventory: every count in it is global, which is right for `doctor`
+        // and wrong for a session. A store holds every project a user has worked on, so reporting
+        // its totals to one of them tells that session about the others — and `anchors` is exactly
+        // the number a caller would read to see what has been pinned for the work in front of it.
+        //
+        // These are the same counts, scoped. `episodic_stream` gained a `project_id` in migration 3
+        // for this; rows written before it are unattributed and are excluded rather than shown to
+        // whichever project happens to be asking.
+        let project_episodes: i64 = self
+            .db
+            .with({
+                let p = self.project_id.clone();
+                move |c| {
+                    Ok(c.query_row(
+                        "SELECT COUNT(*) FROM episodic_stream WHERE project_id = ?1",
+                        [p],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0))
+                }
+            })
+            .await?;
+        let project_facts: i64 = self
+            .db
+            .with({
+                let p = self.project_id.clone();
+                move |c| {
+                    Ok(c.query_row(
+                        "SELECT COUNT(*) FROM symbolic_fact WHERE project_id = ?1",
+                        [p],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0))
+                }
+            })
+            .await?;
+        let project_atlas: i64 = self
+            .db
+            .with({
+                let p = self.project_id.clone();
+                move |c| {
+                    Ok(c.query_row(
+                        "SELECT COUNT(*) FROM semantic_atlas WHERE project_id = ?1",
+                        [p],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0))
+                }
+            })
+            .await?;
         let repo_files: i64 = self
             .db
             .with({
@@ -362,6 +423,9 @@ impl Engine {
 
         Ok(EngineStatus {
             project_id: self.project_id.clone(),
+            project_episodes,
+            project_facts,
+            project_atlas,
             backend_name: self.backend.name().to_string(),
             backend_spec: self.backend.spec(),
             backend_note: self.backend_note.clone(),

@@ -836,6 +836,9 @@ async fn commit(
                 fold_id: None,
                 droppable: false,
                 meta: None,
+                // Same attribution the MCP tool records, so `sakur4d commit` in one project is not
+                // visible to a session in another sharing the store.
+                project_id: Some(engine.project_id().to_string()),
             },
             engine.tokens(),
             true,
