@@ -376,7 +376,12 @@ async fn rewrite_request(state: &ProxyState, body: &[u8]) -> Option<Bytes> {
 
     let window = state.engine.context_window().await;
     let anchors = state.engine.memory().anchors(Some(&state.config.session_id)).await.ok()?;
-    let anchor_block = anchors.iter().map(|a| a.render()).collect::<Vec<_>>().join("\n");
+    // The proxy forwards a real request to a real server, so an anchor set that cannot fit is exactly
+    // the case it must not paper over. `render_anchor_block` returns `BudgetOverflow` for that; the
+    // `join` it replaces returned a block of any size and let the server truncate it silently.
+    let (anchor_block, _) =
+        sakur4_core::memory::anchor::render_anchor_block(&anchors, state.engine.tokens(), 10_000)
+            .ok()?;
     let parts = PromptParts::new()
         .with_system("You are a local coding agent.")
         .with_anchors(anchor_block)

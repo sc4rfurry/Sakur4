@@ -208,7 +208,10 @@ impl ScriptedSession {
         extras: Option<(String, String, String)>,
     ) -> sakur4_core::error::Result<PromptParts> {
         let anchors = self.fabric.anchors(Some(&self.session_id)).await?;
-        let anchor_block = anchors.iter().map(|a| a.render()).collect::<Vec<_>>().join("\n");
+        // The testkit renders anchors the way production does, so a test cannot pass against a
+        // hand-rolled `join` while the daemon refuses on budget. See `tools::assemble_parts`.
+        let (anchor_block, _) =
+            sakur4_core::memory::anchor::render_anchor_block(&anchors, &self.counter, 10_000)?;
         let timeline =
             self.fabric.timeline(&self.session_id, 10_000_000, &self.counter, false).await?;
         let mut parts = PromptParts::new()

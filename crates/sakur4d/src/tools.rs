@@ -631,7 +631,25 @@ async fn assemble_parts(
     extra_recall: Option<&str>,
 ) -> Result<PromptParts, ErrorData> {
     let anchors = engine.memory().anchors(Some(session)).await.map_err(to_error)?;
-    let anchor_block = anchors.iter().map(|a| a.render()).collect::<Vec<_>>().join("\n");
+    // # Anchors go through the function that can refuse, not through a `join`
+    //
+    // This assembled the block itself — `anchors.iter().map(|a| a.render()).join("\n")` — as did the
+    // CLI, the proxy and the testkit, and all four are now routed through here. That made
+    // `render_anchor_block` a function nothing called, and it is the only place FR-4's guarantee
+    // lives:
+    //
+    //   * It returns `Error::BudgetOverflow` when the pinned anchors cannot fit, which the design
+    //     calls the "visible warning rather than silent drop" requirement.
+    //   * It orders anchors by kind priority before rendering.
+    //
+    // A hand-rolled join does neither. Pinned constraints are the one thing the preamble tells the
+    // model to rely on across compaction, so a set that outgrows the budget being concatenated
+    // without complaint is the case the requirement exists for — and every production path took the
+    // silent route. Found by the uncalled-function scan, and it was invisible to tests because the
+    // existing tests for this function call it directly.
+    let (anchor_block, _anchor_tokens) =
+        sakur4_core::memory::anchor::render_anchor_block(&anchors, engine.tokens(), 10_000)
+            .map_err(to_error)?;
     let timeline = engine
         .memory()
         .timeline(session, 1_000_000, engine.tokens(), false)

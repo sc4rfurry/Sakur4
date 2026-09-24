@@ -1032,7 +1032,10 @@ async fn staleness(cli: &Cli) -> Result<()> {
 /// Assemble the prompt for a session from the Fabric, the way the gateway does.
 pub(crate) async fn assemble_parts(engine: &Engine, session: &str) -> Result<PromptParts> {
     let anchors = engine.memory().anchors(Some(session)).await?;
-    let anchor_block = anchors.iter().map(|a| a.render()).collect::<Vec<_>>().join("\n");
+    // Through the function that enforces FR-4's budget refusal and the kind ordering, rather than a
+    // `join` that does neither. See the note in `tools::assemble_parts`.
+    let (anchor_block, _) =
+        sakur4_core::memory::anchor::render_anchor_block(&anchors, engine.tokens(), 10_000)?;
     let timeline = engine.memory().timeline(session, 1_000_000, engine.tokens(), false).await?;
     Ok(PromptParts::new()
         .with_system("You are a local coding agent using Sakur4 memory and context management.")
