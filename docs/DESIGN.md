@@ -429,17 +429,35 @@ what follows is what is genuinely outstanding, each with its evidence.
   was written to reproduce it and does not, for that reason; it is kept as the control that rules
   out the store, the `Db` clone, the tool router and the resolved path.
 
-  **What the fix has to do**, and why it is not in this commit: either the read path must not
-  observe pre-write state, or requests must not be handled concurrently over one store. Both change
-  the serving model rather than a line, and the second trades throughput for consistency — a
-  decision worth making deliberately rather than at the end of a debugging session.
+  **A concurrency fix was tried, and it did not work.** Serialising the MCP tool surface — a
+  `tokio::sync::Mutex` held across `call_tool`'s dispatch, so one tool completes before the next
+  begins — changed the pipelined result by nothing at all: still `episodes 0`. It was reverted rather
+  than kept as a plausible-looking change.
+
+  **That is the most useful thing this round produced**, because it removes request ordering as the
+  mechanism. The read is not racing the write: the commit has answered, the store holds the row, a
+  later session sees it, and the status in the same session does not, with the requests processed in
+  order. What remains is that `sakur4.status` reads something the others do not — and the candidates
+  are narrower than they were.
+
+  **A caution for the next attempt.** `rmcp` dispatches requests concurrently and this project does
+  not control that, so a fix reasoned from "the calls must have interleaved" has to be *tested*
+  against a pipelined probe rather than argued. Three rounds of reasoning have now produced three
+  wrong causes; the experiments that produced real information were the ones comparing paths against
+  each other, and the ones that produced none were the ones reasoning about the framework.
 
   Ruled out along the way, so the next attempt need not repeat it: `--db` versus `SAKUR4_DB`, both
   backends (`none` and `embedded` behave identically), a missing `folds` table, the scalar queries
   themselves (all answer correctly by hand), read-after-write within one `Arc<Mutex<Connection>>`
   (the library tests rely on it and pass), the daemon's store path (`build_config` copies `cli.db`,
-  resolved once in `main.rs`), a duplicate `--db` field shadowing the resolved one, and the daemon's
-  store access generally — `doctor`, `memory.recall` and `memory.staleness` all see the row.
+  resolved once in `main.rs`), a duplicate `--db` field shadowing the resolved one, the daemon's
+  store access generally (`doctor`, `memory.recall` and `memory.staleness` all see the row), and
+  request ordering (the serialised-dispatch experiment above).
+
+  **Persistence is not in question**: the row is on disk, and a second session opens the same file
+  and reports `episodes 1`. Only the session that wrote it, in the same pipelined batch, reports
+  zero — which is the shape of a read served from state captured before the write rather than one
+  served from a different store.
 
   **And a separate hazard this exposed:** `stats()` builds a `scalar` closure ending in
   `unwrap_or(0)`, so any query failure becomes a plausible-looking zero. Its comment says the intent
