@@ -916,22 +916,34 @@ Most agent-memory projects answer *"how do we remember more?"* Sakur4 answers *"
 forget well?"* — because the constraint is not storage, it is the context window and what
 refilling it costs.
 
+**These rows describe what each approach does, not what its authors know.** An earlier version of
+this table got that wrong: it marked competitors as not being "aware the KV cache exists", which is
+a claim about other people's understanding rather than about their software, and one I cannot
+support. Letta documents prompt caching; most harnesses have some notion of it. What can be stated
+is observable behaviour, and that is what the rows now say.
+
 | | Sakur4 | MemGPT / Letta | Mem0 | Plain RAG | Harness compaction |
 |---|---|---|---|---|---|
 | Persistent memory | ✅ | ✅ | ✅ | ✅ | ❌ |
 | Staleness detection | ✅ read-time, anchored | ❌ | ❌ | ❌ | n/a |
 | Deterministic facts | ✅ no model in path | ❌ | ❌ | ❌ | ❌ |
-| **Knows the KV cache exists** | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Aligns eviction to checkpoints** | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Cloud prompt-cache accounting | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Asks the server where its cache can be rewound to | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Places the eviction boundary at that point | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Reports cloud prompt-cache accounting per turn | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Verbatim recall after eviction | ✅ by construction | partial | ❌ | ✅ | ❌ |
 | Code-graph awareness | ✅ tree-sitter | ❌ | ❌ | partial | ❌ |
 | Runs with no model resident | ✅ | ❌ | ❌ | ✅ | ✅ |
 | Deployment | one binary, MCP | service | service | varies | built in |
 
-The comparison is not that the others are worse — they solve different problems, and
-several are more mature. It is that **none of them are aware of the thing that makes
-compaction expensive.**
+Read ✅ and ❌ as "does this, out of the box, in the form shipped" — not as a ranking, and not as a
+statement about what a system could be extended to do. Several of these are more mature projects
+than this one, and the comparison is not that they are worse. It is narrower: **none of them makes
+the inference server's prompt cache the thing the eviction decision is built around**, which is the
+specific problem this project exists to solve.
+
+**This table is not verified against those projects' current documentation**, and any row could be
+out of date. If you maintain one of them and a row is wrong, that is a bug in this README and a
+correction is welcome — a comparison nobody can trust costs more than the row was worth.
 
 ---
 
