@@ -661,6 +661,40 @@ what follows is what is genuinely outstanding, each with its evidence.
   otherwise making the service honour arrival order — rather than by synchronising handlers that have
   already been started. Two locks were tried and neither could work for that reason.
 
+  **The protocol says the reordering is legal, which reframes the whole entry.** From the JSON-RPC
+  2.0 specification:
+
+  > The Server MAY process a batch rpc call as a set of concurrent tasks, processing them in any
+  > order and with any width of parallelism. The Response objects being returned from a batch call
+  > MAY be returned in any order within the Array. The Client SHOULD match contexts between the set
+  > of Request objects and the resulting set of Response objects based on the `id` member.
+
+  And the MCP 2026-07-28 stdio transport says the same thing structurally — responses are
+  "correlated by JSON-RPC `id`" — and adds that "MCP has no protocol-level session, so a server
+  cannot rely on implicit per-connection state to relate one tool call to the next."
+
+  So Sakur4 is not being reordered *against* the protocol; it is being reordered *with* it. What is
+  wrong is that its tools are stateful while its transport is not ordered, and the preamble it ships
+  tells the model to rely on exactly the ordering the protocol declines to provide: commit every
+  turn, then consult what you remember. **A conformance-minded server is free to do what this one
+  did, and an agent that batches is broken by it.**
+
+  That reframing matters for the fix as much as for the diagnosis. Serialising the transport would
+  make this server ordered, which the spec permits and which no client can rely on — so the durable
+  answer is probably not a serving-model change at all, but making the *tools* safe under reordering:
+  a read that observes a write it was pipelined behind, or returns something the caller can detect as
+  early, rather than silently answering from the past. Recording that as the direction rather than
+  attempting it here: it is a design decision about the tool contract, and it deserves to be made
+  deliberately instead of at the end of a long search.
+
+  **A serialising transport was attempted and reverted.** Routing `serve_stdio` through a
+  `tokio::io::duplex` pair that the server drains one message at a time looked like the smallest
+  change that imposes arrival order; it compiled and then answered nothing at all, because `duplex`
+  is not a transport `rmcp::serve_server` accepts. It was reverted rather than debugged, and the
+  lesson is worth keeping: **seven fixes have now been attempted for this bug and all seven were
+  reverted** — four locks, a synchronous write, and now a transport change. The one thing that has
+  never needed reverting is a measurement.
+
   **The probe was temporary and is removed**, along with a round-31 change that is no longer doing
   work: `Db::write` still runs its transaction on the calling task rather than in `spawn_blocking`,
   which the timings show is not what was wrong. It is left in place only because it is correct and
