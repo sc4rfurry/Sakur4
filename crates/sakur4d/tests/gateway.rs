@@ -471,27 +471,33 @@ async fn symbol_and_impact_tools_answer_over_the_wire() {
 
 #[tokio::test]
 async fn status_counts_what_was_written_to_a_file_store() {
-    // # This test passes, and that is the finding
+    // # This test passes, and the reason it passes is the finding
     //
     // It was written to reproduce a defect seen from outside the process against the *binary*:
     //
     //     sakur4d --db X --backend none serve --transport stdio
-    //       memory.commit_episode {content: "hello"}  -> ep_01a0d19778e0743283d73f2700c871eb
+    //       (all frames written at once, stdin closed)
+    //       memory.commit_episode {content: "hello"}  -> ep_01a0d1a83914752e8684d5957ea7a0a6
     //       sakur4.status {}                          -> episodes 0
     //     sqlite> SELECT COUNT(*) FROM episodic_stream  -> 1
     //
-    // The same sequence through this test — a file store, the real `Sakur4Server`, the real HTTP
-    // transport, the SDK's own client — reports the correct count. So the store, the `Db` clone, the
-    // tool router and the file path are all sound, and whatever the binary does differently is
-    // outside this harness.
+    // The difference is **pipelining**. This test calls `call(...).await` and only then asks for
+    // status, so the commit has completed; a probe that writes every frame and closes stdin gets
+    // `episodes: 0` on every run. Sent sequentially, the same session reports 1.
     //
-    // It is kept, rather than deleted as a non-reproduction, because it is the boundary of the
-    // search: it says the fault is in the daemon's own startup rather than in anything these tests
-    // can reach. The next attempt can start from "the in-process path is clean" instead of
-    // re-deriving it.
+    // So the defect is a read that can observe the store before a write it was pipelined behind has
+    // landed — and the write reports success either way, returning a real `ep_…` identifier from a
+    // store that the next request cannot see. The daemon's own trace shows them adjacent:
     //
-    // Every other gateway test opens `":memory:"`, against which the counts are also correct —
-    // which is why none of them could have caught this.
+    //     17.945350  response id=2  commit -> ep_01a0d1a8...
+    //     17.945443  response id=2  status -> episodes 0
+    //
+    // This test is kept as the *control*: it says the store, the `Db` clone, the tool router and the
+    // resolved path are all sound when requests are sequenced, which leaves concurrency in the
+    // request path as the remaining suspect.
+    //
+    // It cannot reproduce the defect, so it is not a regression test for it. A test that does
+    // reproduce it needs to pipeline, which the SDK client here does not do.
     let dir = tempfile::tempdir().expect("temp dir");
     let db_path = dir.path().join("counts.db");
 

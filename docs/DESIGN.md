@@ -394,82 +394,57 @@ what follows is what is genuinely outstanding, each with its evidence.
   Worth naming how this entry was written: the audit found "no production caller" and I recorded it
   as a wiring gap. Reading the assembler showed it is a preview path, and the claim had to be
   narrowed. The first version was true about the call sites and wrong about what they mean.
-* **A store count is reported as zero while the row exists — cause not established.** Reproducible
-  on every run, and written down unresolved rather than guessed at:
+* **A read can observe the store before a pipelined write in front of it has landed.** Cause
+  established; the fix is not written.
+
+  **The trigger is pipelining.** Writing every request at once and closing stdin makes
+  `sakur4.status` report zero counts for rows that exist. Sending the same requests one at a time,
+  waiting for each answer, reports them correctly:
 
   ```sh
-  sakur4d --db /tmp/x.db --backend none serve --transport stdio   # then, in order:
-    memory.fold  {session_id: s, description: d, goal: g}   -> fold_01a0d1882a6e7215956130b6283670d2
-    sakur4.status {}                                        -> open_folds: 0
-  # and afterwards, on the same file:
-  sqlite> SELECT COUNT(*) FROM folds WHERE status='open';   -> 1
+  # pipelined — all frames written, then stdin closed
+  memory.commit_episode {content: "hello"}  -> ep_01a0d1a83914752e8684d5957ea7a0a6
+  sakur4.status {}                          -> episodes 0
+  sqlite> SELECT COUNT(*) FROM episodic_stream  -> 1
+
+  # sequenced — status sent only after the commit's answer arrived
+  sakur4.status {}                          -> episodes 1
   ```
 
-  The fold is written with `status='open'`, the row is in the store, and the same process reports
-  `open_folds: 0` for it. `DbStats.folds_open` is `SELECT COUNT(*) FROM folds WHERE status='open'`
-  — the identical query the shell answers with 1 — and `scalar()` wraps it in `unwrap_or(0)`, so a
-  query that *fails* is indistinguishable from a query that returns nothing. `Engine::status` reads
-  `self.db.stats()` on the same `Db` the fold was written through, and `Db` holds one
-  `Arc<Mutex<Connection>>`, so a stale snapshot is not the obvious explanation and I could not
-  confirm one.
+  **The write reports success either way**, returning a real `ep_…` identifier from a store the next
+  request cannot see, and the daemon's own trace has the two answers 0.1 ms apart:
 
-  Two things follow. The `unwrap_or(0)` inside `stats` is a real hazard on its own: it converts any
-  schema drift, missing table or query error into a plausible-looking zero, and the comment above it
-  says the intent was only to avoid failing `doctor`. And this is the shape of bug that a screenshot
-  would not catch — the number is not obviously wrong, it is wrong in the safe direction, and only
-  comparing it against the store reveals it.
+  ```text
+  17.945350  response id=2  commit -> ep_01a0d1a8...
+  17.945443  response id=3  status -> episodes 0
+  ```
 
-  Recorded as unresolved so the next attempt starts from the reproduction rather than from the
-  symptom.
+  This is the defect that `context engine (FR-16)` has been failing on. Those contracts commit
+  episodes and then read back what the daemon reports, and a check that pipelines them sees the
+  stale answer — which is why the failure looked like eviction being broken and why it appeared in
+  CI while passing locally, where the harness happened to sequence the calls.
 
-  **It is not specific to folds.** `Episodes` is zero for a store holding one episode, and `anchors`,
-  `symbolic_facts` and `atlas_entries` are zero for a store holding none — so **every count
-  `DbStats` produces is zero through the daemon**, and the queries themselves are fine: run by hand
-  against the same file, each answers correctly.
+  **Why nothing caught it earlier.** Every gateway test awaits each call before making the next, so
+  the test suite structurally cannot reach this. `status_counts_what_was_written_to_a_file_store`
+  was written to reproduce it and does not, for that reason; it is kept as the control that rules
+  out the store, the `Db` clone, the tool router and the resolved path.
 
-  That narrows it to the daemon's read path rather than the store. `Db::stats()` is exercised
-  in-process by `consolidate`'s tests, which write through the fabric and read a non-zero
-  `semantic_entries` back — so the shared-connection model works there and does not here. What
-  differs is the daemon: `sakur4d serve` reaches the store through code the library tests do not,
-  and the store it reports on is not the store the tools write to.
+  **What the fix has to do**, and why it is not in this commit: either the read path must not
+  observe pre-write state, or requests must not be handled concurrently over one store. Both change
+  the serving model rather than a line, and the second trades throughput for consistency — a
+  decision worth making deliberately rather than at the end of a debugging session.
 
-  **Narrowed further: the daemon reads fine, and `sakur4.status` alone is wrong.** Three read paths
-  were compared against the same session, after committing one episode to a file store:
+  Ruled out along the way, so the next attempt need not repeat it: `--db` versus `SAKUR4_DB`, both
+  backends (`none` and `embedded` behave identically), a missing `folds` table, the scalar queries
+  themselves (all answer correctly by hand), read-after-write within one `Arc<Mutex<Connection>>`
+  (the library tests rely on it and pass), the daemon's store path (`build_config` copies `cli.db`,
+  resolved once in `main.rs`), a duplicate `--db` field shadowing the resolved one, and the daemon's
+  store access generally — `doctor`, `memory.recall` and `memory.staleness` all see the row.
 
-  | path | result |
-  |---|---|
-  | `sakur4d doctor` (CLI, same binary, same `--db`) | `episodes 1` |
-  | MCP `memory.recall` | finds the episode |
-  | MCP `memory.staleness` | reads its tables |
-  | **MCP `sakur4.status`** | **`episodes 0`** |
-
-  So the store is reachable, the connection is current, and the fault is in what `sakur4.status`
-  reads — not in the daemon as a whole, which is where the previous entry pointed. `memory.recall`
-  reaches the store through `engine.memory()`, and `sakur4.status` through `engine.status()` →
-  `self.db.stats()`. Both are the same `Db`, cloned from the one `Engine::open` creates, so the
-  difference is not the store.
-
-  **What is left to check**, and the reason this is not fixed: whether `sakur4.status` reaches a
-  *different* engine than the tools do, and what `EngineStatus.db` actually holds at the point the
-  handler maps it. Both are one debug print away, and neither is a guess worth shipping blind.
-
-  **The in-process path is clean, which is itself the finding.** `status_counts_what_was_written_to_
-  a_file_store` in `crates/sakur4d/tests/gateway.rs` runs the same sequence — a file store, the real
-  `Sakur4Server`, the real HTTP transport, the SDK's own client — and reports the correct count. It
-  was written to reproduce the defect and does not, so it now marks the boundary of the search: the
-  store, the `Db` clone, the tool router and the resolved path are all sound, and whatever the
-  binary does differently is outside what the test harness reaches. The next attempt starts from
-  "the in-process path is clean" instead of re-deriving it.
-
-  Also ruled out since: both backends (`none` and `embedded` reproduce identically), and a second
-  `--db` declaration shadowing the resolved one — `Cli` has exactly one `db` field, which is the bug
-  fixed earlier when a duplicate did exactly that.
-
-  Ruled out along the way, so the next attempt need not repeat it: `--db` versus `SAKUR4_DB` (both
-  reproduce), a missing `folds` table (present, with the row), the three scalar queries (all answer
-  correctly by hand), read-after-write within one `Arc<Mutex<Connection>>` (the library tests rely on
-  it and pass), the daemon's store path (`build_config` copies `cli.db`, resolved once in `main.rs`,
-  and nothing reassigns it), and the daemon's read path generally (`doctor` sees the row).
+  **And a separate hazard this exposed:** `stats()` builds a `scalar` closure ending in
+  `unwrap_or(0)`, so any query failure becomes a plausible-looking zero. Its comment says the intent
+  was to avoid failing `doctor`; the effect is that `doctor` and `status` cannot distinguish "none"
+  from "could not tell". That is worth fixing on its own.
 
   **This is also now breaking a check.** `verify.mjs`'s `context engine (FR-16)` fails locally with
   `2 contract(s) failed: something was evicted, compression_count advanced`, which is the same
