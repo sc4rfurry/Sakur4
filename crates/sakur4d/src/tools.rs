@@ -623,12 +623,26 @@ async fn assemble_parts(
 pub struct Sakur4Server {
     engine: Arc<Engine>,
     tool_router: ToolRouter<Self>,
+    /// Orders tool calls, so a write lands before a read the client sent after it.
+    ///
+    /// `rmcp` dispatches requests concurrently, so a client that pipelines a commit and a status —
+    /// which is what a harness does — can have the status handler take the connection first. With
+    /// `Db::write` now completing inside its own handler, ordering the handlers is what makes the
+    /// client's order the store's order.
+    ///
+    /// An async mutex because it is held across `.await`; per-server, and a server is per-session,
+    /// so unrelated clients are unaffected.
+    dispatch: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Sakur4Server {
     /// Build the server over an engine.
     pub fn new(engine: Engine) -> Self {
-        Self { engine: Arc::new(engine), tool_router: Self::tool_router() }
+        Self {
+            engine: Arc::new(engine),
+            tool_router: Self::tool_router(),
+            dispatch: Arc::new(tokio::sync::Mutex::new(())),
+        }
     }
 
     pub fn engine(&self) -> &Engine {
@@ -1416,6 +1430,9 @@ impl ServerHandler for Sakur4Server {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        // Held for the whole call, so two pipelined requests are served in the order they arrived
+        // rather than in whatever order they reach the store. See `Sakur4Server::dispatch`.
+        let _dispatch = self.dispatch.clone().lock_owned().await;
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         self.tool_router.call(tcc).await
     }

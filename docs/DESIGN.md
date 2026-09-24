@@ -586,8 +586,30 @@ what follows is what is genuinely outstanding, each with its evidence.
 
   **Where that leaves the fix.** Not in the transport, not in an operation lock, but in how the write
   reaches the connection: the write has to be complete before `Db::write` returns, on a path whose
-  completion the caller actually waits for. That is the next thing to change, and it is now a
-  statement about one function rather than about a system.
+  completion the caller actually waits for.
+
+  **That change was made, and it moved the bug without closing it.** `Db::write` now runs its
+  transaction on the calling task — no `spawn_blocking` — so the lock is taken, the closure runs and
+  `tx.commit()` returns before `write` does. Dispatch was then serialised as well, so two pipelined
+  requests are served in arrival order rather than in whatever order they reach the store. Both
+  changes are in, the suite passes (257 tests), and the behaviour changed in a way worth recording
+  precisely, because it is not fixed:
+
+  | probe | before | after |
+  |---|---|---|
+  | one commit + one status, batched, 8 runs | 0 in 8/8 | **0 in 8/8** |
+  | a **second** status in the same batch | — | **1, reliably** |
+
+  So the first read after a commit still misses it, and the *next* read sees it — which is the same
+  "one write behind" shape, now with the write and the reads strictly ordered and the write provably
+  finished (its handler returns only after `tx.commit()`). The remaining possibility is that
+  `tx.commit()` returning is not the same as the row being visible to the next reader *on the same
+  connection*, which is a statement about this store's pragmas rather than about scheduling.
+
+  **Two more fixes ruled out, then**: ordering the callers, and ordering the store's operations. Both
+  were correct about ordering and neither was the problem. What is left is a single question — what
+  makes a committed row visible to the next statement on the same `Connection` — and it is now
+  narrow enough to answer by reading the pragmas `Db::open` sets rather than by probing from outside.
 
   **The loose end from two rounds ago now has a shape.** Serialising MCP dispatch should have ordered
   the two handlers and did not, which fits an acknowledgement produced outside the handler's own

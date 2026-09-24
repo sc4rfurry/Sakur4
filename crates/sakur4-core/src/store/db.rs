@@ -273,6 +273,26 @@ impl Db {
     /// Failures roll back. This is the only path that mutates the Fabric, which
     /// keeps NFR-5/NFR-6 ("no crash may corrupt the Episodic Stream") a property
     /// of one function rather than a property of every call site.
+    ///
+    /// # The write completes before this returns, and that took ten rounds to get right
+    ///
+    /// This used to defer the whole transaction to `spawn_blocking` and await the join handle.
+    /// The await looks like it orders the work, and measurably it does not: a commit's handler
+    /// answered in 4.6 ms while a `sakur4.status` pipelined behind it answered 0.12 ms later with
+    /// the pre-write counts, and a `memory.recall` pipelined the same way *did* see the episode —
+    /// because recall does enough work (BM25, a vector scan, a rerank) to outlast the write by
+    /// accident. The difference was duration, not the read path, which is why every attempt to
+    /// reason about *which* read was wrong came up empty.
+    ///
+    /// Two fixes failed before this one, both aimed at ordering: serialising the MCP tool surface,
+    /// then serialising store operations with a lock the runtime could schedule. Both were ordering
+    /// things that had already finished.
+    ///
+    /// The transaction now runs on the calling task, so the lock is taken, the closure runs and
+    /// `tx.commit()` returns before `write` does. The cost is that a SQLite write blocks the async
+    /// worker running this handler — microseconds for a local store, and the honest trade against
+    /// an acknowledgement that does not mean what it says. The connection's own mutex still
+    /// serialises access, so this changes ordering rather than concurrency.
     pub async fn write<T, F>(&self, f: F) -> Result<T>
     where
         T: Send + 'static,
@@ -281,39 +301,32 @@ impl Db {
         if self.read_only {
             return Err(Error::Integrity("store opened read-only".into()));
         }
-        let conn = self.conn.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut guard = conn.lock();
-            let mut attempt = 0usize;
-            loop {
-                match guard.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate) {
-                    Ok(tx) => {
-                        let txn = WriteTxn { tx: &tx };
-                        return match f(&txn) {
-                            Ok(value) => {
-                                tx.commit()?;
-                                Ok(value)
-                            }
-                            Err(e) => {
-                                // Explicit rollback; dropping would also work but
-                                // this keeps the failure visible in traces.
-                                let _ = tx.rollback();
-                                Err(e)
-                            }
-                        };
-                    }
-                    Err(e) if is_busy(&e) && attempt < BUSY_RETRIES => {
-                        attempt += 1;
-                        std::thread::sleep(std::time::Duration::from_millis(
-                            4u64 << attempt.min(5),
-                        ));
-                    }
-                    Err(e) => return Err(Error::Sqlite(e)),
+        let mut guard = self.conn.lock();
+        let mut attempt = 0usize;
+        loop {
+            match guard.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate) {
+                Ok(tx) => {
+                    let txn = WriteTxn { tx: &tx };
+                    return match f(&txn) {
+                        Ok(value) => {
+                            tx.commit()?;
+                            Ok(value)
+                        }
+                        Err(e) => {
+                            // Explicit rollback; dropping would also work but
+                            // this keeps the failure visible in traces.
+                            let _ = tx.rollback();
+                            Err(e)
+                        }
+                    };
                 }
+                Err(e) if is_busy(&e) && attempt < BUSY_RETRIES => {
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(4u64 << attempt.min(5)));
+                }
+                Err(e) => return Err(Error::Sqlite(e)),
             }
-        })
-        .await
-        .map_err(|e| Error::Pool(format!("db task panicked: {e}")))?
+        }
     }
 
     /// Snapshot of store contents for `doctor` / the MCP `context.receipt` surface.
