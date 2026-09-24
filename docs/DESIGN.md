@@ -557,14 +557,37 @@ what follows is what is genuinely outstanding, each with its evidence.
   operations — which rules out a third family of explanations: the ordering of the two calls is not
   what is wrong, at any layer that has been tried.
 
-  **What that leaves, and it is uncomfortable.** The commit reports success with a real `ep_…`
-  identifier, the row reaches the store, and a read in the same session still does not see it — with
-  the reads and writes now serialised end to end. Something is completing the write *after* both the
-  handler and the lock have moved on, and the daemon's own trace hints at where to look: on the
-  pipelined pair it logs a `response message id=2` for the commit and **no response line for the
-  status at all**, even though the client receives one. A handler whose response is not logged where
-  the other's is does not look like the same code path, and that is the next thing to establish —
-  from the trace, not from reasoning about the framework.
+  **The trace, in full order, and it is the answer.** Requests are received 0.09 ms apart and the
+  responses are logged 0.12 ms apart:
+
+  ```text
+  11.374180  received request id=2  memory.commit_episode
+  11.374269  received request id=3  sakur4.status
+  11.378768  response message id=2  {"episode_id":"ep_01a0d1cf7d8e76f796a08015b6acea39", …}
+  11.378889  response message id=3  {"anchors":0, … "episodes":0, …}
+  ```
+
+  The commit's handler took **4.6 ms** to answer; the status handler answered **0.12 ms** after it.
+  A read that had waited for that transaction would have taken a comparable time; one that took a
+  tenth of a millisecond did not wait for anything. (An earlier round read this trace as "no
+  response line for the status" — that was wrong, the line is there, and the two timestamps are the
+  part that matters.)
+
+  **And it is not every read.** Pipelining a commit, a `memory.recall` and a `status` together:
+  recall finds the episode, status reports zero. Recall does more work — BM25 over the transcript,
+  a vector scan, a rerank — and outlasts the commit by accident. **The difference is duration, not
+  the read path.**
+
+  **So the write completes after its handler has returned**, which is why serialising callers
+  changed nothing and serialising store operations changed nothing: both were ordering things that
+  had already finished. `Db::write` builds a transaction, calls `tx.commit()` inside a
+  `spawn_blocking` closure, and awaits that task — and the closure's work is still observably
+  completing afterwards, on the blocking pool, while the handler that awaited it answers.
+
+  **Where that leaves the fix.** Not in the transport, not in an operation lock, but in how the write
+  reaches the connection: the write has to be complete before `Db::write` returns, on a path whose
+  completion the caller actually waits for. That is the next thing to change, and it is now a
+  statement about one function rather than about a system.
 
   **The loose end from two rounds ago now has a shape.** Serialising MCP dispatch should have ordered
   the two handlers and did not, which fits an acknowledgement produced outside the handler's own
