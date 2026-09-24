@@ -1329,7 +1329,27 @@ impl EvictionEngine {
                 c.current_tier.as_str(),
                 next.as_str(),
                 c.value,
-                tokens_before - tokens_after,
+                // # `saturating_sub`, because a tier step can legitimately reclaim nothing
+                //
+                // This was `tokens_before - tokens_after` and it **panicked the daemon**: an
+                // `attempt to subtract with overflow` at this line, on the async worker, which left
+                // `context.plan_eviction` with no answer at all — the client saw a 20-second timeout
+                // and concluded the daemon was unreachable, so the Hermes context engine deferred
+                // and never compacted. `context engine (FR-16)` failed on two downstream contracts
+                // for many rounds because of a subtraction inside a `format!` argument.
+                //
+                // The underflow is the documented behaviour two blocks up: `Masked` renders a header
+                // plus a 160-character preview, so for a short episode the stub is *longer* than the
+                // content it replaces and `tokens_after` exceeds `tokens_before`. That is allowed on
+                // purpose — the step is worth taking because a later rung reclaims, and the ladder is
+                // finite — so the arithmetic has to tolerate it rather than the policy changing.
+                //
+                // Guarded by `context engine (FR-16)`, which drives this path against a live daemon
+                // with the 90-episode transcript that reproduced the panic. There is deliberately no
+                // unit test here: the ladder needs enough pressure to propose a step, and fixtures
+                // that failed to reach it passed with the overflow restored — a regression test that
+                // cannot fail is worse than none, which is how this survived so long.
+                tokens_before.saturating_sub(tokens_after),
                 if c.notes.is_empty() {
                     String::new()
                 } else {

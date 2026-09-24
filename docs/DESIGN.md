@@ -4,43 +4,56 @@ This document records how each requirement is met, and — more usefully — the
 corrections taken along the way. Requirements that are *not* met are listed at the end rather than
 omitted.
 
-## The Hermes check fails because `context.plan_eviction` stalls on a long transcript
+## The Hermes check failed on a subtraction inside a log message
 
-`context engine (FR-16)` has failed with `2 contract(s) failed: something was evicted,
-compression_count advanced` for many rounds, and the failure reads as the engine refusing to
-compact. It is not. The two failing contracts are downstream of a **timeout**.
+`context engine (FR-16)` failed with `2 contract(s) failed: something was evicted, compression_count
+advanced` for many rounds, and it read as the engine refusing to compact. It was not. **The daemon was
+panicking.**
 
-`Sakur4ContextEngine::compress` commits the transcript, asks the daemon for an eviction plan, and if
-`plan` comes back `None` it logs "Sakur4 unreachable; leaving context unchanged". `Sakur4Client` uses
-a 20-second timeout, so a stalled plan is indistinguishable from a dead daemon, and the engine
-defers — which is the honest thing to do and is exactly what the check observes.
+Run against a 90-episode transcript, the daemon's own trace said:
 
-**Measured**, against a daemon started the way the verifier starts one (`--backend embedded
---context-window 8192`):
+```text
+thread 'tokio-rt-worker' panicked at crates/sakur4-core/src/evict.rs:1332:17:
+attempt to subtract with overflow
+```
 
-| store state | `context.plan_eviction` |
-|---|---|
-| empty, `apply=false` | answers in 11 ms, `pressure: relaxed` |
-| 5 episodes, `apply=false` | answers in 3 ms |
-| 5 episodes, `apply=true` | answers in 6 ms, `applied: false` |
-| **90 episodes from the check's history** | **no response within 20 s** |
+`Escalation::Proposed` formats `"N token(s) reclaimed"` from `tokens_before - tokens_after`. Two
+blocks above it, the code documents that a `Masked` stub can be **longer** than the short episode it
+replaces — that is why the ladder no longer refuses such a step, because a later rung does reclaim.
+Both facts together meant the subtraction underflowed, and because it happened inside a `format!`
+argument the panic landed on an async worker: the request was never answered.
 
-So the plan path is sound on a small store and stalls on the one the check builds. That is a real
-defect in the daemon and the reason a documented feature — "the engine compacts the context" — does
-not happen on a long session, which is the only session where it matters.
+The rest of the failure is downstream and looked like something else entirely:
 
-**What is not yet established** is where it stalls. Candidates worth checking first, in the order the
-evidence points: the daemon runs with `--context-window 8192` while the check calls
-`compress(..., current_tokens=26000)`, so the plan is asked to reclaim three times the window it was
-told it has; and `apply: true` writes eviction tiers to `episodic_stream`, which is guarded by
-triggers that block `UPDATE` (FR-1's append-only invariant) — if the tier write is one of the blocked
-ones, the plan would fail rather than stall, but a retry loop would look exactly like this.
+* `context.plan_eviction` returned nothing, so the plugin's 20-second client timeout expired.
+* `compress` treats a `None` plan as **"Sakur4 unreachable"** and returns the messages unchanged —
+  the honest response to a daemon that did not answer, and precisely what the check observed.
+* So a session's context was never compacted. Not on a short one, where the check's smaller probes
+  pass, but on a long one — the only case where compaction matters.
 
-**Recorded rather than fixed**, and the distinction matters: this is the first time the FR-16 failure
-has been attributed to something other than the request-ordering bug, and both were real — ordering
-explains the pipelined reads, and this explains why a compacting engine does not compact. A future
-attempt should reproduce it with a plan call on a 90-episode store and read the daemon's own trace,
-which is how the ordering bug was finally found after six rounds of reasoning about it.
+**Fixed with `saturating_sub`.** The measurement that confirms it, against the same 90-episode store:
+
+```text
+plan answered: pressure=compacting live=11850 budget=8192 savings=4380 applied=true
+updates: 43
+NOTE: a step that reclaims nothing is present (5->37) — the case that used to panic
+      its reason reads: tier live → masked (value 2.65, 0 token(s) reclaimed)
+```
+
+**On the regression test.** Three attempts at a unit test for this were removed rather than kept.
+Each passed with the overflow restored, because the ladder needs enough pressure to propose a step
+and the fixtures did not reach it — and a regression test that cannot fail is worse than none, which
+is how this survived. What guards it now is `context engine (FR-16)` itself, which drives 44 contracts
+against a live daemon and includes the transcript that reproduced the panic. That is recorded at the
+fix site so the next person does not add the test back without checking that it fails first.
+
+**Two nested wrong readings, both plausible.** The first was that the check never committed its
+history, so the plan had nothing to evict — the engine already commits every message. The second was
+that this was a stall rather than a crash, which is what a timeout looks like from outside. Neither
+survived a look at the daemon's stderr, and both would have produced a "fix" somewhere other than the
+bug.
+
+## Projects are isolated
 
 > **Fixed.** `episodic_stream` gained a `project_id` in migration 3; the MCP and CLI commit paths
 > record it; episodic recall filters on it, closing the gap where only the Atlas retriever honoured
