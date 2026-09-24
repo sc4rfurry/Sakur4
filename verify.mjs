@@ -122,6 +122,7 @@ const CATALOG = {
     "no unused dependencies",
     "documentation links resolve",
     "anchors go through the budget check",
+    "workflows are structurally sound",
   ],
   encryption: [
     "encryption at rest (FR-20)",
@@ -1313,6 +1314,29 @@ function harnessChecks() {
         "anchors go through the budget check",
         ok ? PASS : FAIL,
         ok ? "all four prompt paths" : lastLines(r.output, 6),
+      );
+    }
+  }
+
+  // # The workflows are shaped the way they read
+  //
+  // GitHub accepts a malformed workflow and runs a subset of it: a step under the wrong key is not a
+  // syntax error, it is a step that never runs. `workflow-shell.mjs` parses each `run:` block's shell
+  // and cannot see that. This checks step indentation within each job, and that `cancel-in-progress`
+  // is the value each workflow needs — CI supersedes a stale run, a release must never be cancelled
+  // midway through publishing.
+  if (wanted("workflow-shape", "rust")) {
+    const script = join(ROOT, "docs", "verification", "workflow-shape.mjs");
+    if (!existsSync(script)) {
+      record("rust", "workflows are structurally sound", SKIP, "the check is missing");
+    } else {
+      const r = run(process.execPath, [script]);
+      const ok = r.ok && /all structurally sound/.test(r.output);
+      record(
+        "rust",
+        "workflows are structurally sound",
+        ok ? PASS : FAIL,
+        ok ? (r.output.match(/(\d+) step\(s\)/) ?? ["", "?"])[1] + " steps" : lastLines(r.output, 6),
       );
     }
   }

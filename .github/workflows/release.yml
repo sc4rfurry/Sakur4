@@ -21,6 +21,19 @@ on:
       dry_run:
         description: "Build and verify, but do not create a GitHub release"
         type: boolean
+
+# # A release is never cancelled, and never overlaps itself
+#
+# `ci.yml` cancels superseded runs because a stale test result is worthless. The opposite holds here:
+# two concurrent release runs for the same tag would race to create the same GitHub release and upload
+# the same assets, and cancelling a run midway through `gh-release` can leave an archive published with
+# no checksum beside it — a state a user cannot detect from the download page.
+#
+# So `cancel-in-progress` is **false**, and deliberately the other way from CI. A `workflow_dispatch`
+# dry run and a real tag push for the same ref then queue rather than interleave.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
         default: true
 
 permissions:

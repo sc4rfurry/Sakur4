@@ -279,6 +279,9 @@ node docs/verification/doc-links.mjs
 # Do the prompt-building paths still route anchors through FR-4's budget check?
 node docs/verification/anchor-wiring.mjs
 
+# Are the GitHub workflows shaped the way they read? (step indentation, concurrency)
+node docs/verification/workflow-shape.mjs
+
 # Candidates for reading, not a verdict: public functions nothing here calls. Not wired into
 # erify.mjs, because most of what it lists is legitimate library surface — read the doc comments.
 node docs/verification/uncalled.mjs
