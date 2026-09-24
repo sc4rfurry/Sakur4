@@ -374,3 +374,20 @@ jobs:
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: false
+
+      # # Prove the release is installable, now that it exists
+      #
+      # Everything above this line builds archives and checksums them. None of it downloads one
+      # back and installs it, which is the only thing a user does. The harness fetches the archive
+      # and its checksum file from the tag just published, refuses a tampered copy, extracts, and
+      # places the binary — the installer's own path, against the release that now exists rather
+      # than against the previous one.
+      #
+      # It cannot run before the release is created, which is why it is here rather than in the
+      # verify job: the archive it downloads is the one this run produced. A failure here means the
+      # release is published and not installable, which is worth knowing immediately and worth
+      # failing the run for.
+      - name: The published release is installable
+        env:
+          SAKUR4_VERSION: ${{ github.ref_name }}
+        run: sh docs/verification/install-path.sh
