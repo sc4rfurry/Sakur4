@@ -347,27 +347,36 @@ what follows is what is genuinely outstanding, each with its evidence.
   corruption and not tampering. There is no GPG signature and no build provenance attestation.
 * **`cargo audit` / `cargo deny` in CI** — neither runs. A small, lockfile-pinned dependency set is
   not a substitute for a vulnerability feed.
-* **Three `PromptParts` slots are never populated in production.** `PromptParts` can render eight
-  parts, and the three production assemblers use five: `tools.rs`, `cli.rs` and `proxy.rs` all call
-  `with_system`, `with_anchors`, `with_timeline` and (in two of them) `with_recall`. **Nothing in
-  `src/` calls `with_repo_map`, `with_tool_schemas` or `with_folds`** — the only callers are
-  `prompt.rs`'s own tests and `sakur4-testkit`'s harness.
+* **Three `PromptParts` slots are populated only by tests and the testkit.** `PromptParts` renders
+  eight parts; every production caller uses five — `with_system`, `with_anchors`, `with_timeline`,
+  and `with_recall` in two of the three. Nothing in `src/` calls `with_repo_map`,
+  `with_tool_schemas` or `with_folds`; the only callers are `prompt.rs`'s own tests and
+  `sakur4-testkit`'s harness.
 
-  This is a wiring gap rather than dead code, and it was found by an audit that set out to delete
-  dead code and noticed the *callers* were missing instead. What it means in practice:
+  **This is less alarming than it first reads, and the first draft of this entry overstated it.**
+  The one production assembler, `tools.rs::assemble_parts`, is a *diagnostic preview*: it exists so
+  `context.plan_eviction` can show what a prompt would contain, and it is not the path any real
+  request takes. Sakur4 never assembles the prompt a model receives — the harness does, and the
+  proxy rewrites what the harness already built. Tool schemas and a repo map are the harness's to
+  place, so their absence here is correct rather than missing.
 
+  What is genuinely open is narrower:
+
+  * `fold summaries` — `receipt.rs` accounts tokens to `RenderedPart::Folds`, so the receipt reports
+    a category that is always zero, and a fold's summary reaches the model only as an episode via
+    `unfold`. Whether it should also be a rendered part is a design question this document has not
+    answered, and the token accounting implies an answer it does not implement.
   * `repo map` — `code.get_repo_map` exists as a tool and `RenderedPart::RepoMap` exists as a slot
-    with a token budget, but no assembler fills it. The tool's own doc says a map "survives being
-    compacted because it is regenerated", which presumes it is in the prompt.
-  * `tool schemas` — the harness supplies its own, so this is closer to redundant than broken.
-  * `fold summaries` — the slot is rendered and `receipt.rs` accounts tokens to
-    `RenderedPart::Folds`, so the receipt reports a category that is always zero. Folds still reach
-    the model as episodes via `unfold`, which is why this is a gap rather than a feature that does
-    nothing.
+    with a budget, and nothing connects them. The tool's own doc says a map "survives being
+    compacted because it is regenerated", which presumes it is somewhere in the request.
 
-  Recorded rather than fixed in this pass: wiring a repo map into the assemblers changes what every
-  request contains and therefore what the A/B benchmark measures, and that needs its own
-  measurement rather than a quiet edit at the end of an audit.
+  Recorded rather than changed: putting a repo map into the prompt is a product decision with a
+  measurable cost, and the A/B benchmark is what would measure it. That is its own piece of work,
+  not an edit at the end of an audit.
+
+  Worth naming how this entry was written: the audit found "no production caller" and I recorded it
+  as a wiring gap. Reading the assembler showed it is a preview path, and the claim had to be
+  narrowed. The first version was true about the call sites and wrong about what they mean.
 
 ### Deviations from the original plan, stated
 
