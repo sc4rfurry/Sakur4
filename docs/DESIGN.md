@@ -485,6 +485,26 @@ what follows is what is genuinely outstanding, each with its evidence.
   after it does see it. What is wrong is the **ordering of the acknowledgement** — the tool returns
   before the write is observable to the next reader.
 
+  **The lag is structural, not a settling delay.** Repeating the pipelined pair inside one session
+  shows a read that is exactly one write behind, not a read that catches up:
+
+  ```text
+  round 1  commit "one", status pipelined behind it   -> 0     (expected 1)
+  round 2  commit "two", status pipelined behind it   -> 2     (expected 2, and it is right by luck)
+  round 3  status alone                               -> 2
+  ```
+
+  Round 2 reports the count from *before* its own commit — two episodes, both of which existed when
+  it ran — so the read is not late, it is answering an earlier question. A read sees every write
+  except the one immediately in front of it.
+
+  **This is NOT a durability defect, and an earlier draft of this entry said it might be.** Killing
+  the daemon with `SIGKILL` the instant a commit's answer arrives leaves the episode in the store —
+  measured: nineteen commits written as a pipelined batch, killed hard, nineteen rows present. So
+  `Db::write` commits durably and NFR-5/NFR-6 hold. The scope is visibility, which is narrower and
+  less alarming than the draft claimed, and the correction matters because a durability scare would
+  send the next reader to the wrong place.
+
   **And the write is awaited**, which is what makes this hard to place. `commit_episode` closes its
   transaction at `fabric.rs:191` with `.await?` and only then builds `CommitOutcome` at 201, so the
   handler's future completes *after* the transaction. The await is correct, the transaction commits,
@@ -492,15 +512,24 @@ what follows is what is genuinely outstanding, each with its evidence.
   `Db::write`'s `spawn_blocking` and the runtime it runs on, none of which is visible from outside
   the process.
 
+  **Where the next attempt should start.** The fix is not in the MCP layer: serialising dispatch was
+  tried and changed nothing. It is in `Db::write` — something about how its `spawn_blocking` task
+  relates to the caller's await — and the first measurable step is to time a batch of commits. If
+  they serialise, the await is honest and only *visibility* lags; if they all return immediately, the
+  await is not waiting for the closure and that is the defect.
+
   **The loose end from two rounds ago now has a shape.** Serialising MCP dispatch should have ordered
   the two handlers and did not, which fits an acknowledgement produced outside the handler's own
   await chain rather than a race between handlers.
 
   **Why this matters beyond one status field.** `commit_episode` is FR-1's only write path, and the
   preamble tells the model to commit every turn. An agent that commits and then asks what it
-  remembers is told nothing — and the same window means the acknowledgement does not imply
-  durability, which is the property NFR-5/NFR-6 exist to provide. **Whether a write survives a crash
-  inside that window is untested, and is now the more important question than the status field.**
+  remembers is told nothing — and every read it makes for the rest of that turn is one commit stale.
+  For a memory layer whose stated contract is "the stable surface is the tool result", a tool result
+  that is always one write behind is a contract that does not hold.
+
+  It is **not** a durability problem — that was measured and cleared above — so the honest severity
+  is: the data is safe, and what the tools say about it is late.
 
   **A caution for the next attempt.** `rmcp` dispatches requests concurrently and this project does
   not control that, so a fix reasoned from "the calls must have interleaved" has to be *tested*
