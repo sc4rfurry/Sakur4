@@ -24,7 +24,7 @@ use crate::error::Result;
 use crate::ids::{new_id, now_rfc3339};
 use crate::prompt::{PromptParts, RenderedPart};
 use crate::store::Db;
-use crate::tokens::{TokenCounter, TokenizerKind};
+use crate::tokens::TokenCounter;
 
 /// Token counts by category.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -582,62 +582,6 @@ fn row_to_receipt(row: ReceiptRow) -> Result<Receipt> {
         tokenizer: String::new(),
         backend: String::new(),
     })
-}
-
-/// Convenience for the MCP surface: build, enrich and persist in one call.
-pub struct ReceiptBuilder {
-    receipt: Receipt,
-}
-
-impl ReceiptBuilder {
-    pub fn new(
-        session_id: &str,
-        slot_id: Option<&str>,
-        turn: i64,
-        parts: &PromptParts,
-        counter: &TokenCounter,
-        context_window: usize,
-    ) -> Self {
-        Self { receipt: Receipt::build(session_id, slot_id, turn, parts, counter, context_window) }
-    }
-
-    pub fn cache(
-        mut self,
-        status: &str,
-        detail: impl Into<String>,
-        reused: usize,
-        prefilled: usize,
-    ) -> Self {
-        self.receipt.cache_status = status.to_string();
-        self.receipt.cache_detail = detail.into();
-        self.receipt.prompt_tokens_reused = Some(reused);
-        self.receipt.prompt_tokens_prefilled = Some(prefilled);
-        self
-    }
-
-    pub fn eviction(mut self, summary: EvictionSummary) -> Self {
-        self.receipt.eviction = Some(summary);
-        self
-    }
-
-    pub fn prompt_eval_ms(mut self, ms: i64) -> Self {
-        self.receipt.prompt_eval_ms = Some(ms);
-        self
-    }
-
-    pub fn backend(mut self, name: impl Into<String>) -> Self {
-        self.receipt.backend = name.into();
-        self
-    }
-
-    pub fn tokenizer_kind(mut self, kind: TokenizerKind) -> Self {
-        self.receipt.tokenizer = kind.as_str().to_string();
-        self
-    }
-
-    pub fn build(self) -> Receipt {
-        self.receipt
-    }
 }
 
 #[cfg(test)]

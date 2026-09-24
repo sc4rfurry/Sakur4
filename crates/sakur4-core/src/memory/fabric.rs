@@ -5,19 +5,17 @@
 //! defines the *shape* of a deterministic fact, and this module is the only
 //! place that turns one into a row.
 
-use std::collections::HashMap;
-
 use rusqlite::{OptionalExtension, Row};
 
 use crate::error::{Error, Result};
-use crate::ids::{new_id, now_rfc3339, short_hash_str};
+use crate::ids::{new_id, now_rfc3339};
 use crate::memory::anchor::{AnchorRow, ConstraintDetector, PinRequest};
-use crate::memory::dependency::{DependencyGraph, EdgeKind, EdgeRow, NodeKind, NodeRef};
+use crate::memory::dependency::{DependencyGraph, EdgeKind, EdgeRow, NodeRef};
 use crate::memory::episodic::{EpisodeRow, EpisodeTier, NewEpisode, Role};
 use crate::memory::semantic::{
     AnchorType, SemanticEntry, SemanticWrite, StaleEntry, StaleReason, StalenessReport,
 };
-use crate::memory::symbolic::{FactKind, FactSource, SymbolicFact, SymbolicWrite, ToolOutputFacts};
+use crate::memory::symbolic::{FactKind, FactSource, SymbolicFact, ToolOutputFacts};
 use crate::store::Db;
 use crate::tokens::TokenCounter;
 
@@ -1256,50 +1254,4 @@ pub(crate) fn insert_edge_tx(
     let (a, b, c, d, e, f, g) = edge.params();
     tx.execute(EdgeRow::insert_sql(), rusqlite::params![a, b, c, d, e, f, g])?;
     Ok(())
-}
-
-/// Compute the hash Sakur4 records for an episode anchor.
-pub fn episode_anchor_hash(seq: i64) -> String {
-    format!("{seq:016x}")
-}
-
-/// Compute the hash Sakur4 records for a symbolic anchor.
-pub fn fact_anchor_hash(fact: &SymbolicFact) -> String {
-    fact.ast_hash.clone()
-}
-
-/// Convenience for callers that need a fact id without constructing a write.
-pub fn new_fact_id() -> String {
-    new_id("sym")
-}
-
-/// Group facts by file for outline rendering.
-pub fn group_by_file(facts: &[SymbolicFact]) -> HashMap<String, Vec<&SymbolicFact>> {
-    let mut out: HashMap<String, Vec<&SymbolicFact>> = HashMap::new();
-    for f in facts {
-        if let Some(path) = &f.file_path {
-            out.entry(path.clone()).or_default().push(f);
-        }
-    }
-    out
-}
-
-/// Re-export so callers do not need the `symbolic` module path for the common
-/// "hash this text" operation.
-pub fn hash_text(text: &str) -> String {
-    short_hash_str(text)
-}
-
-/// Node kind for a fact, for callers building edges.
-pub fn fact_node(fact_id: &str) -> NodeRef {
-    NodeRef::new(NodeKind::SymbolicFact, fact_id)
-}
-
-/// Convenience: build a `SymbolicWrite` from a parser result.
-pub fn parser_write(
-    kind: FactKind,
-    name: impl Into<String>,
-    body: impl Into<String>,
-) -> SymbolicWrite {
-    SymbolicWrite::new(kind, name).body(body)
 }
