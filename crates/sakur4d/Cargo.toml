@@ -26,6 +26,7 @@ path = "src/main.rs"
 encryption = ["sakur4-core/encryption"]
 
 [dependencies]
+futures.workspace = true
 sakur4-core.workspace = true
 
 tokio.workspace = true

@@ -26,6 +26,7 @@
 
 use std::sync::Arc;
 
+use futures::FutureExt;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{
@@ -1479,8 +1480,47 @@ impl ServerHandler for Sakur4Server {
         // Held for the whole call, so two pipelined requests are served in the order they arrived
         // rather than in whatever order they reach the store. See `Sakur4Server::dispatch`.
         let _dispatch = self.dispatch.clone().lock_owned().await;
+        let name = request.name.to_string();
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        self.tool_router.call(tcc).await
+        // # A panicking tool answers with an error, not with silence
+        //
+        // `context engine (FR-16)` failed for many rounds because a subtraction overflowed inside a
+        // `format!` in the eviction planner. The panic landed on a tokio worker, the request was
+        // never answered, and the only thing the client saw was its own 20-second timeout — which
+        // the Hermes engine reads as "Sakur4 unreachable", so it deferred and left the context
+        // uncompacted. The bug was a one-line arithmetic error; the reason it survived was that its
+        // symptom was indistinguishable from a dead daemon.
+        //
+        // Catching here makes a panic a loud, immediate, attributable failure instead. It does not
+        // make panicking acceptable — a tool that panics is broken and this does not fix it — but it
+        // means the next one is reported by the daemon rather than inferred from a timeout by
+        // whoever notices the feature is not working.
+        //
+        // `AssertUnwindSafe` because the engine is shared and a panic mid-write could leave state
+        // this cannot reason about; that is exactly why the message says the daemon should be
+        // restarted rather than that the call merely failed.
+        match std::panic::AssertUnwindSafe(self.tool_router.call(tcc)).catch_unwind().await {
+            Ok(result) => result,
+            Err(payload) => {
+                let detail = payload
+                    .downcast_ref::<&str>()
+                    .map(|s| (*s).to_string())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "non-string panic payload".into());
+                tracing::error!(
+                    tool = %name,
+                    panic = %detail,
+                    "a tool panicked; answering with an error rather than leaving the request open"
+                );
+                Err(ErrorData::internal_error(
+                    format!(
+                        "the {name} tool panicked: {detail}. This is a bug in Sakur4, not in your \
+                         call. The daemon may be in an inconsistent state and should be restarted."
+                    ),
+                    None,
+                ))
+            }
+        }
     }
 
     async fn list_resources(

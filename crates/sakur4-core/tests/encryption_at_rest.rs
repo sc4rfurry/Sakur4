@@ -238,7 +238,7 @@ async fn an_encrypted_store_supports_the_full_memory_fabric() {
     // The whole point of the retrieval fix applies here too: an encrypted store must
     // not reintroduce the natural-language query failure.
     let hits = db
-        .search_episodes("how many retries does the helper take", 5, None, false)
+        .search_episodes("how many retries does the helper take", 5, None, None, false)
         .await
         .expect("search");
     assert!(!hits.is_empty(), "an encrypted store must recall as well as a plain one");

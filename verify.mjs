@@ -44,7 +44,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -120,7 +120,10 @@ const CATALOG = {
     "documented catalogue size matches",
     "documented commands exist",
   ],
-  encryption: ["encryption at rest (FR-20)"],
+  encryption: [
+    "encryption at rest (FR-20)",
+    "feature-gated tests this machine cannot compile",
+  ],
   hermes: ["context engine (FR-16)"],
   bench: ["A/B (scripted)", "NFR-2 recall at scale"],
   live: [
@@ -506,9 +509,24 @@ function rustChecks() {
 function encryptionChecks() {
   if (!wanted("encryption", "encryption")) return;
 
-  const probe = run("cargo", ["check", "-p", "sakur4-core", "--features", "encryption"], {
-    timeout: 600_000,
-  });
+  // # `--all-targets`, because the file that was broken is a test
+  //
+  // This probe used to be `cargo check -p sakur4-core --features encryption`, which type-checks the
+  // library and nothing else. `tests/encryption_at_rest.rs` opens with
+  // `#![cfg(feature = "encryption")]`, so without the feature it compiles to an empty binary and its
+  // contents are never checked — and on a machine without OpenSSL the feature cannot be built at
+  // all, so this whole group reported SKIP. Between those two facts, a stale four-argument call to
+  // `Db::search_episodes` sat in that file across four commits and broke three CI jobs (this one,
+  // `fmt + clippy`, and `verify.mjs`), each time as an unexplained `E0061` in a job that passes
+  // locally.
+  //
+  // `--all-targets` closes the first half: the test target is type-checked wherever the feature can
+  // be built.
+  const probe = run(
+    "cargo",
+    ["check", "-p", "sakur4-core", "--features", "encryption", "--all-targets"],
+    { timeout: 600_000 },
+  );
   if (!probe.ok && /OPENSSL_DIR|openssl|sqlcipher/i.test(probe.output)) {
     record(
       "encryption",
@@ -516,6 +534,35 @@ function encryptionChecks() {
       SKIP,
       "SQLCipher needs OpenSSL development files; see crates/sakur4-core/Cargo.toml",
     );
+    // The second half: say what is therefore unchecked, rather than skipping silently.
+    //
+    // A skip that names only its own reason reads as "not applicable here". It is applicable; the
+    // environment cannot run it. Naming the files makes the next person's first question — what is
+    // this machine not verifying? — answerable without reading the crate.
+    const gated = [];
+    const walk = (dir) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) walk(path);
+        else if (entry.name.endsWith(".rs")) {
+          const head = readFileSync(path, "utf8").slice(0, 2000);
+          const m = head.match(/#!\[cfg\(feature = "([^"]+)"\)\]/);
+          if (m && path.includes(`${sep}tests${sep}`)) {
+            gated.push(`${relative(ROOT, path)} (feature "${m[1]}")`);
+          }
+        }
+      }
+    };
+    const cratesDir = join(ROOT, "crates");
+    if (existsSync(cratesDir)) walk(cratesDir);
+    if (gated.length) {
+      record(
+        "encryption",
+        "feature-gated tests this machine cannot compile",
+        SKIP,
+        `${gated.join(", ")} — type errors inside them are invisible until CI builds the feature`,
+      );
+    }
     return;
   }
   if (!probe.ok) {
