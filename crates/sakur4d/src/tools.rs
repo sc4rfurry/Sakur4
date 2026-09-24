@@ -74,11 +74,36 @@ pub struct CommitEpisodeInput {
     pub slot_id: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// The episode this one corrects, if it is a correction.
+    ///
+    /// # The design says corrections are new rows, and nothing could write one
+    ///
+    /// `episodic_stream` is append-only: its content columns are guarded by a trigger, and the schema
+    /// says corrections *"must be new rows referencing the corrected one"*. The machinery for that
+    /// existed and was unreachable — `MemoryFabric::mark_superseded` records the reference and the
+    /// `Supersedes` edge, and the eviction engine scores a superseded episode **−3.0** with the note
+    /// "superseded by a later episode" — but there was no way to say "this corrects that", so the
+    /// function had no caller and the penalty could never fire.
+    ///
+    /// Naming the corrected episode here marks it superseded **and droppable**, which is what makes a
+    /// stale turn a safe `Drop` candidate rather than something the engine keeps for lack of a reason
+    /// to let it go.
+    ///
+    /// An unknown id is an error rather than a silent no-op: a caller who means to correct something
+    /// and mistypes the id has not corrected it, and reporting success would be a lie about the state
+    /// of the record.
+    #[serde(default)]
+    pub corrects: Option<String>,
 }
 
 /// `memory.commit_episode` output.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct CommitEpisodeOutput {
+    /// The episode this turn corrected, echoed back when the caller asked to correct one.
+    ///
+    /// Returned so a caller can confirm the reference landed rather than assuming it: a correction
+    /// whose id was wrong would otherwise silently be an ordinary turn.
+    pub supersedes: Option<String>,
     pub episode_id: String,
     pub seq: i64,
     pub token_count: i64,
@@ -766,6 +791,7 @@ impl Sakur4Server {
             // see another's transcript. See `docs/DESIGN.md` on project isolation.
             project_id: Some(self.engine.project_id().to_string()),
         };
+        let corrected = input.corrects.clone();
         let out = self
             .engine
             .memory()
@@ -773,10 +799,30 @@ impl Sakur4Server {
             .await
             .map_err(to_error)?;
 
+        // # Record the correction, which nothing could do before this
+        //
+        // The new row exists at this point and is append-only, so the *reference* is how the store
+        // expresses a correction: `mark_superseded` sets `superseded_by` on the corrected episode,
+        // flags it droppable, and writes a `Supersedes` edge. Without it the corrected turn looks
+        // like any other, and the eviction engine's −3.0 rule for superseded episodes never fires —
+        // the column, the edge kind, the scoring rule and the note string all existed with no way to
+        // reach them.
+        //
+        // After the commit rather than inside its transaction: the two writes are independent, and a
+        // correction that fails to record must not lose the turn that was already accepted.
+        if let Some(target) = &corrected {
+            self.engine
+                .memory()
+                .mark_superseded(target, &out.episode_id)
+                .await
+                .map_err(to_error)?;
+        }
+
         // Any harness request means the system is not idle.
         self.engine.eviction();
 
         Ok(Json(CommitEpisodeOutput {
+            supersedes: corrected,
             episode_id: out.episode_id,
             seq: out.seq,
             token_count: out.token_count,

@@ -51,10 +51,30 @@ Append a turn or tool result to the Episodic Stream. **This is the source of tru
 | `tool_name` | no | Set for tool results, so the symbolic extractor can pick a parser. |
 | `session_id` | no | Defaults to the session the daemon derived. |
 | `slot_id` | no | Defaults to slot 0. |
+| `corrects` | no | The `episode_id` this turn corrects. See below. |
 
 **Call it when** every turn and every tool result lands — the working preamble says *after each turn or tool result*. Commit the user's words verbatim rather than paraphrasing: their words are the source everything else derives from, and a paraphrase loses exactly the part that matters.
 
 Pass `tool_name` on a tool result. Without it a `git diff` is just text and nothing downstream can anchor to it. If the turn appears to state a constraint, a pin is **suggested** in `suggested_anchor` but never applied automatically.
+
+#### Correcting an earlier turn
+
+`episodic_stream` is **append-only** — a trigger blocks any change to a recorded row's content — so a correction is a *new* turn that references the one it corrects:
+
+```jsonc
+// "the port is 8080" was wrong; say so in a new turn that names it
+memory.commit_episode {
+  "role": "user",
+  "content": "correction: the port is 9090",
+  "corrects": "ep_01a0d50058a877a6b0ee89076ee"
+}
+```
+
+The named episode is marked `superseded_by` this turn and flagged **droppable**, and a `Supersedes` edge is written between them. That matters beyond bookkeeping: the eviction engine scores a superseded episode **−3.0** with the note *"superseded by a later episode"*, so a turn that has been corrected becomes a **safe candidate to evict** instead of something the engine keeps for lack of a reason to let it go.
+
+The response echoes `supersedes` back. **An unknown id is an error**, not a silent success — a caller who means to correct something and mistypes the id has not corrected it.
+
+Before this existed, the column, the edge kind, the scoring rule and the note string were all present and **unreachable**: there was no way to say "this corrects that", so nothing ever set them.
 
 ### `memory.pin`
 

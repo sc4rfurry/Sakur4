@@ -512,7 +512,7 @@ accounting and the eviction.
 
 | Tool | Required | Optional |
 |---|---|---|
-| `memory.commit_episode` | `role`, `content` | `tool_name`, `session_id`, `slot_id` |
+| `memory.commit_episode` | `role`, `content` | `tool_name`, `session_id`, `slot_id`, `corrects` |
 | `memory.pin` | `content` | `kind`, `session_id` |
 | `memory.recall` | `query` | `k`, `session_id`, `file_path`, `include_folded`, `project_id` |
 | `memory.fold` | `description`, `goal` | `session_id`, `slot_id` |

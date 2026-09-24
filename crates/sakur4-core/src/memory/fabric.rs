@@ -340,16 +340,33 @@ impl MemoryFabric {
 
     /// Record that one episode supersedes another, so the eviction engine knows
     /// the superseded one is a safe `Drop` candidate (FR-5 tier 4).
+    ///
+    /// # An id that matches nothing is an error
+    ///
+    /// This used to run the `UPDATE`, ignore how many rows it touched, and write the edge regardless —
+    /// so correcting an episode that does not exist **reported success** and left no record that
+    /// anything was wrong. A caller who mistypes an id has not corrected anything, and the whole point
+    /// of a correction is that the record says so.
+    ///
+    /// Checked before the edge is written, so a failed correction leaves no half-record: the count is
+    /// the evidence, and writing `Supersedes` for a row that was not touched would assert a
+    /// relationship that does not hold.
     pub async fn mark_superseded(&self, episode_id: &str, by_episode_id: &str) -> Result<()> {
         let id = episode_id.to_string();
         let by = by_episode_id.to_string();
+        let for_error = episode_id.to_string();
         self.db
             .write(move |tx| {
-                tx.execute(
+                let touched = tx.execute(
                     "UPDATE episodic_stream SET superseded_by = ?2, droppable = 1
                      WHERE episode_id = ?1",
                     rusqlite::params![id, by],
                 )?;
+                if touched == 0 {
+                    return Err(Error::NotFound(format!(
+                        "cannot correct episode {for_error}: no such episode in this store"
+                    )));
+                }
                 insert_edge_tx(
                     tx,
                     &NodeRef::episode(&by),
