@@ -583,12 +583,7 @@ async function hermesChecks() {
       : lastLines(r.output, 8),
   );
 
-  try {
-    child?.kill();
-  } catch {
-    /* already gone */
-  }
-  cleanupDaemon(port, workdir);
+  cleanupDaemon(child, workdir);
 }
 
 /**
@@ -734,18 +729,38 @@ function makeHermesStub() {
   return dir;
 }
 
-function cleanupDaemon(port, workdir) {
-  // Best-effort: the daemon is detached and holds a port, so leaving it would make the
-  // next run fail for a reason that has nothing to do with the code.
-  if (process.platform === "win32") {
-    spawnSync("powershell", [
-      "-NoProfile",
-      "-Command",
-      `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | ` +
-        `ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }`,
-    ], { shell: false });
-  } else {
-    spawnSync("sh", ["-c", `lsof -ti tcp:${port} | xargs -r kill -9`], { shell: false });
+/**
+ * Stop a daemon this script started.
+ *
+ * # `lsof -ti tcp:PORT | xargs kill -9` killed this process
+ *
+ * The previous version enumerated every PID holding a socket on the port and SIGKILLed them. On
+ * Linux that list includes **this script**, because it made the readiness request to that port and
+ * holds a socket in `TIME_WAIT`. So the cleanup killed the verifier.
+ *
+ * The symptom was a puzzle for five rounds. CI reported
+ *
+ *     groups that did not pass: hermes
+ *
+ * while that group's own log ended immediately after
+ *
+ *     PASS  context engine (FR-16)  -- 44 contracts against a live daemon
+ *
+ * with no summary, no exit code and no `--json` file. A process that SIGKILLs itself leaves exactly
+ * that: everything written before the kill, nothing after. It never reproduced locally because
+ * `lsof` is not on PATH on Windows, so the branch that does the damage never ran.
+ *
+ * # What it does instead
+ *
+ * It kills the child handle it started. That is the thing it means to stop, it is portable, and it
+ * cannot reach a process that merely shares a port — which the old version could, and which on a
+ * shared machine would mean killing somebody else's server.
+ */
+function cleanupDaemon(child, workdir) {
+  try {
+    child?.kill("SIGKILL");
+  } catch {
+    /* already gone */
   }
   try {
     rmSync(workdir, { recursive: true, force: true });
