@@ -273,6 +273,9 @@ sh docs/verification/install-path.sh
 # Does every dependency a crate declares appear in its source?
 node docs/verification/unused-deps.mjs
 
+# Does every relative link in the docs point at something that exists?
+node docs/verification/doc-links.mjs
+
 # Candidates for reading, not a verdict: public functions nothing here calls. Not wired into
 # erify.mjs, because most of what it lists is legitimate library surface — read the doc comments.
 node docs/verification/uncalled.mjs

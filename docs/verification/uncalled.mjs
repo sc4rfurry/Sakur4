@@ -157,9 +157,37 @@ const real = candidates.filter((c) => {
 // this stays a tool a person runs and reads: take a name, read its comment, and ask whether the
 // comment describes something the project claims to do. All three found so far had a stated purpose
 // and no code serving it.
+
+// # It does check itself, though
+//
+// Four versions of the predicate above were wrong, and three of them were wrong in ways that produced
+// a *plausible-looking list* — one reported nothing at all, one hid the very case it was built for,
+// one counted a doc comment as a call. None was caught by reading it; each was caught by checking the
+// output against something whose answer was already known.
+//
+// So the known answers are asserted here rather than trusted to whoever runs it next. `open_folds` is
+// the canonical positive: it exists, it has a doc comment saying what it is for, and no code calls it.
+// `snap_to_checkpoint` is the canonical negative in the harder direction — it *is* called, as a free
+// function, which is the convention that a method-only pattern misses. `render_anchor_block` is the
+// negative for a defect that has since been fixed, so it must not reappear.
+const KNOWN_UNCALLED = ["open_folds", "assess"];
+const KNOWN_CALLED = ["snap_to_checkpoint", "render_anchor_block"];
+
+const names = new Set(real.map((c) => c.name));
+const missing = KNOWN_UNCALLED.filter((n) => !names.has(n));
+const wrong = KNOWN_CALLED.filter((n) => names.has(n));
+
 console.log(`  ${rustSources.length} Rust files scanned`);
 console.log(`  ${real.length} candidate(s) — public functions with no caller here.`);
-console.log("  Read the doc comments; a stated purpose with no caller is the class worth finding.");
 for (const c of real) {
   console.log(`    ${relative(ROOT, c.path)}:${c.line}  ${c.name}`);
+}
+console.log("  Read the doc comments; a stated purpose with no caller is the class worth finding.");
+
+if (missing.length || wrong.length) {
+  console.log("");
+  console.log("  THE PREDICATE IS WRONG, so the list above cannot be trusted:");
+  for (const n of missing) console.log(`    ${n} is uncalled but was not listed`);
+  for (const n of wrong) console.log(`    ${n} has a caller but was listed`);
+  process.exit(1);
 }

@@ -120,6 +120,7 @@ const CATALOG = {
     "documented catalogue size matches",
     "documented commands exist",
     "no unused dependencies",
+    "documentation links resolve",
   ],
   encryption: [
     "encryption at rest (FR-20)",
@@ -1238,7 +1239,6 @@ function harnessChecks() {
       record(
         "rust",
         "documented commands exist",
-    "no unused dependencies",
         ok ? PASS : FAIL,
         ok ? (r.output.match(/(\d+) documented command/) ?? ["", "?"])[1] + " commands" : lastLines(r.output, 6),
       );
@@ -1268,6 +1268,28 @@ function harnessChecks() {
         "no unused dependencies",
         ok ? PASS : FAIL,
         ok ? "every crate's manifest matches its source" : lastLines(r.output, 8),
+      );
+    }
+  }
+
+  // # Documentation links that resolve
+  //
+  // Written after I concluded wrongly that `[bench/](bench/)` in `docs/DESIGN.md` was dead — it
+  // resolves to `docs/bench/`, because a relative link resolves against the file containing it. The
+  // false alarm cost more than the check would have, so the check now exists and the judgement is out
+  // of my head.
+  if (wanted("doc-links", "rust")) {
+    const script = join(ROOT, "docs", "verification", "doc-links.mjs");
+    if (!existsSync(script)) {
+      record("rust", "documentation links resolve", SKIP, "the check is missing");
+    } else {
+      const r = run(process.execPath, [script]);
+      const ok = r.ok && /relative link\(s\) across the docs resolve/.test(r.output);
+      record(
+        "rust",
+        "documentation links resolve",
+        ok ? PASS : FAIL,
+        ok ? (r.output.match(/all (\d+) relative/) ?? ["", "?"])[1] + " links" : lastLines(r.output, 6),
       );
     }
   }
