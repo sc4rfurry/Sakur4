@@ -120,6 +120,7 @@ const CATALOG = {
     "documented catalogue size matches",
     "documented commands exist",
     "no unused dependencies",
+    "latency verdict decision holds",
     "documentation links resolve",
     "anchors go through the budget check",
     "workflows are structurally sound",
@@ -938,12 +939,21 @@ function benchChecks() {
       } catch {
         /* ignore */
       }
+      // # `INCONCLUSIVE` is a skip, not a failure
+      //
+      // A latency figure taken on a busy machine measures the machine. Recorded as a skip with the reason
+      // — the load — rather than as either a pass or a fail, so the run neither claims a green number it
+      // did not earn nor reports a regression that did not happen. See `nfr2-recall.mjs`.
+      const nfr2Status =
+        verdict?.verdict === "PASS" ? PASS : verdict?.verdict === "INCONCLUSIVE" ? SKIP : FAIL;
       record(
         "bench",
         "NFR-2 recall at scale",
-        verdict?.verdict === "PASS" ? PASS : FAIL,
+        nfr2Status,
         verdict
-          ? `worst p95 ${verdict.worstP95Ms.toFixed(1)} ms over ${verdict.entries.toLocaleString()} entries (target < ${verdict.target} ms)`
+          ? verdict.verdict === "INCONCLUSIVE"
+            ? `worst p95 ${verdict.worstP95Ms.toFixed(1)} ms, but the machine was busy (${verdict.load}) — re-run on an idle machine to decide`
+            : `worst p95 ${verdict.worstP95Ms.toFixed(1)} ms over ${verdict.entries.toLocaleString()} entries (target < ${verdict.target} ms)`
           : lastLines(r.output, 6),
       );
     }
@@ -1271,6 +1281,32 @@ function harnessChecks() {
         "no unused dependencies",
         ok ? PASS : FAIL,
         ok ? "every crate's manifest matches its source" : lastLines(r.output, 8),
+      );
+    }
+  }
+
+  // # The latency-verdict decision, asserted across every combination
+  //
+  // `nfr2-recall.mjs` reports PASS, FAIL or INCONCLUSIVE, and the branch that matters — outside the target
+  // *while contended* — is almost unreachable on a live machine, because contention is nearly always true
+  // and the latencies are inside target. A guard in that position protects nothing and exercises nothing,
+  // which this project has now recorded for three other scans.
+  //
+  // So the decision was extracted into `measure.mjs` and is asserted here, including the combination a live
+  // run cannot produce. Wiring it into the verifier is the point: **a test nothing runs is the same defect
+  // as a function nothing calls**, and this session has fixed five of those.
+  if (wanted("measure", "rust")) {
+    const script = join(ROOT, "docs", "verification", "measure-check.mjs");
+    if (!existsSync(script)) {
+      record("rust", "latency verdict decision holds", SKIP, "the check is missing");
+    } else {
+      const r = run(process.execPath, [script]);
+      const ok = r.ok && /all latency-verdict cases hold/.test(r.output);
+      record(
+        "rust",
+        "latency verdict decision holds",
+        ok ? PASS : FAIL,
+        ok ? "PASS, FAIL and INCONCLUSIVE across every combination" : lastLines(r.output, 6),
       );
     }
   }

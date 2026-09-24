@@ -287,6 +287,10 @@ node docs/verification/workflow-shape.mjs
 # Does the wiki hold together — links to real pages, every page reachable, every sakur4d X real?
 node docs/verification/wiki-check.mjs
 
+# The latency verdict across every combination, including the one a live run cannot produce.
+# measure.mjs is the module under test — the pure decision, imported by nfr2-recall.mjs.
+node docs/verification/measure-check.mjs
+
 # Candidates for reading, not a verdict: public functions nothing here calls. Not wired into
 # erify.mjs, because most of what it lists is legitimate library surface — read the doc comments.
 node docs/verification/uncalled.mjs

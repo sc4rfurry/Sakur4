@@ -24,9 +24,13 @@
 //
 // It spawns its own daemon on a free port and cleans up after itself.
 
+// Wall-clock origin for the contended-machine fallback, which compares CPU time against elapsed time.
+const processStart = Date.now();
 import { spawn } from "node:child_process";
 import { existsSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
+import os from "node:os";
+import { decideVerdict, isContended } from "./measure.mjs";
 import { join } from "node:path";
 
 function arg(name, fallback) {
@@ -207,6 +211,10 @@ console.log("");
 console.log("  query class            min     median      p95      max    verdict");
 
 let worst = 0;
+// Sampled here, immediately before the timed loop, so the contention rate and the latencies come from the
+// same interval. See the note above `isContended`.
+const cpuSecondsBefore = cpuSecondsNow();
+const measurementStart = Date.now();
 for (const [label, make] of queries) {
   const times = [];
   for (let r = 0; r < REPS; r++) {
@@ -226,8 +234,64 @@ for (const [label, make] of queries) {
 
 console.log("");
 console.log(`worst p95 across classes: ${worst.toFixed(0)} ms   (NFR-2 target: < 300 ms)`);
-const verdict = worst < 300 ? "PASS" : "FAIL";
-console.log(`VERDICT: ${verdict} at ${N.toLocaleString()} entries`);
+
+// # A latency number only means something next to the load it was taken under
+//
+// This check reported **1352.9 ms** in a full `verify.mjs` run and **23.0 ms** when re-run on its own,
+// sixty times faster with nothing changed. The cause was contention: 261 tests and a clippy build were
+// still finishing while the benchmark ran, so the figure measured the machine rather than Sakur4.
+//
+// A FAIL there is not evidence of a regression, and it is worse than no result: it says the product got
+// sixty times slower when what happened is that the laptop was busy. The mirrored mistake is the one this
+// project has recorded repeatedly — a green result whose evidence is empty — and the shared lesson is that
+// a measurement has to state its conditions.
+//
+// So the load is sampled around the measurement and the verdict distinguishes three outcomes:
+//
+//   * **PASS** — inside the target, on a machine that was not overloaded;
+//   * **FAIL** — outside the target, on a machine that was not overloaded. A real result;
+//   * **INCONCLUSIVE** — outside the target *while contended*. Not a pass and not a failure, and
+//     `verify.mjs` records it as a skip with this reason so the run does not claim a green number it did
+//     not earn.
+//
+// `os.loadavg()` is the run-queue average and is meaningful on Linux and macOS; it returns zeros on
+// Windows, where this falls back to comparing CPU time consumed against wall time, which needs no
+// privilege and answers the same question: was more than one core's worth of work happening per second?
+// The decision lives in `measure.mjs` so it can be asserted across every combination, including the ones a
+// live run cannot produce. See `measure-check.mjs`.
+//
+// # CPU time is a delta, not a total
+//
+// `os.cpus()` reports CPU time consumed since boot. The first version passed that total against the elapsed
+// *process* time and printed **43029 core-seconds per second on 8 cores** — a number that cannot happen,
+// because it compares a machine's lifetime against a few seconds. A rate only means anything measured
+// across one interval, so the counter is read before the benchmark and subtracted after.
+function cpuSecondsNow() {
+  return (
+    os.cpus().reduce((sum, c) => {
+      const t = c.times;
+      return sum + t.user + t.nice + t.sys + t.irq;
+    }, 0) / 1000
+  );
+}
+const load = isContended({
+  loadavg: os.loadavg(),
+  cores: os.cpus().length || 1,
+  cpuSeconds: cpuSecondsNow() - cpuSecondsBefore,
+  wallMs: Date.now() - measurementStart,
+});
+const verdict = decideVerdict({ worstMs: worst, targetMs: 300, contended: load.contended });
+
+if (verdict === "INCONCLUSIVE") {
+  console.log(
+    `\nINCONCLUSIVE: ${worst.toFixed(0)} ms is outside the 300 ms target, but the machine was busy ` +
+      `(${load.detail}).\n` +
+      `  That measures contention, not Sakur4. Re-run this check on an idle machine before treating the\n` +
+      `  number as a regression:  node docs/verification/nfr2-recall.mjs --n ${N} --reps 6`,
+  );
+} else {
+  console.log(`VERDICT: ${verdict} at ${N.toLocaleString()} entries   (${load.detail})`);
+}
 
 // # A machine-readable verdict, because scraping the human one was fragile
 //
@@ -239,7 +303,19 @@ if (process.env.SAKUR4_VERDICT_JSON) {
   const fs = await import("node:fs");
   fs.writeFileSync(
     process.env.SAKUR4_VERDICT_JSON,
-    JSON.stringify({ check: "nfr2-recall", verdict, worstP95Ms: worst, entries: N, target: 300 }, null, 2),
+    JSON.stringify(
+      {
+        check: "nfr2-recall",
+        verdict,
+        worstP95Ms: worst,
+        entries: N,
+        target: 300,
+        load: load.detail,
+        contended: load.contended,
+      },
+      null,
+      2,
+    ),
   );
 }
 
