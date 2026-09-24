@@ -998,6 +998,37 @@ what follows is what is genuinely outstanding, each with its evidence.
   **Whoever writes the tenth fix should add that test first and watch it fail**, then implement, then
   watch the fraction fall to `0/12`. That sequence is the thing this bug has never had.
 
+  **A tenth attempt took that advice and got further than any before it, then was reverted.** It put the
+  gate at the **transport write** rather than in a handler, which is the first design here that does not
+  need a handler's cooperation or a second permit:
+
+  * The server is given a genuine read channel and write channel, not one duplex split in two.
+  * The pump forwards a message and then waits for the **response to it to be flushed to the client**.
+  * A small `AsyncWrite` wrapper sets a release flag on every `poll_flush`.
+
+  Two things about it are worth keeping. First, **the reasoning for gating on flush rather than on a
+  handler signal**: every request produces a response, so the release happens whatever the method was,
+  which makes the gate method-agnostic and impossible to deadlock — where a gate waiting on a signal only
+  `call_tool` sends would hang on `initialize`, `tools/list`, or any notification. Second, **the first
+  real bug it hit, found by running the test rather than by reading code**:
+
+  > `notifications/initialized` has no `id` and produces no response, so it must not arm the gate.
+  > It is the second frame of every MCP session, and the first version blocked on the line after it and
+  > never forwarded another message.
+
+  That was fixed and the gate still did not work: **one reply out of twenty-five, then a stall**. A
+  one-slot `mpsc` with `try_send` **silently drops a release when the slot is full**, so a later request's
+  release was lost and the pump waited on a message that had already been discarded. Replacing it with an
+  `AtomicBool`, which cannot fill up, moved the failure to a different stall rather than fixing it, and at
+  that point the attempt was reverted — the daemon answered 1 of 25 requests, which is worse than the
+  defect it was meant to repair, and the rule this project has settled on is that a broken daemon is not a
+  candidate for a long debugging session at the end of a round.
+
+  **What the eleventh attempt should know, and none of this is inference:** the transport-write gate is
+  the right *place*; the notification case is real and must be handled; a release mechanism that can drop
+  a signal is worse than useless; and the reply count (25 of 25) is the control — a correct gate must
+  still answer every request, because the disclosed defect reorders answers and never omits them.
+
   **The protocol says the reordering is legal, which reframes the whole entry.** From the JSON-RPC
   2.0 specification:
 
