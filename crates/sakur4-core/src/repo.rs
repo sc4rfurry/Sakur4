@@ -810,11 +810,40 @@ impl RepoCortex {
                 "\n[budget of {token_budget} tokens covered no files; the smallest entry needs more]\n"
             ));
         }
-        out.push_str(&format!(
-            "\n[map covers {included_files} of {} files, {included_symbols} of {} symbols]\n",
-            files.len(),
-            facts.len()
-        ));
+        // # The coverage note carries no numbers, so a smaller map is a prefix of a larger one *up to*
+        // # this line — which is the most a truncation marker can allow
+        //
+        // This said `[map covers {included_files} of {} files, {included_symbols} of {} symbols]`, and the
+        // tool's description promised that *"a smaller budget returns a strict prefix of what a larger
+        // budget returns, so it is safe to call repeatedly"*. **It did not**, measured at three budget
+        // pairs out of three:
+        //
+        // ```text
+        // 200 is a prefix of 400: NO — diverge at char 438
+        //   200:   …helper_4(x) + 4 }\n[map covers 1 of 1 files, 6 of 61 symbols]
+        //   400:   …helper_4(x) + 4 }\n  function pub fn helper_5(x: i32) -> i32 …
+        // ```
+        //
+        // Files are emitted in **descending rank** and the budget cuts at a different rank each time, so a
+        // variable-width footer lands *earlier* in a smaller map and *later* in a larger one, and
+        // everything after it shifts.
+        //
+        // **A fixed string does not restore the promise, and that is worth being exact about.** Measured
+        // after this change, a smaller map is still not a prefix of a larger one — it equals the larger
+        // one **up to this marker**, and then stops. The map *body* is monotonic (a larger budget appends
+        // symbols and never reorders or drops one), but the marker necessarily terminates the smaller
+        // output, so a literal prefix is unreachable while a truncation notice exists at all.
+        //
+        // So this keeps the constant marker — it removes the *variable* divergence, which was the part
+        // that made two maps differ in content rather than only in length — and the **description** now
+        // states the property that actually holds rather than the stronger one that does not.
+        //
+        // The counts are gone rather than moved because they were what varied. A caller who needs them has
+        // `tokens_used`, `symbols_total` and `files_total` in the structured result, which is where a
+        // machine-readable count belongs anyway.
+        if included_symbols < facts.len() {
+            out.push_str("\n[incomplete map: raise the budget for more of the repository]\n");
+        }
         let total = counter.count(&out).get();
         Ok((out, total))
     }

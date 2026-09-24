@@ -1067,8 +1067,10 @@ impl Sakur4Server {
         name = "code.get_repo_map",
         description = "Get a structural outline of the repository, ranked by how load-bearing \
                        each symbol is in the call graph and fitted to a token budget. Use it \
-                       before opening files in full. A smaller budget returns a strict prefix of \
-                       what a larger budget returns, so it is safe to call repeatedly."
+                       before opening files in full. A larger budget appends to what a smaller \
+                       one returned — nothing is reordered or dropped — so calling it again with \
+                       more room is always safe. A map ending in \"[incomplete map: ...]\" was cut \
+                       short by the budget; the counts are in the structured result."
     )]
     async fn get_repo_map(
         &self,
