@@ -34,7 +34,6 @@ on:
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
-        default: true
 
 permissions:
   contents: write
