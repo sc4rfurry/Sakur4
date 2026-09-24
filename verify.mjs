@@ -121,6 +121,7 @@ const CATALOG = {
     "documented commands exist",
     "no unused dependencies",
     "documentation links resolve",
+    "anchors go through the budget check",
   ],
   encryption: [
     "encryption at rest (FR-20)",
@@ -1290,6 +1291,28 @@ function harnessChecks() {
         "documentation links resolve",
         ok ? PASS : FAIL,
         ok ? (r.output.match(/all (\d+) relative/) ?? ["", "?"])[1] + " links" : lastLines(r.output, 6),
+      );
+    }
+  }
+
+  // # Every prompt path still routes anchors through the budget check
+  //
+  // `render_anchor_block` is the only place FR-4's guarantee lives, and nothing called it: all four
+  // prompt-building paths assembled the block themselves. The suite could not see that, because every
+  // test of the function calls it directly and the gateway tests build anchor sets small enough for a
+  // `join` to look right. This asserts the wiring, and says in its own header that it is a grep.
+  if (wanted("anchor-wiring", "rust")) {
+    const script = join(ROOT, "docs", "verification", "anchor-wiring.mjs");
+    if (!existsSync(script)) {
+      record("rust", "anchors go through the budget check", SKIP, "the check is missing");
+    } else {
+      const r = run(process.execPath, [script]);
+      const ok = r.ok && /route anchors through the budget check/.test(r.output);
+      record(
+        "rust",
+        "anchors go through the budget check",
+        ok ? PASS : FAIL,
+        ok ? "all four prompt paths" : lastLines(r.output, 6),
       );
     }
   }

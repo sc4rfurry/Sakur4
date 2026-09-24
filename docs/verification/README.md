@@ -276,6 +276,9 @@ node docs/verification/unused-deps.mjs
 # Does every relative link in the docs point at something that exists?
 node docs/verification/doc-links.mjs
 
+# Do the prompt-building paths still route anchors through FR-4's budget check?
+node docs/verification/anchor-wiring.mjs
+
 # Candidates for reading, not a verdict: public functions nothing here calls. Not wired into
 # erify.mjs, because most of what it lists is legitimate library surface — read the doc comments.
 node docs/verification/uncalled.mjs
