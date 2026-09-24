@@ -23,6 +23,7 @@
  *   node verify.mjs --only rust,fmt           # a subset, by group or short check name
  *   node verify.mjs --require-all            # fail if anything was skipped
  *   node verify.mjs --require-all --allow-absent   # ...but not for a missing tool
+ *   node verify.mjs --check-release           # download the published release and test the installer
  *   node verify.mjs --list                   # show what would run
  *
  * # What each kind needs
@@ -1315,12 +1316,25 @@ function harnessChecks() {
   //
   // Reported unverified for many rounds because `install.sh` refuses Windows by design and this
   // machine is Windows. What *can* run here is the part that does the work — fetch, verify, refuse
-  // a mismatch, extract, place — and that is identical on every platform but two variables. It
-  // reaches the network, so it is gated on `--upstream` like the other live checks, and it runs
-  // against the real release rather than a fixture.
+  // a mismatch, extract, place — and that is identical on every platform but two variables.
+  //
+  // # Gated on its own flag, not `--upstream`
+  //
+  // `--upstream` means "a llama.cpp server" — it turns on the prefix-reuse and compaction checks,
+  // which need an inference server and are meaningless without one. A release check needs the
+  // opposite thing: a network and a published tag. Sharing the flag meant this could only run by
+  // pointing `--upstream` at a URL that is not an inference server, which would have made those two
+  // checks fail for an unrelated reason — and the `harness` group is one CI can fully run, so a
+  // check gated on `--upstream` was a check CI could never run at all.
+  const CHECK_RELEASE = has("check-release");
   if (wanted("install-path", "harness")) {
-    if (!UPSTREAM) {
-      record("harness", "install path against the published release", SKIP, "pass --upstream to enable");
+    if (!CHECK_RELEASE) {
+      record(
+        "harness",
+        "install path against the published release",
+        SKIP,
+        "pass --check-release to enable (it downloads from GitHub)",
+      );
     } else {
       const script = join(ROOT, "docs", "verification", "install-path.sh");
       // Git for Windows ships a POSIX shell; so does every CI runner.

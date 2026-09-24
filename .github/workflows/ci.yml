@@ -391,7 +391,13 @@ jobs:
             # is bash-only and this step runs under `set -uo pipefail` with bash, but reading it is
             # the kind of thing that breaks when a shell changes — so the status is captured by
             # running the command with its output redirected, then printing the file.
+            # # `--check-release` for the installer, and `--allow-absent` for the tool it lacks
+            #
+            # The `harness` group can run fully on a runner: it needs a built daemon, python, and —
+            # for the release check — a network. That last one is why the check exists at all, and
+            # it is the only place the published archive is exercised end to end.
             node verify.mjs --only "${group}" --only-group --require-all --allow-absent \
+              --check-release \
               --json "/tmp/verify-${group}.json" > "/tmp/verify-${group}.log" 2>&1
             status=$?
             cat "/tmp/verify-${group}.log"
