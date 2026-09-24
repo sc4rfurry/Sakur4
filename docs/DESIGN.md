@@ -422,6 +422,28 @@ what follows is what is genuinely outstanding, each with its evidence.
   Recorded as unresolved so the next attempt starts from the reproduction rather than from the
   symptom.
 
+  **It is not specific to folds.** `Episodes` is zero for a store holding one episode, and `anchors`,
+  `symbolic_facts` and `atlas_entries` are zero for a store holding none — so **every count
+  `DbStats` produces is zero through the daemon**, and the queries themselves are fine: run by hand
+  against the same file, each answers correctly.
+
+  That narrows it to the daemon's read path rather than the store. `Db::stats()` is exercised
+  in-process by `consolidate`'s tests, which write through the fabric and read a non-zero
+  `semantic_entries` back — so the shared-connection model works there and does not here. What
+  differs is the daemon: `sakur4d serve` reaches the store through code the library tests do not,
+  and the store it reports on is not the store the tools write to.
+
+  Ruled out along the way, so the next attempt need not repeat it: `--db` versus `SAKUR4_DB` (both
+  reproduce), a missing `folds` table (present, with the row), the queries themselves (all three
+  answer correctly by hand), and read-after-write within one `Arc<Mutex<Connection>>` (the library
+  tests rely on it and pass).
+
+  **This is also now breaking a check.** `verify.mjs`'s `context engine (FR-16)` fails locally with
+  `2 contract(s) failed: something was evicted, compression_count advanced`, which is the same
+  symptom the CI job showed for five rounds before I attributed it to a stale binary. Those
+  contracts read daemon-reported state, so a daemon that reports zero for everything fails them —
+  and the earlier conclusion that it was a build problem was wrong, or at best incomplete.
+
 ### Deviations from the original plan, stated
 
 * **`sqlite-vec` is optional rather than required**, with an exact-scan fallback
