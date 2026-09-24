@@ -116,6 +116,7 @@ const CATALOG = {
     "documented test count matches",
     "documented tool arguments exist",
     "documented environment variables exist",
+    "documented catalogue size matches",
   ],
   encryption: ["encryption at rest (FR-20)"],
   hermes: ["context engine (FR-16)"],
@@ -1117,6 +1118,27 @@ function harnessChecks() {
   // The README's tool table is the reference a reader writes a call from, so a missing argument is
   // not cosmetic: `code.get_repo_map` accepts `names_only`, and without it there is no documented
   // way to learn the qualified names that `code.query_symbol` requires.
+  // "17 tools, 4 resources, 1 prompt" is stated in four documents, and each is a claim a reader can
+  // check in one command. A wrong number here is small and corrosive: it says the author is not
+  // checking, and makes the numbers that are right harder to believe. The daemon is asked rather
+  // than a constant in this file, so adding a tool cannot make this pass by being updated in step
+  // with the thing it exists to catch.
+  if (wanted("catalog-counts", "rust")) {
+    const script = join(ROOT, "docs", "verification", "catalog-counts.mjs");
+    if (!existsSync(script)) {
+      record("rust", "documented catalogue size matches", SKIP, "the check is missing");
+    } else {
+      const r = run(process.execPath, [script]);
+      const ok = r.ok && /every stated catalogue size matches/.test(r.output);
+      record(
+        "rust",
+        "documented catalogue size matches",
+        ok ? PASS : FAIL,
+        ok ? (r.output.match(/(\d+) tools, (\d+) resources/) ?? []).slice(1).join(" tools, ") + " resources" : lastLines(r.output, 5),
+      );
+    }
+  }
+
   // An environment variable is a promise. A name documented and not read is the worst kind of
   // documentation defect: the reader exports it, the program behaves as though it were never set,
   // and the conclusion is that the feature is broken. Several were in that state —

@@ -259,6 +259,9 @@ node docs/verification/usage-roundtrip.mjs --bin $BIN
 
 # Does every environment variable the docs name actually get read?
 node docs/verification/env-vars.mjs
+
+# Do the documents agree with the daemon about how many tools it exposes?
+node docs/verification/catalog-counts.mjs --bin $BIN
 ```
 ### Diagnostics, for when something looks wrong
 
