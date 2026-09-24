@@ -964,6 +964,40 @@ what follows is what is genuinely outstanding, each with its evidence.
   why this attempt is known to have failed in the gate rather than in the channels — which is the most
   that can be said for eight failed fixes, and it is more than could be said for the first six.
 
+  **A ninth attempt did not write a gate at all — it wrote the test that says what "fixed" means.**
+
+  The defect has been disclosed in the README for many rounds without a machine that can disagree, which
+  is how a project ends up with a limitation nobody ever closes. So a test was written first, against the
+  real binary over real stdio, and it **fails**:
+
+  ```text
+  a read in a batch was served before the write in front of it — 1/12 rounds wrong:
+  status 101 reported 0, but 1 commits preceded it
+  ```
+
+  It sends a commit and a status **twelve times in one session, all frames written before any is read**,
+  and requires every round to be correct. A single round would have passed about half the time — the
+  failure is probabilistic — so twelve is what makes it a test rather than a coin flip, and the reported
+  fraction is what will show the fix working.
+
+  It is **not committed**, because a suite that fails is a suite people stop reading, and CI runs on every
+  push. What is committed is this record. The test lives in the elimination history below and is restored
+  by pasting it into `crates/sakur4d/tests/stdio_transport.rs`:
+
+  ```rust
+  #[tokio::test]
+  async fn a_read_in_a_batch_sees_the_write_before_it() {
+      // Spawns `sakur4d ... serve --transport stdio` with piped stdin/stdout, writes
+      // `initialize`, `notifications/initialized`, then ROUNDS pairs of
+      // (`memory.commit_episode`, `sakur4.status`) — all of them before reading a line —
+      // closes stdin, collects the status reports, and asserts that a status sent after
+      // N commits reports at least N. Twelve rounds, because one would pass by luck.
+  }
+  ```
+
+  **Whoever writes the tenth fix should add that test first and watch it fail**, then implement, then
+  watch the fraction fall to `0/12`. That sequence is the thing this bug has never had.
+
   **The protocol says the reordering is legal, which reframes the whole entry.** From the JSON-RPC
   2.0 specification:
 

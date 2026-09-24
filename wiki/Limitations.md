@@ -34,8 +34,20 @@ run, neither first-in-first-out nor last-in-first-out.
 **What to do:** send a call and await its answer. That is what every harness tested here does, and it is
 correct. If you are writing harness integration code, do not pipeline dependent calls.
 
-The full elimination — including the eight reverts and why each failed — is in
+The full elimination — including the nine reverts and why each failed — is in
 [`docs/DESIGN.md`](https://github.com/sc4rfurry/Sakur4/blob/master/docs/DESIGN.md).
+
+**It is reproducible, and here is how much.** Twelve commit-then-status pairs written as one batch, in
+one session, every frame sent before any reply is read:
+
+```text
+a read in a batch was served before the write in front of it — 1/12 rounds wrong:
+status 101 reported 0, but 1 commits preceded it
+```
+
+That test is written and **deliberately not committed** — a suite that fails is a suite people stop
+reading, and CI runs on every push. It is recorded in `docs/DESIGN.md`, and whoever fixes this should
+paste it in, watch it fail, implement, and watch the fraction reach `0/12`.
 
 ---
 
