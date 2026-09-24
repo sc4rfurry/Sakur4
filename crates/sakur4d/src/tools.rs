@@ -740,6 +740,33 @@ async fn assemble_parts(
     if let Some(recall) = extra_recall {
         parts = parts.with_recall(recall.to_string());
     }
+    // # Open folds are deliberately *not* added here, and that was tried
+    //
+    // `EvictionEngine::open_folds` returns `(fold_id, description, goal)` for every fold left open in a
+    // session and **nothing calls it** — so `RenderedPart::Folds` accounts a category that is always
+    // zero. It looks like the same defect as the repo map: a documented capability with no route to the
+    // model. The working preamble tells the model to *"call memory.unfold with fold_id"*, and no request
+    // carries a fold's identifier.
+    //
+    // Wiring it in was written and reverted, because measuring said it made things worse:
+    //
+    // ```text
+    // where the budget went:
+    //   fold summaries            34   48.6%  █████████·········
+    //   system prompt             22   31.4%  ██████············
+    //   raw recent history        14   20.0%  ████··············
+    // ```
+    //
+    // **`parts.render()` is never transmitted to a model.** Its only consumers are token measurements —
+    // `PromptParts::total_tokens`, `Receipt::build`, and `CacheCoherence::observe_prompt`. Sakur4 does not
+    // assemble the prompt a request carries; the harness does, and the proxy rewrites what the harness
+    // already built. So adding the folds raised the **pressure** figure that `plan_eviction` evicts
+    // against, by nearly half the measured request, for text that still reaches nobody.
+    //
+    // That is worse than the gap it was meant to close: a fold the model cannot see costs nothing, and a
+    // fold counted but not sent makes the engine evict earlier for content no client was ever going to
+    // receive. The honest fix is the one `docs/DESIGN.md` describes — **separate prompt assembly from
+    // pressure accounting** — and until that exists, these slots stay empty because empty is correct.
     Ok(parts)
 }
 

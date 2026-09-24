@@ -518,6 +518,29 @@ what follows is what is genuinely outstanding, each with its evidence.
 
   That is a smaller and better-specified piece of work than "add a repo map", and it is the reason this
   has stayed open rather than being a one-line change nobody got to.
+
+  **And then it was tried, and the measurement is the argument.** `open_folds` was wired into
+  `assemble_parts` — it returns `(fold_id, description, goal)` for every fold left open, and the preamble
+  tells the model to *"call memory.unfold with fold_id"*, so an id that never reaches a request is an
+  instruction that cannot be followed. The receipt afterwards read:
+
+  ```text
+  where the budget went:
+    fold summaries            34   48.6%  █████████·········
+    system prompt             22   31.4%  ██████············
+    raw recent history        14   20.0%  ████··············
+  ```
+
+  **`parts.render()` is never transmitted to a model.** Its only consumers are token measurements —
+  `PromptParts::total_tokens`, `Receipt::build`, and `CacheCoherence::observe_prompt`. So the change added
+  48.6% to the **pressure** that `plan_eviction` evicts against, for text that still reached nobody, and
+  the model's inability to see a fold id was exactly as before. It was reverted, and the reasoning is in
+  the function.
+
+  This is the clearest statement of why the three slots are empty: **a slot that is counted but not sent
+  is worse than a slot that is empty**, because empty costs nothing and counted-but-unsent makes the
+  engine evict earlier for content no client was ever going to receive. Filling them requires the
+  separation below to exist first, not a call to a builder.
 * **Nothing ever marks an episode superseded — and now something does.** The eviction engine's scoring
   reads `episode_row.superseded_by` and subtracts 3.0 from an episode's value when it is set, with the
   note *"superseded by a later episode"* — built to drop a stale copy before its replacement. The only
