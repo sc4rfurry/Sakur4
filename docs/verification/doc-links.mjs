@@ -28,7 +28,17 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 function markdownFiles(dir, out = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (["target", "node_modules", ".git"].includes(entry.name)) continue;
+    // # Other checkouts are not this repository
+    //
+    // This walked into `.kilo/worktrees/…`, a local agent worktree holding a full second copy of the
+    // tree, and reported a broken link in that copy's `SECURITY.md`. Two things were wrong with
+    // counting it: the file is not part of this repository, and it is untracked, so the check's result
+    // depended on what happened to be on the machine — the same class of mistake as trusting a single
+    // sample.
+    //
+    // Anything hidden is skipped rather than named one by one, because the next tool that creates a
+    // directory will not be on this list either.
+    if (entry.name.startsWith(".") || ["target", "node_modules"].includes(entry.name)) continue;
     const path = join(dir, entry.name);
     if (entry.isDirectory()) markdownFiles(path, out);
     else if (entry.name.endsWith(".md")) out.push(path);

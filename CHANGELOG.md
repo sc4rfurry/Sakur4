@@ -273,7 +273,7 @@ The first release. Everything below is new.
 
 ### Verified
 
-- 260 tests, including integration tests
+- 262 tests, including integration tests
   that spawn the real binary and speak JSON-RPC over its pipes, and contract tests
   for the cache-coherence claim.
 - `hermes mcp test sakur4` connects and discovers all 17 tools against Hermes Agent

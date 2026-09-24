@@ -208,7 +208,6 @@ fn spawn_consolidator(
 
 #[cfg(test)]
 mod transport_tests {
-    use super::*;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
     /// # A round trip over a `duplex`, before anything else is layered on it
