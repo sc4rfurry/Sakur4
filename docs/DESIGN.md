@@ -611,6 +611,29 @@ what follows is what is genuinely outstanding, each with its evidence.
   makes a committed row visible to the next statement on the same `Connection` — and it is now
   narrow enough to answer by reading the pragmas `Db::open` sets rather than by probing from outside.
 
+  **The pragmas were read, and they clear the store.** A fresh store reports
+  `journal_mode=wal`, `synchronous=2` (FULL), `locking_mode=normal`, `read_uncommitted=0`. In WAL a
+  committed transaction is immediately visible to later readers on the same connection, and
+  `read_uncommitted=0` is the default, so nothing here explains a committed row being invisible.
+
+  **And there is only one connection.** `Engine::open` calls `Db::open` once (`engine.rs:165`) and
+  every component shares it — `MemoryFabric::new(db.clone())`, `Coherence::new(db.clone())` — and
+  `Db::with` and `Db::write` both clone the same `Arc<Mutex<Connection>>`. The full list of
+  `Db::open*` call sites in `crates/` contains exactly one non-test, non-encrypted opening. So the
+  read and the write cannot be on different connections, and the "it reads a different store"
+  family is closed for good.
+
+  **Where that leaves it.** Twelve rounds have produced: the trigger (pipelining), the boundary (a
+  read misses the write immediately in front of it), durability cleared, four ruled-out fixes, and
+  the store itself cleared. The remaining explanation has to be that the commit is not reaching
+  `Db::write` at the time it appears to — that the tool's answer is produced on a path that does not
+  include the write, despite `commit_episode` ending in `.write(…).await?` at `fabric.rs:191`.
+
+  **That is where a fresh attempt should look**, and it is a smaller question than any asked so far:
+  instrument the tool handler entry and `Db::write` entry with a sequence number and see whether the
+  write is entered before the tool answers, in the batched case. Everything needed to answer it is
+  one temporary `tracing::info!` in two places — which is how the last real answer was found.
+
   **The loose end from two rounds ago now has a shape.** Serialising MCP dispatch should have ordered
   the two handlers and did not, which fits an acknowledgement produced outside the handler's own
   await chain rather than a race between handlers.
