@@ -953,6 +953,22 @@ correction is welcome — a comparison nobody can trust costs more than the row 
 
 Stated plainly, because the alternative is finding out later.
 
+**If you batch tool calls, wait for each answer before sending the next**
+
+JSON-RPC permits a server to process messages "as a set of concurrent tasks, processing them in any
+order", and MCP's stdio transport correlates responses only by `id`. Sakur4 relies on the order: the
+preamble tells the model to commit a turn and then consult what it remembers, and the tools are
+stateful in exactly that way.
+
+Written as a **pipelined batch** — several frames at once, stdin closed — a read can be executed
+before the write in front of it. `memory.commit_episode` then answers with a real `ep_…` identifier
+while a `sakur4.status` in the same batch reports the count from before it. Sending each call and
+awaiting its answer is correct, and is what every harness tested here does.
+
+This is a live defect rather than a disclaimer. The cause is established and recorded in
+[docs/DESIGN.md](docs/DESIGN.md): request dispatch is concurrent and nothing restores the order the
+client sent. Four fixes were attempted and reverted, and the honest state is that it is outstanding.
+
 **Not yet true**
 
 - ~~**No real llama.cpp server has been contacted.**~~ **Now verified** against a
