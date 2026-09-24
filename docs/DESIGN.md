@@ -518,6 +518,34 @@ what follows is what is genuinely outstanding, each with its evidence.
   they serialise, the await is honest and only *visibility* lags; if they all return immediately, the
   await is not waiting for the closure and that is the defect.
 
+  **The measurement, taken, and it answers the question.** Twenty commits written as one pipelined
+  batch, arrival offsets in milliseconds:
+
+  ```text
+  11 8 7 6 9 14 9 16 13 14 10 11 15 17 12 19 17 20 20 18
+  first=11ms  last=18ms  span=7ms
+  ```
+
+  Twenty commits answered inside a 7 ms window, which is not twenty serialised SQLite transactions —
+  and it is not consistent with `Db::write`'s `.await` blocking each caller until its own closure
+  returns either, since the closure cannot run twenty times in 7 ms while the mutex serialises it.
+
+  **So the write path is not the problem, and neither is the await.** What the timings show is that
+  the MCP server dispatches requests as they arrive and completes them concurrently, so a read sent
+  *after* a write can still be executed *before* it. The client's ordering is not the server's
+  ordering, and nothing in this project makes a read wait for a write it was pipelined behind.
+
+  **That also explains why the MCP-layer mutex did not help**, which had been the loose end: it was
+  applied to `Sakur4Server`'s `call_tool`, and it should have ordered the two handlers. Either it did
+  not span the dispatch as intended, or the writes complete outside the handler's own future. Both
+  are checkable now, and both are in the same place — which is much narrower than the seven rounds
+  of search that preceded it.
+
+  **The fix belongs in the store, not the transport.** A read should wait for any write already in
+  flight on the same `Db`, so that a client which pipelines a write and a read gets the ordering it
+  asked for regardless of how the transport schedules them. `Db` already holds the mutex both paths
+  need; what is missing is that a read does not take it in a way that observes a write's completion.
+
   **The loose end from two rounds ago now has a shape.** Serialising MCP dispatch should have ordered
   the two handlers and did not, which fits an acknowledgement produced outside the handler's own
   await chain rather than a race between handlers.
