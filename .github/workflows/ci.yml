@@ -337,9 +337,25 @@ jobs:
             #
             # `--only-group` compares the group only, so a loop over groups cannot reach outside
             # the one it names.
-            if ! node verify.mjs --only "${group}" --only-group --require-all --allow-absent \
-                 --json "/tmp/verify-${group}.json"; then
+            # # Tee each group's output to a file, without losing the exit code
+            #
+            # The `hermes` group passes its one check — `PASS context engine (FR-16) — 44
+            # contracts` — and then the process dies before printing its own summary, so the run
+            # reports the group as failed with no explanation. Everything after the PASS line is
+            # lost, and `--json` writes nothing in that case, which is itself the signal.
+            #
+            # `tee` cannot be the last command of the pipeline: `! pipeline` tests the exit status
+            # of `tee`, which succeeds, so a failing group would be recorded as passing. `PIPESTATUS`
+            # is bash-only and this step runs under `set -uo pipefail` with bash, but reading it is
+            # the kind of thing that breaks when a shell changes — so the status is captured by
+            # running the command with its output redirected, then printing the file.
+            node verify.mjs --only "${group}" --only-group --require-all --allow-absent \
+              --json "/tmp/verify-${group}.json" > "/tmp/verify-${group}.log" 2>&1
+            status=$?
+            cat "/tmp/verify-${group}.log"
+            if [ "$status" -ne 0 ]; then
               failed="${failed} ${group}"
+              echo "::warning::the ${group} group exited ${status}; its full output is in verify-${group}.log"
             fi
             echo "::endgroup::"
           done
@@ -365,7 +381,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: verify-report
-          path: /tmp/verify.json
+          # The merged report, plus each group's raw output. A group whose process died leaves no
+          # JSON but does leave a log, and that log is the only record of what it was doing.
+          path: |
+            /tmp/verify.json
+            /tmp/verify-*.log
+            /tmp/verify-*.json
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
