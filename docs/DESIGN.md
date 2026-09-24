@@ -4,7 +4,43 @@ This document records how each requirement is met, and — more usefully — the
 corrections taken along the way. Requirements that are *not* met are listed at the end rather than
 omitted.
 
-## Projects are isolated
+## The Hermes check fails because `context.plan_eviction` stalls on a long transcript
+
+`context engine (FR-16)` has failed with `2 contract(s) failed: something was evicted,
+compression_count advanced` for many rounds, and the failure reads as the engine refusing to
+compact. It is not. The two failing contracts are downstream of a **timeout**.
+
+`Sakur4ContextEngine::compress` commits the transcript, asks the daemon for an eviction plan, and if
+`plan` comes back `None` it logs "Sakur4 unreachable; leaving context unchanged". `Sakur4Client` uses
+a 20-second timeout, so a stalled plan is indistinguishable from a dead daemon, and the engine
+defers — which is the honest thing to do and is exactly what the check observes.
+
+**Measured**, against a daemon started the way the verifier starts one (`--backend embedded
+--context-window 8192`):
+
+| store state | `context.plan_eviction` |
+|---|---|
+| empty, `apply=false` | answers in 11 ms, `pressure: relaxed` |
+| 5 episodes, `apply=false` | answers in 3 ms |
+| 5 episodes, `apply=true` | answers in 6 ms, `applied: false` |
+| **90 episodes from the check's history** | **no response within 20 s** |
+
+So the plan path is sound on a small store and stalls on the one the check builds. That is a real
+defect in the daemon and the reason a documented feature — "the engine compacts the context" — does
+not happen on a long session, which is the only session where it matters.
+
+**What is not yet established** is where it stalls. Candidates worth checking first, in the order the
+evidence points: the daemon runs with `--context-window 8192` while the check calls
+`compress(..., current_tokens=26000)`, so the plan is asked to reclaim three times the window it was
+told it has; and `apply: true` writes eviction tiers to `episodic_stream`, which is guarded by
+triggers that block `UPDATE` (FR-1's append-only invariant) — if the tier write is one of the blocked
+ones, the plan would fail rather than stall, but a retry loop would look exactly like this.
+
+**Recorded rather than fixed**, and the distinction matters: this is the first time the FR-16 failure
+has been attributed to something other than the request-ordering bug, and both were real — ordering
+explains the pipelined reads, and this explains why a compacting engine does not compact. A future
+attempt should reproduce it with a plan call on a 90-episode store and read the daemon's own trace,
+which is how the ordering bug was finally found after six rounds of reasoning about it.
 
 > **Fixed.** `episodic_stream` gained a `project_id` in migration 3; the MCP and CLI commit paths
 > record it; episodic recall filters on it, closing the gap where only the Atlas retriever honoured
