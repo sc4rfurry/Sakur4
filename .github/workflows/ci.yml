@@ -40,7 +40,21 @@ jobs:
       # set`, which reads as a lint failure and is not one.
       - name: Install SQLCipher's crypto provider
         run: |
-          sudo apt-get update
+          # # Index each source independently
+          #
+          # `apt-get update` refreshes every configured repository and exits non-zero if any of
+          # them fails, so an unrelated third-party source being briefly unreachable fails this
+          # job before it runs anything. That is what happened: exit 100 from
+          # `packages.microsoft.com`, on a job whose only need is `libssl-dev` from Ubuntu's own
+          # archive.
+          #
+          # A failure to install the package is still a failure, so this does not hide the case
+          # the step exists to handle. It stops reporting somebody else's outage as ours.
+          for list in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list; do
+            [ -e "$list" ] || continue
+            sudo apt-get update -o Dir::Etc::sourcelist="$list" -o Dir::Etc::sourceparts=/dev/null \
+              || echo "::warning::could not refresh $list; continuing"
+          done
           sudo apt-get install -y libssl-dev
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --all-features
@@ -112,7 +126,21 @@ jobs:
           key: encryption
       - name: Install SQLCipher's crypto provider
         run: |
-          sudo apt-get update
+          # # Index each source independently
+          #
+          # `apt-get update` refreshes every configured repository and exits non-zero if any of
+          # them fails, so an unrelated third-party source being briefly unreachable fails this
+          # job before it runs anything. That is what happened: exit 100 from
+          # `packages.microsoft.com`, on a job whose only need is `libssl-dev` from Ubuntu's own
+          # archive.
+          #
+          # A failure to install the package is still a failure, so this does not hide the case
+          # the step exists to handle. It stops reporting somebody else's outage as ours.
+          for list in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list; do
+            [ -e "$list" ] || continue
+            sudo apt-get update -o Dir::Etc::sourcelist="$list" -o Dir::Etc::sourceparts=/dev/null \
+              || echo "::warning::could not refresh $list; continuing"
+          done
           sudo apt-get install -y libssl-dev
       - name: Build with the encryption feature
         run: cargo build -p sakur4-core --features encryption
@@ -273,7 +301,21 @@ jobs:
 
       - name: Install the encryption feature's crypto provider
         run: |
-          sudo apt-get update
+          # # Index each source independently
+          #
+          # `apt-get update` refreshes every configured repository and exits non-zero if any of
+          # them fails, so an unrelated third-party source being briefly unreachable fails this
+          # job before it runs anything. That is what happened: exit 100 from
+          # `packages.microsoft.com`, on a job whose only need is `libssl-dev` from Ubuntu's own
+          # archive.
+          #
+          # A failure to install the package is still a failure, so this does not hide the case
+          # the step exists to handle. It stops reporting somebody else's outage as ours.
+          for list in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list; do
+            [ -e "$list" ] || continue
+            sudo apt-get update -o Dir::Etc::sourcelist="$list" -o Dir::Etc::sourceparts=/dev/null \
+              || echo "::warning::could not refresh $list; continuing"
+          done
           sudo apt-get install -y libssl-dev python3
 
       # # The verifier needs a daemon, and this job never built one
