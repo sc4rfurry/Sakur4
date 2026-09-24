@@ -262,6 +262,9 @@ node docs/verification/env-vars.mjs
 
 # Do the documents agree with the daemon about how many tools it exposes?
 node docs/verification/catalog-counts.mjs --bin $BIN
+
+# Does every command the docs tell a reader to run actually exist?
+node docs/verification/doc-commands.mjs --bin $BIN
 ```
 ### Diagnostics, for when something looks wrong
 

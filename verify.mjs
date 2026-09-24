@@ -117,6 +117,7 @@ const CATALOG = {
     "documented tool arguments exist",
     "documented environment variables exist",
     "documented catalogue size matches",
+    "documented commands exist",
   ],
   encryption: ["encryption at rest (FR-20)"],
   hermes: ["context engine (FR-16)"],
@@ -1172,6 +1173,27 @@ function harnessChecks() {
   // checking, and makes the numbers that are right harder to believe. The daemon is asked rather
   // than a constant in this file, so adding a tool cannot make this pass by being updated in step
   // with the thing it exists to catch.
+  // A documented command is an instruction. The README told a reader to run
+  // `sakur4d impact src::auth::validate`, which fails — the name is a placeholder and nothing said
+  // so — and `SKILL.md` documented `map --names` on a CLI that had no such flag. This asks the real
+  // binary whether each documented command names a real subcommand and real flags.
+  if (wanted("doc-commands", "rust")) {
+    const script = join(ROOT, "docs", "verification", "doc-commands.mjs");
+    const binary = daemonBinary();
+    if (!existsSync(script) || !binary) {
+      record("rust", "documented commands exist", SKIP, "needs a built daemon");
+    } else {
+      const r = run(process.execPath, [script, "--bin", binary]);
+      const ok = r.ok && /every documented command names a real subcommand/.test(r.output);
+      record(
+        "rust",
+        "documented commands exist",
+        ok ? PASS : FAIL,
+        ok ? (r.output.match(/(\d+) documented command/) ?? ["", "?"])[1] + " commands" : lastLines(r.output, 6),
+      );
+    }
+  }
+
   if (wanted("catalog-counts", "rust")) {
     const script = join(ROOT, "docs", "verification", "catalog-counts.mjs");
     if (!existsSync(script)) {
