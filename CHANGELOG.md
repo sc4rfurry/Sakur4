@@ -13,6 +13,10 @@ The Rust APIs in `sakur4-core` and `sakur4d` are published so the daemon has a
 home on crates.io rather than as a stability promise, and may change within a
 `0.x` minor release.
 
+## [Unreleased]
+
+Nothing yet.
+
 ## [0.2.0] - 2026-09-24
 
 **A minor bump rather than a patch**, per this file's own policy: the MCP tool surface gained an
@@ -327,7 +331,7 @@ The first release. Everything below is new.
 - **Optional encryption at rest (FR-20) is implemented but off by default.**
   Build with `--features encryption`. The default build links plain SQLite, so a store
   is readable by anyone with file access unless the feature was enabled.
-- **`cargo deny` and `cargo audit` are not wired into CI.** Review `Cargo.lock`
+- **`cargo deny` is not wired into CI.** (`cargo audit` is, as of 0.2.0.) Review `Cargo.lock`
   changes in a pull request.
 
 [Unreleased]: https://github.com/sc4rfurry/Sakur4/compare/v0.2.0...HEAD

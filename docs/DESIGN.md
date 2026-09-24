@@ -585,7 +585,7 @@ what follows is what is genuinely outstanding, each with its evidence.
   later process opens the same file and sees the row. What fails is visibility of a write to a read
   pipelined behind it in the same session.
 
-  **It is in the released binary**, not introduced later: `v0.1.0` from `~/.cargo/bin` reproduces it
+  **It is in the released binary**, not introduced later: `v0.1.0` from `~/.cargo/bin` reproduced it, and `v0.2.0` still does
   and does not have the `open_folds` field, so it predates that change.
 
   This is the defect that `context engine (FR-16)` has been failing on. Those contracts commit
