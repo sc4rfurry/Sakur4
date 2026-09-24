@@ -24,8 +24,8 @@ use sakur4_core::{Engine, EngineConfig};
 struct SilentClient;
 
 impl ClientHandler for SilentClient {
-    fn get_info(&self) -> rmcp::model::ClientInfo {
-        let mut info = rmcp::model::ClientInfo::default();
+    fn get_info(&self) -> rmcp::model::ClientConfig {
+        let mut info = rmcp::model::ClientConfig::default();
         info.protocol_version = ProtocolVersion::V_2026_07_28;
         info.capabilities = ClientCapabilities::default();
         info.client_info = Implementation::new("sakur4-test-client", "0.1.0");

@@ -34,7 +34,7 @@ use rmcp::model::{
     GetPromptResult, Implementation, ListPromptsResult, ListResourcesResult, ListToolsResult,
     PaginatedRequestParams, Prompt, PromptMessage, ProtocolVersion, ReadResourceRequestParams,
     ReadResourceResponse, ReadResourceResult, Resource, ResourceContents, ServerCapabilities,
-    ServerInfo,
+    ServerConfig,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler};
@@ -1433,8 +1433,8 @@ impl Sakur4Server {
 // ===========================================================================
 
 impl ServerHandler for Sakur4Server {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        let mut info = ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
