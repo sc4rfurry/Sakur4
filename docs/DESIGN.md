@@ -890,6 +890,32 @@ what follows is what is genuinely outstanding, each with its evidence.
   now measured and sound. Six fixes have failed; the last one failed by wiring, having for the first
   time had the right constraint to satisfy.
 
+  **A seventh attempt did the plumbing differently and still moved the number by chance.** The
+  transport was rebuilt on the verified two-channel shape — requests in on one channel, responses out
+  on another, which
+  `a_relay_carries_requests_in_and_answers_out` checks on its own — and the turnstile was added on top:
+
+  ```text
+  batched pair, 10 runs:  0/1  0/1  0/1  1/1  1/1  1/1  1/1  0/1  0/1  0/1     -> 4/10
+  five commits sent 0…4:  0,2,4,1,3  |  0,1,2,4,3  |  0,4,2,3,1  |  1,0,2,4,3  |  1,0,4,3,2
+  ```
+
+  **Two permits, so two messages can be in flight.** The pump takes one before writing message N and
+  drops it as soon as the write completes, while the handler takes its own for the duration of the
+  work. Between those two windows the next line can be written, so the gate admits a second request
+  and the ordering is arbitrary again. The improvement from 0/8 to 4/10 is that race landing the right
+  way half the time, not a fix — and it was reverted for the same reason the previous one was.
+
+  **What the next attempt needs, stated exactly.** One permit, held **across the response**, not
+  across the write: the pump must not release until the handler for its message has finished, which
+  means the pump and the handler cannot each take their own. Either the pump takes the single permit
+  and the handler signals completion back to it, or the response is written to the client by the same
+  task that read the request. Both are small, and both are a different shape from what has been tried.
+
+  The two transport tests added along the way are kept. They check the plumbing in isolation and are
+  why this attempt is known to have failed in the gate rather than in the channels — which is the most
+  that can be said for eight failed fixes, and it is more than could be said for the first six.
+
   **The protocol says the reordering is legal, which reframes the whole entry.** From the JSON-RPC
   2.0 specification:
 
