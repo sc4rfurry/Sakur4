@@ -394,6 +394,33 @@ what follows is what is genuinely outstanding, each with its evidence.
   Worth naming how this entry was written: the audit found "no production caller" and I recorded it
   as a wiring gap. Reading the assembler showed it is a preview path, and the claim had to be
   narrowed. The first version was true about the call sites and wrong about what they mean.
+* **A store count is reported as zero while the row exists — cause not established.** Reproducible
+  on every run, and written down unresolved rather than guessed at:
+
+  ```sh
+  sakur4d --db /tmp/x.db --backend none serve --transport stdio   # then, in order:
+    memory.fold  {session_id: s, description: d, goal: g}   -> fold_01a0d1882a6e7215956130b6283670d2
+    sakur4.status {}                                        -> open_folds: 0
+  # and afterwards, on the same file:
+  sqlite> SELECT COUNT(*) FROM folds WHERE status='open';   -> 1
+  ```
+
+  The fold is written with `status='open'`, the row is in the store, and the same process reports
+  `open_folds: 0` for it. `DbStats.folds_open` is `SELECT COUNT(*) FROM folds WHERE status='open'`
+  — the identical query the shell answers with 1 — and `scalar()` wraps it in `unwrap_or(0)`, so a
+  query that *fails* is indistinguishable from a query that returns nothing. `Engine::status` reads
+  `self.db.stats()` on the same `Db` the fold was written through, and `Db` holds one
+  `Arc<Mutex<Connection>>`, so a stale snapshot is not the obvious explanation and I could not
+  confirm one.
+
+  Two things follow. The `unwrap_or(0)` inside `stats` is a real hazard on its own: it converts any
+  schema drift, missing table or query error into a plausible-looking zero, and the comment above it
+  says the intent was only to avoid failing `doctor`. And this is the shape of bug that a screenshot
+  would not catch — the number is not obviously wrong, it is wrong in the safe direction, and only
+  comparing it against the store reveals it.
+
+  Recorded as unresolved so the next attempt starts from the reproduction rather than from the
+  symptom.
 
 ### Deviations from the original plan, stated
 

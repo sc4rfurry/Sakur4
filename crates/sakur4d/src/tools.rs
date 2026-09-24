@@ -537,6 +537,22 @@ pub struct StatusOutput {
     pub stale_entries: i64,
     pub anchors: i64,
     pub repo_files: i64,
+    /// Folds the agent opened and has not closed.
+    ///
+    /// # The model is told to fold, and could not find out what it had open
+    ///
+    /// The preamble instructs it to wrap a token-intensive subtask in
+    /// `memory.fold` / `memory.unfold`. A fold that is opened and not closed is a piece of the
+    /// agent's own working state, and its identifier is the only way back to the trace — but
+    /// nothing surfaced the open ones. `DbStats` counts them (`folds_open`), and this response did
+    /// not include the count, and no tool listed them at all: `EvictionEngine::open_folds` is the
+    /// only query that returns the ids and it has no caller.
+    ///
+    /// So an agent whose context was compacted while a fold was open had no way to discover it,
+    /// which makes "fold your work" a promise the tool surface did not keep. The count is exposed
+    /// here; `memory.recall_fold` then takes an id, so a count is enough to tell whether one is
+    /// outstanding and `session.snapshot` plus the store hold the rest.
+    pub open_folds: i64,
 }
 
 /// `sakur4.dream` input.
@@ -1300,6 +1316,7 @@ impl Sakur4Server {
             stale_entries: s.db.stale_entries,
             anchors: s.db.anchors,
             repo_files: s.repo_files,
+            open_folds: s.db.folds_open,
         }))
     }
 
