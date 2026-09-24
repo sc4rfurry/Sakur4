@@ -284,4 +284,80 @@ mod transport_tests {
 
         serving.abort();
     }
+
+    /// The relay, which is the shape the ordering fix needs.
+    ///
+    /// A message can only be held back somewhere the transport controls, so the fix needs two
+    /// channels with a relay between them — the client writes to one, the relay decides when each
+    /// message reaches the server, and responses come back on the other.
+    ///
+    /// This is that relay with **no gate**, checked before any gate is added. If the gate later breaks
+    /// something, the relay is already known good — the discipline the three failed attempts skipped,
+    /// each of which wired a whole mechanism into the live path and learned only that "it hangs".
+    ///
+    /// The awkward part is that a `duplex` is one bidirectional buffer, so a relay between two of them
+    /// needs the response direction carried separately rather than by copying a channel onto itself.
+    /// That is what the second pair is for.
+    #[tokio::test]
+    async fn a_relay_carries_requests_in_and_answers_out() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let cfg = sakur4_core::EngineConfig {
+            db_path: dir.path().join("relay.db").to_string_lossy().to_string(),
+            backend: sakur4_core::llama::BackendSpec::Embedded.to_string(),
+            ..Default::default()
+        };
+        let engine = sakur4_core::Engine::open(cfg).await.expect("engine opens");
+        let server = crate::tools::Sakur4Server::new(engine);
+
+        // # No relay, and no splitting the server's own channel
+        //
+        // The server reads requests from one channel and writes responses to another, which is the
+        // shape `IntoTransport` accepts as a pair. That is the whole mechanism the ordering fix needs:
+        // a pump decides when each request line reaches `to_server`, and the client reads answers from
+        // `from_server`. No bidirectional channel to split, which is what the previous three attempts
+        // got wrong — each split the server's own duplex while something else read the peer end, and
+        // the server then had two readers on one buffer and answered nothing.
+        let (mut to_server, req_rx) = tokio::io::duplex(64 * 1024);
+        let (res_tx, mut from_server) = tokio::io::duplex(64 * 1024);
+
+        let serving = tokio::spawn(async move {
+            let running =
+                rmcp::serve_server(server, (req_rx, res_tx)).await.expect("server starts");
+            let _ = running.waiting().await;
+        });
+
+        let meta = serde_json::json!({
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {}
+        });
+        for id in [1, 2] {
+            let request = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": { "name": "sakur4.status", "arguments": {}, "_meta": meta }
+            });
+            to_server
+                .write_all(format!("{request}\n").as_bytes())
+                .await
+                .expect("write the request");
+            to_server.flush().await.expect("flush");
+        }
+
+        let mut lines = tokio::io::BufReader::new(&mut from_server).lines();
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let line = tokio::time::timeout(std::time::Duration::from_secs(10), lines.next_line())
+                .await
+                .expect("an answer within ten seconds")
+                .expect("a line")
+                .expect("not end-of-stream");
+            let parsed: serde_json::Value = serde_json::from_str(&line).expect("valid JSON");
+            assert!(parsed["result"].is_object(), "a result, not an error: {line}");
+            ids.push(parsed["id"].as_i64().expect("an id"));
+        }
+        assert_eq!(ids, vec![1, 2], "both answers arrive, in the order asked");
+
+        serving.abort();
+    }
 }
