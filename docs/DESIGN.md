@@ -419,6 +419,23 @@ what follows is what is genuinely outstanding, each with its evidence.
   17.945443  response id=3  status -> episodes 0
   ```
 
+  **The boundary, narrowed to one sentence: a read does not observe a write from the same pipelined
+  batch, and observes any other write correctly.** Two experiments settled that, and they are the
+  ones worth repeating if this is picked up again:
+
+  | experiment | result |
+  |---|---|
+  | a daemon session against a store written by an **earlier process**, asking only for status | **`episodes 1`** — correct |
+  | commit and status **in the same batch** | **`episodes 0`** — wrong |
+  | the same two sent one at a time | `episodes 1` — correct |
+
+  So `db.stats()` reads the store faithfully, the store layer is sound, and the write commits — a
+  later process opens the same file and sees the row. What fails is visibility of a write to a read
+  pipelined behind it in the same session.
+
+  **It is in the released binary**, not introduced later: `v0.1.0` from `~/.cargo/bin` reproduces it
+  and does not have the `open_folds` field, so it predates that change.
+
   This is the defect that `context engine (FR-16)` has been failing on. Those contracts commit
   episodes and then read back what the daemon reports, and a check that pipelines them sees the
   stale answer — which is why the failure looked like eviction being broken and why it appeared in
