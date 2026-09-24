@@ -546,6 +546,26 @@ what follows is what is genuinely outstanding, each with its evidence.
   asked for regardless of how the transport schedules them. `Db` already holds the mutex both paths
   need; what is missing is that a read does not take it in a way that observes a write's completion.
 
+  **That fix was written, and it did not work either.** `Db` gained an `Arc<tokio::sync::Mutex<()>>`
+  held across the whole of both `write` and `with` — a lock the runtime can schedule, unlike the
+  `parking_lot` one that lives inside `spawn_blocking` — precisely so a read would queue behind an
+  in-flight write. The pipelined probe still reports `episodes 0`. The change was reverted; the suite
+  passed with it (257 tests, no deadlock), so it is not obviously wrong, but an unproven change in
+  the store's critical path is worse than none.
+
+  **So two fixes have now failed** — serialising the MCP tool surface, and serialising store
+  operations — which rules out a third family of explanations: the ordering of the two calls is not
+  what is wrong, at any layer that has been tried.
+
+  **What that leaves, and it is uncomfortable.** The commit reports success with a real `ep_…`
+  identifier, the row reaches the store, and a read in the same session still does not see it — with
+  the reads and writes now serialised end to end. Something is completing the write *after* both the
+  handler and the lock have moved on, and the daemon's own trace hints at where to look: on the
+  pipelined pair it logs a `response message id=2` for the commit and **no response line for the
+  status at all**, even though the client receives one. A handler whose response is not logged where
+  the other's is does not look like the same code path, and that is the next thing to establish —
+  from the trace, not from reasoning about the framework.
+
   **The loose end from two rounds ago now has a shape.** Serialising MCP dispatch should have ordered
   the two handlers and did not, which fits an acknowledgement produced outside the handler's own
   await chain rather than a race between handlers.
