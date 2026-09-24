@@ -130,6 +130,12 @@ pub struct RecallInput {
     pub file_path: Option<String>,
     #[serde(default)]
     pub include_folded: bool,
+    /// Which project to search. Defaults to the project the daemon was started for.
+    ///
+    /// Passing a different one deliberately searches *that* project's memory; omitting it is the
+    /// normal case and is what keeps one project's transcript out of another's answers.
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 /// `memory.recall` output.
@@ -780,6 +786,20 @@ impl Sakur4Server {
             session_id: input.session_id.clone(),
             file_path: input.file_path.clone(),
             include_folded: if input.include_folded { Some(true) } else { None },
+            // # Recall is scoped to this project unless the caller says otherwise
+            //
+            // A store holds every project a user has worked on. Without this, a session in one
+            // project could be handed another's turns: `RecallFilters` has carried a `project_id`
+            // since the Atlas retriever was added, and only the Atlas honoured it, so semantic
+            // recall was scoped and the transcript was not. This is why working in one project
+            // surfaced material from another.
+            //
+            // A caller may still widen it explicitly, and that is deliberate rather than a hole:
+            // asking across projects is a reasonable thing to want as long as it is asked for.
+            project_id: input
+                .project_id
+                .clone()
+                .or_else(|| Some(self.engine.project_id().to_string())),
             ..Default::default()
         };
         let result = self

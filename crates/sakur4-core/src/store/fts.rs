@@ -35,13 +35,25 @@ pub struct LexicalHit {
 impl Db {
     /// Run a BM25 query against `episodic_fts`.
     ///
-    /// `session_id` and `fold_id` are optional hard filters applied after the
-    /// MATCH, because FTS5 external-content tables index the whole stream.
+    /// `session_id`, `project_id` and `fold_id` are optional hard filters applied after the MATCH,
+    /// because FTS5 external-content tables index the whole stream.
+    ///
+    /// # `project_id` is what keeps one project out of another's transcript
+    ///
+    /// A store holds every project a user has worked on, so an unfiltered search over the stream
+    /// returns turns from all of them — which is how working in one project surfaced material from
+    /// another. Filtering here rather than in the caller means every route into episodic recall gets
+    /// it, including the LIKE fallback for builds without FTS5.
+    ///
+    /// Rows written before migration 3 have `project_id IS NULL`. A scoped search **excludes** them
+    /// rather than treating `NULL` as a match: an unattributed row belongs to no project, and showing
+    /// it to whichever project happens to be asking is the defect this filter exists to remove.
     pub async fn search_episodes(
         &self,
         query: &str,
         limit: usize,
         session_id: Option<&str>,
+        project_id: Option<&str>,
         exclude_folded: bool,
     ) -> Result<Vec<LexicalHit>> {
         let match_expr = sanitize_match(query);
@@ -49,6 +61,7 @@ impl Db {
             return Ok(Vec::new());
         }
         let session = session_id.map(|s| s.to_string());
+        let project = project_id.map(|s| s.to_string());
         let use_fts = self.has_fts5();
         let limit = limit as i64;
         // The LIKE fallback needs the raw query inside the blocking closure, so
@@ -57,14 +70,21 @@ impl Db {
 
         self.with(move |c| {
             if !use_fts {
-                return like_scan_episodes(c, &raw_query, limit, session.as_deref());
+                return like_scan_episodes(
+                    c,
+                    &raw_query,
+                    limit,
+                    session.as_deref(),
+                    project.as_deref(),
+                );
             }
             let sql = "SELECT f.rowid AS rowid,
                               bm25(episodic_fts) AS score,
                               snippet(episodic_fts, 0, '[', ']', ' … ', 12) AS snip,
                               e.episode_id AS episode_id,
                               e.session_id AS session_id,
-                              e.fold_id AS fold_id
+                              e.fold_id AS fold_id,
+                              e.project_id AS project_id
                        FROM episodic_fts f
                        JOIN episodic_stream e ON e.rowid = f.rowid
                        WHERE episodic_fts MATCH ?1
@@ -77,14 +97,20 @@ impl Db {
                 let snip: String = r.get("snip")?;
                 let sess: Option<String> = r.get("session_id")?;
                 let fold: Option<String> = r.get("fold_id")?;
-                Ok((id, score, snip, sess, fold))
+                let proj: Option<String> = r.get("project_id")?;
+                Ok((id, score, snip, sess, fold, proj))
             })?;
 
             let mut out = Vec::new();
             for row in rows {
-                let (id, score, snip, sess, fold) = row?;
+                let (id, score, snip, sess, fold, proj) = row?;
                 if let Some(want) = session.as_deref()
                     && sess.as_deref() != Some(want)
+                {
+                    continue;
+                }
+                if let Some(want) = project.as_deref()
+                    && proj.as_deref() != Some(want)
                 {
                     continue;
                 }
@@ -416,6 +442,7 @@ fn like_scan_episodes(
     query: &str,
     limit: i64,
     session: Option<&str>,
+    project: Option<&str>,
 ) -> Result<Vec<LexicalHit>> {
     // # This must mirror `sanitize_match`, deliberately
     //
@@ -447,15 +474,18 @@ fn like_scan_episodes(
     }
 
     let sess_idx = params.len() + 1;
-    let lim_idx = params.len() + 2;
+    let proj_idx = params.len() + 2;
+    let lim_idx = params.len() + 3;
     let sql = format!(
         "SELECT e.episode_id, e.content FROM episodic_stream e
          WHERE ({}) AND (?{sess_idx} IS NULL OR e.session_id = ?{sess_idx})
+           AND (?{proj_idx} IS NULL OR e.project_id = ?{proj_idx})
          ORDER BY e.seq DESC LIMIT ?{lim_idx}",
         clauses.join(joiner)
     );
     let mut stmt = c.prepare(&sql)?;
     params.push(Box::new(session.map(|s| s.to_string())));
+    params.push(Box::new(project.map(|s| s.to_string())));
     params.push(Box::new(limit.max(1)));
     let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
 
@@ -588,7 +618,7 @@ mod tests {
             "retries",
             "how many retries does the helper take",
         ] {
-            let hits = db.search_episodes(query, 5, None, false).await.unwrap();
+            let hits = db.search_episodes(query, 5, None, None, false).await.unwrap();
             assert!(
                 !hits.is_empty(),
                 "query {query:?} found nothing; a model asking this would conclude the fact was never recorded"
@@ -618,7 +648,7 @@ mod tests {
         .await
         .unwrap();
 
-        let hits = db.search_episodes("coherence bound", 5, None, false).await.unwrap();
+        let hits = db.search_episodes("coherence bound", 5, None, None, false).await.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].source_id, "e0");
         assert!(hits[0].score > 0.0, "scores are normalised so larger is better");

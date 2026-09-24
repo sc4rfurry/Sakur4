@@ -4,23 +4,28 @@ This document records how each requirement is met, and — more usefully — the
 corrections taken along the way. Requirements that are *not* met are listed at the end rather than
 omitted.
 
-## Projects are not isolated, and the store made that structural
+## Projects are isolated
 
-> **Partially fixed.** `episodic_stream` gained a `project_id` in migration 3, the MCP and CLI commit
-> paths record it, and `sakur4.status` now reports `project_episodes` / `project_facts` /
-> `project_atlas` scoped to the caller alongside the store-wide totals — plus
-> `store_holds_other_projects`, so a count that looks low is explained rather than surprising.
-> Verified: two project roots against one store, each reporting only its own episodes.
+> **Fixed.** `episodic_stream` gained a `project_id` in migration 3; the MCP and CLI commit paths
+> record it; episodic recall filters on it, closing the gap where only the Atlas retriever honoured
+> the project a caller was working in; and `sakur4.status` reports `project_episodes` /
+> `project_facts` / `project_atlas` scoped to the caller alongside the store-wide totals, plus
+> `store_holds_other_projects` so a count that looks low is explained rather than surprising.
 >
-> **What is still open** is episodic recall. The column exists and is populated, but the episodic
-> retriever still filters on `session_id` alone, so a caller that passes one session gets that
-> session and a caller that passes none still gets every project's transcript. Wiring
-> `RecallFilters.project_id` into the episodic path is the remaining step, and the notes below
-> describe the original state so the shape of the problem stays legible.
+> `memory.recall` takes an optional `project_id` for a caller that wants to search another project
+> deliberately; omitting it uses the daemon's own project, which is what keeps one project's
+> transcript out of another's answers.
+>
+> Verified end to end: two project roots against one store, A commits, B recalls the same term and
+> finds nothing while A finds its own turn; and the status counts agree.
+>
+> Rows written before migration 3 keep `NULL` and are **excluded** by a scoped query rather than
+> attributed to whoever asks — an old episode's project is not recoverable, and guessing would
+> reproduce the defect rather than fix it.
 
 Reported from use, not from a test: working in OMP in one project surfaces material from another.
-The cause is in the store's shape, and it is worth stating before the requirement-by-requirement
-notes because it is the most consequential gap in the project.
+The cause was in the store's shape, and the notes below describe it as it was, because the shape of
+the problem is what makes the fix legible.
 
 **`episodic_stream` has no `project_id` column.** Its scoping keys are `session_id` and `slot_id`.
 Everything else that matters does have one — `semantic_atlas`, `symbolic_fact`, `repo_file` and

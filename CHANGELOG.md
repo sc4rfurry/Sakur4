@@ -34,6 +34,17 @@ home on crates.io rather than as a stability promise, and may change within a
 - **Still open:** episodic recall filters on `session_id` alone, so it does not yet use the new
   column. Semantic recall is project-scoped; the transcript is not.
 
+**Episodic recall is project-scoped**
+
+- `memory.recall` filters the transcript by the project the daemon was started for. It previously
+  filtered on `session_id` only, so a caller that passed no session — which is the common case — got
+  turns from every project in the store, and `session_id` is derived from the working directory's
+  name by the OMP plugin, so two checkouts of `src` shared one.
+- `memory.recall` accepts an optional `project_id` to search another project deliberately. This is
+  additive: omitting it is the normal case, so no existing call changes meaning.
+- **Breaking for anyone relying on the old behaviour.** A recall that used to return other projects'
+  turns no longer does. That was the defect; a caller that wants it can pass a `project_id`.
+
 **Hermes ContextEngine (`integrations/hermes-plugin/`)**
 
 - Replaces Hermes' summarising context engine with Sakur4's eviction engine, and closes a

@@ -272,6 +272,11 @@ impl RecallEngine {
                 query,
                 per,
                 filters.session_id.as_deref(),
+                // Scopes the transcript to one project. `RecallFilters` has carried a `project_id`
+                // since the Atlas retriever was added, and only the Atlas honoured it — so semantic
+                // recall was project-scoped while episodic recall was not, and a session in one
+                // project could be handed another's turns. See `docs/DESIGN.md`.
+                filters.project_id.as_deref(),
                 !filters.include_folded.unwrap_or(false),
             )
             .await?;
