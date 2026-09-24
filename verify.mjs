@@ -115,6 +115,7 @@ const CATALOG = {
     "workflow shell blocks parse",
     "documented test count matches",
     "documented tool arguments exist",
+    "documented environment variables exist",
   ],
   encryption: ["encryption at rest (FR-20)"],
   hermes: ["context engine (FR-16)"],
@@ -1116,6 +1117,25 @@ function harnessChecks() {
   // The README's tool table is the reference a reader writes a call from, so a missing argument is
   // not cosmetic: `code.get_repo_map` accepts `names_only`, and without it there is no documented
   // way to learn the qualified names that `code.query_symbol` requires.
+  // An environment variable is a promise. A name documented and not read is the worst kind of
+  // documentation defect: the reader exports it, the program behaves as though it were never set,
+  // and the conclusion is that the feature is broken. Several were in that state —
+  // `SAKUR4_LLAMA_API_KEY` among them, which is the one anybody behind a gated server needs first.
+  if (wanted("env-vars", "rust")) {
+    const script = join(ROOT, "docs", "verification", "env-vars.mjs");
+    if (!existsSync(script)) {
+      record("rust", "documented environment variables exist", SKIP, "the check is missing");
+    } else {
+      const r = run(process.execPath, [script]);
+      const ok = r.ok && /every documented environment variable is read/.test(r.output);
+      record(
+        "rust",
+        "documented environment variables exist",
+        ok ? PASS : FAIL,
+        ok ? `${(r.output.match(/(\d+) documented environment/) ?? ["", "?"])[1]} variables` : lastLines(r.output, 5),
+      );
+    }
+  }
   if (wanted("tool-args", "rust")) {
     const script = join(ROOT, "docs", "verification", "tool-args.mjs");
     if (!existsSync(script)) {

@@ -256,8 +256,10 @@ node docs/verification/snapshot-roundtrip.mjs --bin $BIN --backend $BASE
 
 # Usage accounting (FR-15): report through the tool, then read the receipt back.
 node docs/verification/usage-roundtrip.mjs --bin $BIN
-```
 
+# Does every environment variable the docs name actually get read?
+node docs/verification/env-vars.mjs
+```
 ### Diagnostics, for when something looks wrong
 
 ```bash

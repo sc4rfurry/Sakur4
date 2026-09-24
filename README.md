@@ -574,7 +574,21 @@ Everything is optional. The defaults work.
 | `SAKUR4_DB` | `sakur4.db` (daemon) · `~/.sakur4/sakur4.db` (skill) | Memory store |
 | `SAKUR4_SESSION` | derived | Session id |
 | `SAKUR4_BACKEND` | `auto` | `auto` · `embedded` · `none` · a llama.cpp base URL |
+| `SAKUR4_LLAMA_API_KEY` | unset | Sent as a bearer token to the inference server. Needed for any server that requires authentication — llama.cpp behind a reverse proxy, or with `--api-key` |
+| `SAKUR4_LLAMA_URL` | unset | Base URL for the inference server, when no `--backend` is given |
+| `SAKUR4_SNAPSHOT_DIR` | the temp directory | Where `session.snapshot` writes save files |
+| `SAKUR4_EMBED_URL` | unset | OpenAI-compatible embedding endpoint, for semantic Atlas entries |
+| `SAKUR4_EMBED_MODEL` | `nomic-embed-text` | Model name to request from that endpoint |
 | `SAKUR4_EMBED_API_KEY` | unset | Key for a configured embedding endpoint |
+| `SAKUR4_PROJECT_ROOT` | the working directory | Root used to name a project for the Repo Cortex index |
+| `SAKUR4_EVICTION_PROFILE` | chosen from the backend | `cache-first` · `window-first` · `balanced` — overrides the automatic choice |
+| `SAKUR4_SQLITE_VEC_PATH` | searched | Path to a `sqlite-vec` extension, for vector search without the fallback scan |
+| `SAKUR4_TRANSPORT` | `stdio` | Transport for `serve`, when `--transport` is not given |
+
+**A variable that is set and does nothing is worse than one that does not exist**, so the table above
+is checked: `docs/verification/env-vars.mjs` fails if a name documented here appears nowhere in the
+code. It was written after finding several that were read by the code and named by no document —
+`SAKUR4_LLAMA_API_KEY` among them, which is the one anybody running a gated server needs first.
 
 **Oh My Pi extension extras**
 
