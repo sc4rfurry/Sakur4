@@ -467,8 +467,13 @@ what follows is what is genuinely outstanding, each with its evidence.
   [`integrations/hermes-plugin/LIVE-TESTING.md`](../integrations/hermes-plugin/LIVE-TESTING.md).
 * **Signed release artifacts** — the release publishes archives with SHA-256 checksums, which detect
   corruption and not tampering. There is no GPG signature and no build provenance attestation.
-* **`cargo audit` / `cargo deny` in CI** — neither runs. A small, lockfile-pinned dependency set is
-  not a substitute for a vulnerability feed.
+* **`cargo audit` runs in CI; `cargo deny` does not.** Running the audit by hand the first time found a
+  **medium-severity vulnerability in `rustls`** — RUSTSEC-2026-0285, "TLS 1.3 handshake messages
+  incorrectly accepted across encryption level boundaries", present in 0.23.44 and fixed in 0.23.45,
+  reaching this project through `reqwest` for the reverse proxy. The advisory had been published ten
+  days and nothing here would have said so, which is the argument for the step rather than for that
+  particular fix. `cargo deny` remains unrun: it covers licences and duplicate versions, which is a
+  policy question this project has not answered.
 * **Three `PromptParts` slots are populated only by tests and the testkit.** `PromptParts` renders
   eight parts; every production caller uses five — `with_system`, `with_anchors`, `with_timeline`,
   and `with_recall` in two of the three. Nothing in `src/` calls `with_repo_map`,

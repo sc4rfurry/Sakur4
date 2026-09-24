@@ -59,6 +59,25 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --all-features
 
+      # # Known vulnerabilities in the dependency tree
+      #
+      # `docs/DESIGN.md` listed this as a gap for many rounds — "a small, lockfile-pinned dependency
+      # set is not the same as a checked one". Running it by hand found a **medium-severity
+      # vulnerability in `rustls`** on the first attempt: RUSTSEC-2026-0285, "TLS 1.3 handshake
+      # messages incorrectly accepted across encryption level boundaries", present in 0.23.44 and
+      # fixed in 0.23.45. It reached this project through `reqwest`, which the reverse proxy uses to
+      # forward to an inference server — so the exposure is a TLS connection this process opens.
+      #
+      # That is the argument for the step rather than for the fix: the advisory had been published
+      # for ten days and nothing here would have said so.
+      #
+      # `--locked` so the audit reads the committed lockfile rather than resolving anything, and
+      # `cargo install` for the same reason the version is pinned by the tool's own MSRV rules.
+      - name: cargo audit
+        run: |
+          cargo install cargo-audit --locked --quiet
+          cargo audit
+
   # ---------------------------------------------------------------------------
   # Tests on every supported platform.
   #
