@@ -966,8 +966,17 @@ Stated plainly, because the alternative is finding out later.
   end-to-end by a live model, but Hermes' own tool selection is untested.
 - **The OMP compaction hook has never fired for real.** The tool path is verified;
   forcing OMP past its context limit is separate work.
-- **OMP 18.1.17 is the tested version.** The extension API is undocumented and was
-  reverse-engineered from the shipped type definitions.
+- **OMP version.** Verified against 18.2.x — the installed build at the time of writing is
+  18.2.11. Earlier text named 18.1.17 as "the tested version", which was true when written and had
+  been wrong for several releases; the benchmark note in `docs/bench/live-model.md` said 18.2.0, so
+  the same fact was recorded at three different values.
+
+  **The plugin declares no version floor at all.** Its `package.json` has
+  `"@earendil-works/pi-coding-agent": "*"` as an optional peer dependency, so nothing records the
+  minimum the README claims — the "18.1.17 or newer" line in
+  [`integrations/omp-plugin/README.md`](integrations/omp-plugin/README.md) is prose and not
+  enforced. The extension API is undocumented, so a minor bump can change it without notice;
+  `--no-extensions` is how to tell whether a failure is OMP's or this plugin's.
 
 **Deliberately absent**
 

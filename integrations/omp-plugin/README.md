@@ -127,7 +127,11 @@ indistinguishable, because OMP surfaces extension-load errors only to a TTY.
 
 ## Requirements
 
-- Oh My Pi 18.1.17 or newer.
+- Oh My Pi 18.2.x. Verified against the installed 18.2.11. The extension API is undocumented and
+  changes between minor versions, so a build older or newer than 18.2 may not load. **This line used
+  to say "18.1.17 or newer"** — that named the version the API was first reverse-engineered from,
+  not one anything is tested against, and nothing enforces it: `package.json` declares
+  `"@earendil-works/pi-coding-agent": "*"`.
 - Node.js 18+ (OMP bundles its own runtime).
 - `sakur4d` 0.1.0 or newer. No GPU, model or network needed — the daemon's
   embedded backend simulates a llama.cpp slot, so the extension is fully usable
