@@ -1108,10 +1108,23 @@ impl MemoryFabric {
 
     /// Facts whose qualified names match any of `names`.
     ///
-    /// The doc said "used by staleness re-resolution in the recall engine". It is not: nothing in
-    /// the workspace calls this method. Left in place because it is a plausible accessor for a
-    /// re-resolution path that does not exist yet, and recorded here so the next reader does not
-    /// take the old comment as evidence that the path is implemented.
+    /// # Nothing calls this, and unlike its neighbours that is not a defect — the path it names is redundant
+    ///
+    /// Its doc claimed *"used by staleness re-resolution in the recall engine"*, and a previous round corrected
+    /// that to say nothing calls it, leaving the method because a re-resolution path *"does not exist yet"*.
+    /// **Reading that path settles it: it never needs to exist.** Staleness is resolved by a single statement
+    /// that joins `semantic_atlas` to `symbolic_fact` and returns `recorded_hash` and `current_hash` side by
+    /// side, and `StaleEntry` is built from those rows. The comparison is the SQL, so a batch lookup of facts
+    /// by name has nothing to contribute — the render path already has both hashes by the time it needs them.
+    ///
+    /// Which makes this different from the five other uncalled functions this project has found. `open_folds`,
+    /// `last_indexed`, `ImpactEntry::stale`, `render_anchor_block` and `is_backend_unavailable` were each a
+    /// **guarantee with no caller**, and each was fixed by wiring the caller up. This is an accessor whose
+    /// caller was designed around it — the join is the design, and it is the better one.
+    ///
+    /// Left in place as library surface, with the reasoning here rather than a promise about future work.
+    /// **The earlier comment was the real defect**: it told a reader a path was coming, which would have
+    /// invited someone to build it.
     pub async fn facts_by_names(&self, names: Vec<String>) -> Result<Vec<SymbolicFact>> {
         if names.is_empty() {
             return Ok(Vec::new());
