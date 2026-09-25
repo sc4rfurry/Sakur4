@@ -124,6 +124,7 @@ const CATALOG = {
     "latency verdict decision holds",
     "install check platform gate holds",
     "official MCP SDK conformance",
+    "published wiki matches wiki/",
     "documentation links resolve",
     "anchors go through the budget check",
     "workflows are structurally sound",
@@ -1308,8 +1309,6 @@ function harnessChecks() {
       record(
         "rust",
         "latency verdict decision holds",
-    "install check platform gate holds",
-    "official MCP SDK conformance",
         ok ? PASS : FAIL,
         ok ? "PASS, FAIL and INCONCLUSIVE across every combination" : lastLines(r.output, 6),
       );
@@ -1333,6 +1332,7 @@ function harnessChecks() {
       record(
         "harness",
         "official MCP SDK conformance",
+    "published wiki matches wiki/",
         SKIP,
         "SAKUR4_MCP_SDK_PATH is not configured (npm install --prefix <dir> @modelcontextprotocol/sdk)",
       );
@@ -1342,9 +1342,43 @@ function harnessChecks() {
       record(
         "harness",
         "official MCP SDK conformance",
+    "published wiki matches wiki/",
         ok ? PASS : FAIL,
         ok ? "handshake, tools, resources, prompts, refusal — via a third-party client" : lastLines(r.output, 8),
       );
+    }
+  }
+
+  // # Does the PUBLISHED wiki match the tracked pages?
+  //
+  // The published wiki is a separate git repository and nothing compared it with `wiki/`. It drifted for
+  // several rounds in the worst direction available: the **Limitations** page still described the
+  // pipelined-read ordering defect as **open**, which v0.2.1 had fixed and shipped. A reader deciding
+  // whether to trust this project is told to read that page first.
+  //
+  // The repository's guards could not see it — `doc-links.mjs` checks that wiki links resolve, and the other
+  // guards read the README. **None of them reads the published wiki's prose.**
+  //
+  // It needs the network and it never pushes; publishing stays a deliberate act. A clone failure reports a
+  // skip rather than a failure, because being offline is not a documentation defect and a check that goes red
+  // offline is one people learn to ignore.
+  if (wanted("wiki-published", "rust")) {
+    const script = join(ROOT, "docs", "verification", "wiki-published.mjs");
+    if (!existsSync(script)) {
+      record("rust", "published wiki matches wiki/", SKIP, "the check is missing");
+    } else {
+      const r = run(process.execPath, [script], { timeout: 240_000 });
+      if (/SKIP: the wiki repository could not be cloned/.test(r.output)) {
+        record("rust", "published wiki matches wiki/", SKIP, "could not reach the wiki repository");
+      } else {
+        const ok = r.ok && /match the published wiki/.test(r.output);
+        record(
+          "rust",
+          "published wiki matches wiki/",
+          ok ? PASS : FAIL,
+          ok ? "every page, and no stale claim about a fixed defect" : lastLines(r.output, 8),
+        );
+      }
     }
   }
 
@@ -1363,7 +1397,6 @@ function harnessChecks() {
       record(
         "rust",
         "install check platform gate holds",
-    "official MCP SDK conformance",
         ok ? PASS : FAIL,
         ok ? "runs on Windows, skips everywhere else" : lastLines(r.output, 6),
       );
