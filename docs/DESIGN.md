@@ -478,14 +478,40 @@ what follows is what is genuinely outstanding, each with its evidence.
   `usize` fields. Asserting otherwise would repeat the mistake the wiki link checker and the workflow YAML
   heuristic both made: a check that flags a correct thing.
 
-  It is reported as a **note** instead, because the two ways it bites are real and neither appears in a
-  conformance run: a client that *validates* strictly rather than ignoring the keyword would reject the
-  schema, and 92 warnings per session is noise that teaches a reader to skip the log.
+  It is reported as a **note** instead, because it is still worth knowing: 92 warnings per session is noise
+  that teaches a reader to skip the log.
 
-  **The fix is one substitution at the `schemars` layer** — `"uint"` to `"uint64"`, the standard name for an
-  unsigned 64-bit integer. **It is deliberately not done here:** it changes the schema for all 17 tools,
-  which is a wire-contract change and belongs in a release with a changelog entry of its own, not bundled
-  into the round that noticed it.
+  **I first wrote here that the fix was to change `"uint"` to `"uint64"`, and that was wrong in a way worth
+  recording.** Measuring before acting said something more specific:
+
+  ```text
+  distinct (type, format) pairs across all 17 tool schemas:
+    integer / uint            3        <- exactly three fields
+    boolean / (none)          4
+    object / (none)          17
+    string / (none)          15
+  ```
+
+  The three are `code.get_repo_map.token_budget`, `context.record_usage.prompt_tokens` and
+  `context.record_usage.completion_tokens`. **All three are token counts**, and the README and the wiki
+  document them with no range at all.
+
+  So the honest position is narrower than "the schemas are wrong":
+
+  * **Nothing is broken.** No client is obliged to understand `uint`, and the reference implementation does
+    not. Every call works.
+  * **The annotation is uninformative rather than false.** `usize` is platform-sized, so `"format": "uint"`
+    genuinely cannot state a range — on a 32-bit target the same field is 32 bits. **"I don't know the range"
+    is roughly what an unrecognised format communicates, which is accidentally honest.**
+  * **Changing it to `uint64` would not be a no-op.** It would add a maximum where none is declared today,
+    making the schema *more* restrictive for three fields whose real range is unbounded in principle. Trading
+    a harmless annotation for a possibly-wrong constraint is not an improvement.
+
+  **The change worth making, when someone wants to make it, is the opposite of the one I proposed:** declare
+  the three as `u64` explicitly so the wire contract stops depending on the target's pointer width, and let
+  the format be `uint64` as a consequence rather than as the goal. That is a wire-contract change across three
+  fields and belongs in a release with a changelog entry — not in the round that noticed it, and not as a
+  one-substitution fix.
 * **LoCoMo and the Endurance Benchmark** — not run. The A/B benchmark in [`bench/`](bench/) is a
   different and narrower measurement: matched windows, one repository, one model. It does not
   substitute for a standardised long-conversation benchmark.
