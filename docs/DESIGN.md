@@ -1133,6 +1133,43 @@ what follows is what is genuinely outstanding, each with its evidence.
   the two are combined. The next attempt should instrument the counter itself — print it from both sides —
   rather than reason about it, because every previous attempt reasoned and twelve were wrong.
 
+  **A fourteenth attempt did exactly that, and the counter named the bug in one line.**
+
+  Instrumented with `eprintln!` on both sides, the first run printed:
+
+  ```text
+  PROBE pump: forwarded=3 answered=2      <- and then repeated until the timeout
+  PROBE drain: wrote 1 newline(s), total now 1
+  PROBE drain: wrote 1 newline(s), total now 2
+  ```
+
+  **Three frames forwarded, two answers, waiting forever for a third that cannot exist.** The pump counted
+  every *frame* it forwarded, and `notifications/initialized` is a **notification** — no `id`, and the
+  server correctly sends no response. So `answered >= forwarded` was waiting for an answer to a message that
+  has none.
+
+  **This is not a transport bug. It is the same mistake that broke the eighth attempt's gate** — a
+  notification arming a wait that only a response can release — and it has been sitting in every attempt
+  since, disguised as a threading problem. It is also why the delay "worked": a sleep long enough let the
+  responses arrive before the check ran, so the wrong condition never had to be satisfied.
+
+  With `forwarded` counting requests rather than frames, **both controls pass with no delay at all**:
+
+  ```text
+  control 1  tools/list -> 17 tools
+  control 2  replies 25/25   statuses 12/12   WRONG 5, 1, 5, 2 across four runs
+  ```
+
+  The truncation is fixed and the counter-driven end-of-file drain works. The wrongness is exactly the
+  disclosed ordering defect, which is now the *only* thing left in this transport.
+
+  **Adding the gate on top produced 0 replies of 25 again**, and was reverted. But the position is now much
+  better than "unexplained": a shell with both controls passing, an off-by-one removed, and a release
+  mechanism that cannot lose an event, still stalls when a wait is placed *before* the first request rather
+  than after it. The next attempt should instrument that specific wait — the value of `seen` and the counter
+  at the moment it first blocks — instead of reasoning about it. The instrumentation is what worked here;
+  it took one run to find a bug that thirteen attempts of reasoning had missed.
+
   **The protocol says the reordering is legal, which reframes the whole entry.** From the JSON-RPC
   2.0 specification:
 

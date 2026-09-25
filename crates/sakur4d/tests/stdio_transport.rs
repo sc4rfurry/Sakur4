@@ -237,6 +237,50 @@ async fn batched_session(frames: &[Value]) -> Vec<Value> {
     out
 }
 
+/// **A notification produces no reply, and a transport must not wait for one.**
+///
+/// # Why this is its own test
+///
+/// Fourteen attempts at the ordering defect were spent on a transport that stalled, and the cause was one
+/// line: the pump counted every **frame** it forwarded and then waited for that many responses.
+/// `notifications/initialized` is a notification — no `id`, and the server correctly answers it with
+/// nothing — so `answered >= forwarded` waited for an answer that cannot exist. Instrumenting the counter
+/// printed it in one run, after thirteen attempts of reasoning had missed it:
+///
+/// ```text
+/// PROBE pump: forwarded=3 answered=2      <- repeated until the timeout
+/// ```
+///
+/// The same mistake broke an earlier gate: a notification arming a wait that only a response can release.
+/// It is a one-line error with a total-outage symptom, which is exactly the kind a suite should pin.
+///
+/// The assertion is the **exact reply count**, not "at least one": an off-by-one in this direction produces
+/// *fewer* replies, and a test that accepted any number would have passed throughout.
+#[tokio::test]
+async fn a_notification_gets_no_reply_and_does_not_hold_a_batch() {
+    let replies = batched_session(&[
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize",
+               "params":{"protocolVersion":"2025-11-25","capabilities":{},
+                         "clientInfo":{"name":"notification-count","version":"1"}}}),
+        // Two notifications, no `id`: neither may produce a reply, and neither may be waited on.
+        json!({"jsonrpc":"2.0","method":"notifications/initialized","params":{}}),
+        json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":99}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call",
+               "params":{"name":"sakur4.status","arguments":{}}}),
+    ])
+    .await;
+
+    let ids: Vec<u64> =
+        replies.iter().filter_map(|f| f.get("id").and_then(Value::as_u64)).collect();
+    assert_eq!(
+        ids,
+        vec![1, 2],
+        "two id-bearing requests and two notifications must produce exactly two replies — a transport that \
+         waits for a reply to a notification stops here, which is how fourteen attempts at the ordering \
+         defect were spent on an off-by-one"
+    );
+}
+
 #[tokio::test]
 async fn stdio_handshake_and_tool_catalog() {
     let mut client = StdioClient::spawn().await;

@@ -1027,7 +1027,7 @@ function verification() {
       "VERIFIED",
       T.green,
       [
-        "263 tests, workspace-wide, green",
+        "264 tests, workspace-wide, green",
         "MCP over stdio — real binary, real pipes",
         "MCP over HTTP — SDK client, live listener",
         "Hermes discovers all 17 tools",
