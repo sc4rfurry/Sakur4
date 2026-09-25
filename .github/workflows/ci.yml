@@ -332,11 +332,6 @@ jobs:
   consolidated:
     name: verify.mjs (--require-all)
     runs-on: ubuntu-latest
-    env:
-      # The conformance check needs the official MCP TypeScript SDK, installed below. Without this the
-      # check reports that it cannot run rather than passing — the honest behaviour, and also why CI
-      # installs it: an independent MCP client behind stdio is the whole point of the check.
-      SAKUR4_MCP_SDK_PATH: ${{ runner.temp }}/mcp-sdk
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -357,8 +352,24 @@ jobs:
       #
       # Installed to a temporary path rather than vendored: a `node_modules` and a lockfile inside a Rust
       # repository, for one check, is the wrong trade.
+      #
+      # # `runner.temp` is not available in a job-level `env:`
+      #
+      # The first version put `SAKUR4_MCP_SDK_PATH: ${{ runner.temp }}/mcp-sdk` in the job's `env:` block.
+      # **GitHub rejected the workflow outright — the run failed in 0 seconds, having executed nothing**, and
+      # the only visible signal was a red X on a job that never started.
+      #
+      # The cause is the context availability table: `runner` is available in `jobs.<id>.steps.*` and *not*
+      # in `jobs.<id>.env`. That is a documented rule and an easy one to miss, and **the failure mode is the
+      # worst kind** — no step logs, no annotation, nothing to read. `$GITHUB_ENV` exists for exactly this:
+      # write once in a step, read by every later step in the job.
       - name: the official MCP SDK
-        run: npm install --prefix "$SAKUR4_MCP_SDK_PATH" --no-audit --no-fund @modelcontextprotocol/sdk
+        run: |
+          sdk="$RUNNER_TEMP/mcp-sdk"
+          npm install --prefix "$sdk" --no-audit --no-fund @modelcontextprotocol/sdk
+          # Persist for the verify step. `$GITHUB_ENV` is the supported way to set a variable a later step
+          # reads; a job-level `env:` cannot see `runner.*` at all.
+          echo "SAKUR4_MCP_SDK_PATH=$sdk" >> "$GITHUB_ENV"
 
       - name: Install the encryption feature's crypto provider
         run: |
