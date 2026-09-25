@@ -99,21 +99,26 @@ honours it — and the leak is narrower and more specific than "everything is sh
   a session in project B is told how many episodes exist *across every project in the store*. One
   of those counts, `anchors`, is exactly what a caller would use to see what has been pinned for
   this work.
-* **Episodic recall cannot be project-filtered at all**, because the column does not exist.
-  `RecallFilters` carries a `project_id`, `search_semantic` applies it, and `recall.rs:557`
-  post-filters semantic entries by it — but the episodic retriever has only a `session_id` filter, so
-  a caller that does not pass one gets matches from every project.
-* The `session_id` the OMP plugin derives is `omp-${basename(cwd)}`. Two projects whose directories
-  share a name share a session id, and with no project column they share episodic memory too.
+  * **Episodic recall is project-filtered, and this entry said it could not be.** It read: *"Episodic recall
+    cannot be project-filtered at all, because the column does not exist"*, followed by three requirements and
+    then *"That is a worse position than the notes below imply, and it is the first thing to fix."*
 
-**What a fix requires**, recorded rather than attempted because it is a schema change and a tool
-contract change at once: a `project_id` column on `episodic_stream` (migration, indexed, backfilled
-from the owning project where derivable and left null where not), episodic recall filtering on it,
-and `DbStats` taking a project so the counts describe the caller's work rather than the store's
-contents. Until then the honest description is that Sakur4 keeps **one memory per store**, and the
-project dimension exists for semantic memory but not for the transcript.
+    **All three were done and this text was never updated.** Verified before rewriting it:
+    `schema.rs:94` adds the column and `:95` indexes it as `idx_episodic_project_seq`; `fts.rs:508` filters
+    episodic recall with `(?{proj_idx} IS NULL OR e.project_id = ?{proj_idx})`; and `engine.rs:369` scopes the
+    status counts with `WHERE project_id = ?1`.
 
-That is a worse position than the notes below imply, and it is the first thing to fix.
+    **The lesson runs the other way from the rest of this document.** A gap list that *understates* the
+    project is as damaging as one that overstates it: a reader who checks this entry against the repository
+    finds finished work, and stops trusting the entries that are still accurate. Two other paragraphs in this
+    section were also finished when checked — FR-11's staleness annotation and `cargo deny` — and each was
+    corrected in the round that noticed rather than the round that did the work.
+  * **The OMP plugin's `session_id` is still `omp-${basename(cwd)}`.** Two projects whose directories share a
+    name share a session id. With the `project_id` column in place the *episodic memory* no longer collides —
+    recall scopes by project, derived from the project root rather than the basename — but the identifier
+    itself is a directory name, so two projects in directories called `api` appear as one session in the
+    `sessions` table and in the status output. **The transcript is separated; the labels are not.**
+    `SAKUR4_SESSION` overrides it.
 
 **The requirements are listed here rather than in a separate specification.** There was a
 `sakur4_prd.json` in this repository: the document this was originally written against. It was

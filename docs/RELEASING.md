@@ -101,13 +101,20 @@ sed -i 's/0\.2\.0/0.2.1/g' Cargo.toml     # or your editor's replace-all
 cargo build --workspace                  # refresh Cargo.lock
 ```
 
-**And then three more files, which the version number does not lead you to.** The `0.2.1` release needed:
+**And then four more files, which the version number does not lead you to.** The `0.2.1` release needed:
 
 | File | What it holds |
 |---|---|
 | `integrations/omp-plugin/package.json` | the plugin's own version |
+| `integrations/omp-plugin/index.ts` | the same version, **three times** — every `clientInfo` handshake the plugin performs |
 | `integrations/omp-plugin/install.mjs` | the same version, twice — a dependency string and a written `package.json` |
 | `docs/verification/install-path.sh` | the tag the install check downloads by default |
+
+**`index.ts` was missed by `0.2.1` and nothing noticed**: the package said `0.2.1` while every handshake still
+announced `0.1.0`. That version reaches a daemon's `sessions` table and its logs, so it is the field someone
+reads to answer *"which plugin is this?"*. `verify.mjs` now checks all four sites against the manifest — and
+**fails if it finds no handshake site at all**, because a guard that cannot fail is the defect this project
+has recorded four times.
 
 So the bump is not finished when `cargo build` succeeds. **Confirm nothing was missed with the step that
 does it rather than a checklist that drifts:**

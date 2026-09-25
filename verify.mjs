@@ -125,6 +125,7 @@ const CATALOG = {
     "install check platform gate holds",
     "official MCP SDK conformance",
     "published wiki matches wiki/",
+    "OMP plugin version is consistent",
     "documentation links resolve",
     "anchors go through the budget check",
     "workflows are structurally sound",
@@ -1332,7 +1333,6 @@ function harnessChecks() {
       record(
         "harness",
         "official MCP SDK conformance",
-    "published wiki matches wiki/",
         SKIP,
         "SAKUR4_MCP_SDK_PATH is not configured (npm install --prefix <dir> @modelcontextprotocol/sdk)",
       );
@@ -1342,7 +1342,6 @@ function harnessChecks() {
       record(
         "harness",
         "official MCP SDK conformance",
-    "published wiki matches wiki/",
         ok ? PASS : FAIL,
         ok ? "handshake, tools, resources, prompts, refusal — via a third-party client" : lastLines(r.output, 8),
       );
@@ -1379,6 +1378,34 @@ function harnessChecks() {
           ok ? "every page, and no stale claim about a fixed defect" : lastLines(r.output, 8),
         );
       }
+    }
+  }
+
+  // # The OMP plugin announces its own version in four places, and only one is a manifest
+  //
+  // `package.json` holds the version; `index.ts` announces it in **three** `clientInfo` handshakes. Bumping
+  // the manifest alone left the other three behind, and nothing noticed: after the 0.2.1 release the package
+  // said `0.2.1` while every handshake still announced `0.1.0`.
+  //
+  // That version reaches a daemon's `sessions` table and its logs, so it is the field someone reads to answer
+  // "which plugin is this?" — and `docs/RELEASING.md` gained a table of files the version number does not lead
+  // you to, which this was not on. A checklist is the thing that drifts.
+  //
+  // The check also **fails when it finds no handshake site at all**, because an empty check that reports
+  // success is the defect this project has recorded four times: a guard that cannot fail.
+  if (wanted("plugin-version", "harness")) {
+    const script = join(ROOT, "docs", "verification", "plugin-version.mjs");
+    if (!existsSync(script)) {
+      record("harness", "OMP plugin version is consistent", SKIP, "the check is missing");
+    } else {
+      const r = run(process.execPath, [script]);
+      const ok = r.ok && /handshake site\(s\) and package\.json all say/.test(r.output);
+      record(
+        "harness",
+        "OMP plugin version is consistent",
+        ok ? PASS : FAIL,
+        ok ? r.output.trim().replace(/^ {2}/, "") : lastLines(r.output, 6),
+      );
     }
   }
 

@@ -302,6 +302,9 @@ node docs/verification/mcp-sdk-conformance.mjs ./target/release/sakur4d
 # Does the PUBLISHED wiki match wiki/ in this repository? Clones and compares; never pushes.
 node docs/verification/wiki-published.mjs
 
+# Does the OMP plugin announce one version everywhere? It states it in four places, one a manifest.
+node docs/verification/plugin-version.mjs
+
 # Candidates for reading, not a verdict: public functions nothing here calls. Not wired into
 # erify.mjs, because most of what it lists is legitimate library surface — read the doc comments.
 node docs/verification/uncalled.mjs

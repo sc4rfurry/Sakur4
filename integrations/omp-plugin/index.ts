@@ -289,7 +289,7 @@ class Client {
         params: {
           protocolVersion: "2025-11-25",
           capabilities: {},
-          clientInfo: { name: "omp-sakur4", version: "0.1.0" },
+          clientInfo: { name: "omp-sakur4", version: "0.2.1" },
         },
       },
       { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
@@ -368,7 +368,7 @@ class Client {
         params: {
           protocolVersion: "2025-11-25",
           capabilities: {},
-          clientInfo: { name: "omp-sakur4", version: "0.1.0" },
+          clientInfo: { name: "omp-sakur4", version: "0.2.1" },
         },
       },
       { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
@@ -436,7 +436,7 @@ class Client {
         params: {
           protocolVersion: "2025-11-25",
           capabilities: {},
-          clientInfo: { name: "omp-sakur4", version: "0.1.0" },
+          clientInfo: { name: "omp-sakur4", version: "0.2.1" },
         },
       },
       { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
