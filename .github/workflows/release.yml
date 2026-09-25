@@ -402,4 +402,30 @@ jobs:
       - name: The published release is installable
         env:
           SAKUR4_VERSION: ${{ github.ref_name }}
-        run: sh docs/verification/install-path.sh
+        run: |
+          # # The assets are not served the instant the release is created
+          #
+          # `v0.2.1` published five archives and `SHA256SUMS.txt`, and this step immediately failed with
+          # `curl: (22) ... 404` — then passed when re-run by hand minutes later. The release was fine; the
+          # download raced GitHub's own CDN.
+          #
+          # **A transient 404 is the one failure this step cannot tell from a real one**, and it is the
+          # failure it is most likely to hit, because it runs in the same job that created the release. So
+          # it probes until the checksum file is reachable, and prints how many attempts that took — which
+          # also makes the CDN's lag visible rather than mysterious. A genuinely missing asset still fails,
+          # two minutes later, with the URL named.
+          url="https://github.com/${{ github.repository }}/releases/download/${SAKUR4_VERSION}/SHA256SUMS.txt"
+          reachable=false
+          for attempt in $(seq 1 30); do
+            if curl -fsSL -o /dev/null "$url"; then
+              echo "assets reachable after ${attempt} attempt(s)"
+              reachable=true
+              break
+            fi
+            sleep 4
+          done
+          if [ "$reachable" != "true" ]; then
+            echo "::error::$url was still unreachable after 30 attempts (about two minutes)"
+            exit 1
+          fi
+          sh docs/verification/install-path.sh
