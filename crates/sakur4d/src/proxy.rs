@@ -68,7 +68,20 @@ impl Default for ProxyConfig {
     fn default() -> Self {
         Self {
             upstream: "http://127.0.0.1:8080".into(),
-            session_id: "proxy".into(),
+            // # `"proxy"` was a constant, and a constant here is a shared transcript
+            //
+            // `MemoryFabric::session_episodes` filters on `session_id` alone — not on `project_id` — and every
+            // episodic read goes through it: `timeline` for the assembled prompt, `recent_episodes` for the
+            // receipt, and the fold and anchor queries beside them. A constant default meant **one history for
+            // every project on the machine**.
+            //
+            // This function cannot reach the engine, so it carries a name that says what it is rather than one
+            // that looks plausible. **The CLI derives the real default** — `proxy-<project_id>` from the engine
+            // it just opened — so this value is only reached by a caller building the struct directly, which
+            // means a test or an embedding rather than a served session. `"proxy"` was worse than unhelpful
+            // there: it looked like a session id, so a caller who forgot to set one got a silently shared
+            // history instead of a name that says nothing was configured.
+            session_id: "proxy-unconfigured".into(),
             manage_context: true,
             // Generous, because a local model prefilling a long prompt is legitimately
             // slow: 100+ seconds was measured on a 27B at Q3 for a full re-prefill.

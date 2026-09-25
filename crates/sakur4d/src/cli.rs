@@ -1056,7 +1056,21 @@ async fn proxy(
     let engine = open_engine(cli).await?;
     let config = crate::proxy::ProxyConfig {
         upstream: upstream.to_string(),
-        session_id: session.unwrap_or_else(|| "proxy".to_string()),
+        // # The default session is the **project**, not the constant `"proxy"`
+        //
+        // It was `"proxy"`. `MemoryFabric::session_episodes` filters on `session_id` alone — not on
+        // `project_id` — and every episodic read goes through it, so `timeline` for the assembled prompt,
+        // `recent_episodes` for the receipt, and the fold and anchor queries beside it. **A constant meant
+        // one transcript for every project on the machine**, which is the same defect the OMP plugin had
+        // with `basename(cwd)` and a worse version of it.
+        //
+        // Two reasons this is easy to miss. The proxy is the route an OpenAI-compatible harness takes rather
+        // than the MCP tools, so it is not exercised by the integration checks; and `--session` exists, so
+        // anyone who noticed would assume they were expected to set it.
+        //
+        // The engine already knows which project it was opened for, so the default is derived rather than
+        // invented, and `--session` still overrides it.
+        session_id: session.unwrap_or_else(|| format!("proxy-{}", engine.project_id())),
         manage_context: !observe_only,
         ..Default::default()
     };

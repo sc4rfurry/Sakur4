@@ -1,0 +1,8 @@
+sakur4d 0.2.1 — reverse proxy
+  listening   http://127.0.0.1:9912
+  upstream    http://127.0.0.1:9
+  session     proxy-proj_56490f1776de149d
+  mode        managing context — over-long transcripts are trimmed
+
+Point the harness at http://127.0.0.1:9912/v1 instead of http://127.0.0.1:9/v1.
+

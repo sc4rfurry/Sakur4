@@ -94,12 +94,35 @@ B asks with --project-root pointing at B
 So the project *is* detected — `Engine::open` derives `proj_<hash(project_root)>` and semantic recall
 honours it — and the leak is narrower and more specific than "everything is shared":
 
-* `sakur4.status` counts are **global**. `DbStats` runs bare `SELECT COUNT(*)` against
-  `episodic_stream`, `symbolic_fact`, `semantic_atlas` and `anchor_set` with no project predicate, so
-  a session in project B is told how many episodes exist *across every project in the store*. One
-  of those counts, `anchors`, is exactly what a caller would use to see what has been pinned for
-  this work.
-  * **Episodic recall is project-filtered, and this entry said it could not be.** It read: *"Episodic recall
+* `sakur4.status` counts are **scoped per project, and this entry said they were global.** They were — bare
+  `SELECT COUNT(*)` against `episodic_stream`, `symbolic_fact`, `semantic_atlas` and `anchor_set` with no
+  project predicate — so a session in project B was told how many episodes existed across every project in the
+  store, and `anchors` in particular is exactly what a caller would use to see what had been pinned for *their*
+  work. `engine.rs:369` scopes them now, and `store_holds_other_projects` explains a count that looks low.
+* **Every session default in the project was audited after the OMP plugin's collided, and the reverse proxy's
+  was worse.**
+
+  | Where | Was | Now |
+  |---|---|---|
+  | `cli.rs` (proxy) | the literal `"proxy"` | `proxy-<project_id>` from the engine it opened |
+  | `proxy.rs` (`ProxyConfig::default`) | the literal `"proxy"` | `proxy-unconfigured` — this function cannot reach the engine |
+  | `omp-plugin/index.ts` | `omp-${basename(cwd)}` | `omp-<directory>-<8 hex of the resolved path>` |
+  | `skills/…/sakur4.mjs` | `skill-${basename(cwd)}` | **unchanged** — the same collision, but it is a CLI run in one directory at a time |
+  | `hermes-plugin/__init__.py` | `"hermes"` as a fallback | **unchanged** — Hermes calls `on_session_start(session_id)`, which the engine adopts and the contract suite asserts |
+  | `tools.rs` | `"default"` when a client omits `session_id` | **unchanged** — no project context exists at that point, so a shared id is the honest outcome |
+
+  **The proxy was the worst and the least visible.** A constant meant one transcript for every project on the
+  machine, and it is *less* likely to be noticed than the OMP case for two reasons: it is the route an
+  OpenAI-compatible harness takes rather than the MCP tools, so the integration checks never exercise it; and
+  `--session` exists, so anyone who thought about it would assume they were expected to set it.
+
+  Verified by running it — two project roots, two sessions:
+
+  ```text
+  D:\DuDu\Sakur4    session  proxy-proj_9e12c0c77944775e
+  C:\Windows\Temp   session  proxy-proj_56490f1776de149d
+  ```
+* **Episodic recall is project-filtered, and this entry said it could not be.** It read: *"Episodic recall
     cannot be project-filtered at all, because the column does not exist"*, followed by three requirements and
     then *"That is a worse position than the notes below imply, and it is the first thing to fix."*
 
@@ -113,7 +136,7 @@ honours it — and the leak is narrower and more specific than "everything is sh
     finds finished work, and stops trusting the entries that are still accurate. Two other paragraphs in this
     section were also finished when checked — FR-11's staleness annotation and `cargo deny` — and each was
     corrected in the round that noticed rather than the round that did the work.
-  * **The OMP plugin's `session_id` was `omp-${basename(cwd)}` — fixed, and it was worse than a collision of
+* **The OMP plugin's `session_id` was `omp-${basename(cwd)}` — fixed, and it was worse than a collision of
     labels.** Two projects whose directories are both called `api` shared a session id, and
     `MemoryFabric::session_episodes` filters on `session_id` **alone** — not on `project_id` — while every
     episodic read goes through it: `timeline` for the assembled prompt, `recent_episodes` for the receipt, and
