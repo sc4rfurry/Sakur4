@@ -48,9 +48,31 @@ pub enum Error {
     #[error("backend unavailable: {0}")]
     BackendUnavailable(String),
 
-    #[error("language not supported: {0}")]
-    UnsupportedLanguage(String),
-
+    // # There was an `UnsupportedLanguage` variant here, and nothing could construct it
+    //
+    // It read `#[error("language not supported: {0}")] UnsupportedLanguage(String)`, and a grep for every
+    // spelling of the name — `Error::UnsupportedLanguage`, `UnsupportedLanguage(`, the message text — found
+    // **only this file**. Not a dead caller: an unconstructible variant.
+    //
+    // The reason is that an unsupported file is not an error here. `repo.rs` counts it and skips it:
+    //
+    // ```text
+    // if language == Language::Unsupported {
+    //     report.files_unsupported += 1;
+    //     … continue;
+    // }
+    // ```
+    //
+    // So the variant described a failure mode that Sakur4 does not have, and the doc comment above the enum
+    // said the enum held *"every failure mode Sakur4 core can report"*. **That claim is stronger than
+    // "these are the ones we use"** — a caller matching on this enum exhaustively was handed an arm for a
+    // condition the library never produces, and a reader was told the list was complete when one entry was
+    // not real.
+    //
+    // Removed rather than left. The five earlier instances of this pattern were all the opposite direction —
+    // a capability built and never called — and each was solved by wiring it up. **This one has nothing to
+    // wire: the behaviour it named is deliberately a skip.** Deleting it is the whole fix, and the doc
+    // comment is now true by construction.
     #[error("{0}")]
     Other(String),
 }
