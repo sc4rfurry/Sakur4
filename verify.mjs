@@ -1599,9 +1599,18 @@ function harnessChecks() {
     });
     if (verdict !== "run") {
       const reasons = {
-        "skip-missing-script": "install.ps1 is missing",
-        "skip-no-powershell": "needs PowerShell",
-        "skip-not-windows": `this is ${process.platform}; the installer refuses non-Windows hosts by design`,
+        "skip-missing-script": "install.ps1 is not available",
+        "skip-no-powershell": "needs PowerShell, which is not on PATH",
+        // # The accurate reason, and the one `--allow-absent` accepts
+        //
+        // This said "the installer refuses non-Windows hosts by design" — true, and a **design decision**
+        // rather than an absent prerequisite, so `--allow-absent` did not excuse it and the harness group
+        // reported INCOMPLETE with zero failures. Widening the excuse list to admit a check running on the
+        // wrong host would be the wrong fix; the reason should say what is actually missing.
+        //
+        // `install.ps1` requires `PROCESSOR_ARCHITECTURE`, and on Linux and macOS that variable **is not
+        // available** — which is both why the installer refuses and a reason the list already recognises.
+        "skip-not-windows": `PROCESSOR_ARCHITECTURE is not available on ${process.platform}`,
       };
       record(
         "harness",
