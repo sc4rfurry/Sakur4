@@ -7,47 +7,65 @@ Every project has these. Most bury them. This page collects them in one place, s
 
 ---
 
-## The one that can affect correctness
+## The one that affected correctness — **fixed**
 
-### A queued batch is not executed in the order you sent it
+### A queued batch was not executed in the order you sent it
 
-**Status: open. Cause established, eight fixes attempted and reverted.**
+**Status: fixed.** Fourteen attempts; the last one worked, and the reason the other thirteen did not is
+worth a paragraph at the end of this section.
 
 JSON-RPC permits a server to process a batch *"as a set of concurrent tasks, processing them in any
 order"*, and MCP's stdio transport correlates responses only by `id`. Sakur4's tools are stateful — the
-preamble tells the model to commit a turn and then consult what it remembers — so order matters here in
-a way the protocol does not guarantee.
+preamble tells the model to commit a turn and then consult what it remembers — so order matters here in a
+way the protocol does not guarantee.
 
-Measured: the dispatcher serves queued requests in an **arbitrary** order, a different permutation each
-run, neither first-in-first-out nor last-in-first-out.
+Measured before the fix: the dispatcher served queued requests in an **arbitrary** order, a different
+permutation each run, neither first-in-first-out nor last-in-first-out. A `memory.commit_episode`
+answered with a real `ep_…` identifier while a `sakur4.status` in the same batch reported the count from
+before it — `0` for a store that now held `1`.
 
-**What you will see** if you write several frames at once and close stdin:
+**It is fixed at the transport.** Message N+1 is not forwarded until the response to N has been written,
+so a batch is served in the order it was sent, whatever the dispatcher does afterwards.
 
-```jsonc
-// sent as one batch
-{"id":2, "method":"tools/call", "params":{"name":"memory.commit_episode", ...}}
-{"id":3, "method":"tools/call", "params":{"name":"sakur4.status"}}
-// the commit answers with a real episode id, and the status reports the count
-// from before it — 0 for a store that now holds 1
-```
-
-**What to do:** send a call and await its answer. That is what every harness tested here does, and it is
-correct. If you are writing harness integration code, do not pipeline dependent calls.
-
-The full elimination — including the nine reverts and why each failed — is in
-[`docs/DESIGN.md`](https://github.com/sc4rfurry/Sakur4/blob/master/docs/DESIGN.md).
-
-**It is reproducible, and here is how much.** Twelve commit-then-status pairs written as one batch, in
-one session, every frame sent before any reply is read:
+The regression test sends twelve commit-then-status pairs as one batch, in one session, every frame sent
+before any reply is read, and requires **every** round to be correct:
 
 ```text
-a read in a batch was served before the write in front of it — 1/12 rounds wrong:
-status 101 reported 0, but 1 commits preceded it
+before:  a read in a batch was served before the write in front of it — 1/12 rounds wrong
+after:   0/12
 ```
 
-That test is written and **deliberately not committed** — a suite that fails is a suite people stop
-reading, and CI runs on every push. It is recorded in `docs/DESIGN.md`, and whoever fixes this should
-paste it in, watch it fail, implement, and watch the fraction reach `0/12`.
+It is in the suite, because it passes. It was written first and watched failing, then deliberately held
+out until it did not — a failing test is a test people stop reading.
+
+#### Why it took fourteen attempts
+
+Six tried to order the **handlers** with a lock. A lock orders the handlers, not the dispatch, and the
+server starts handlers in its own order — so none of them could have worked.
+
+The last attempt succeeded only after **instrumenting a counter instead of reasoning about it.** The
+first instrumented run printed this, and it named the bug outright:
+
+```text
+PROBE pump: forwarded=3 answered=2      <- repeated until the timeout
+```
+
+Three frames were forwarded and only two can ever be answered, because `notifications/initialized` is a
+**notification** — no `id`, and the server correctly sends no reply. The transport was waiting for an
+answer to a message that has none. That off-by-one had been mistaken for a threading problem throughout,
+and the same mistake had broken an earlier attempt's gate.
+
+Two more mistakes are now each pinned by a test of their own, because both produce a total outage and
+neither is visible from a passing suite:
+
+- **A notification produces no reply and must not be waited on.** A batch of two requests and two
+  notifications must yield exactly two replies; the suite previously asserted no such count.
+- **End of input is not the end of output.** A transport that closes its read side at EOF truncates a
+  large reply — `tools/list` returned *zero* tools while `sakur4.status` was fine, because the difference
+  is response size.
+
+The full elimination is in
+[`docs/DESIGN.md`](https://github.com/sc4rfurry/Sakur4/blob/master/docs/DESIGN.md).
 
 ---
 

@@ -24,7 +24,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use rmcp::transport::stdio;
+// stdio() is not used here: the transport is hand-wired so the ordering gate has a place to sit.
 use rmcp::transport::streamable_http_server::{
     StreamableHttpService, session::local::LocalSessionManager,
 };
@@ -118,18 +118,149 @@ async fn serve_stdio(
             sakur4_core::MCP_PROTOCOL_VERSION
         );
     }
-    let running =
-        rmcp::serve_server(server, stdio()).await.context("starting the MCP server on stdio")?;
+    let (mut to_server, req_rx) = tokio::io::duplex(64 * 1024);
+    let (res_tx, mut from_server) = tokio::io::duplex(256 * 1024);
+    let responses = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let responses_for_drain = responses.clone();
+    let responses_for_pump = responses.clone();
+
+    let pump = tokio::spawn(async move {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+        // Requests forwarded, and responses accounted for. Both count **requests**, never frames:
+        // `notifications/initialized` carries no `id` and is answered with nothing, so counting frames
+        // made the pump wait for a reply that cannot exist — the off-by-one that cost fourteen attempts.
+        let mut forwarded = 0usize;
+        let mut seen = 0usize;
+        while let Ok(Some(line)) = lines.next_line().await {
+            let is_notification = serde_json::from_str::<serde_json::Value>(&line)
+                .map(|v| v.get("id").is_none())
+                .unwrap_or(false);
+            if !is_notification {
+                // # The gate, and the one case it must not apply to
+                //
+                // Message N+1 is not forwarded until the response to N has been written — but **only when
+                // there is an N**. The first request has nothing in flight to wait for, and `forwarded == 0`
+                // is exactly that case. Waiting anyway blocks before `initialize` is ever sent, so every
+                // response is missing rather than out of order: identical symptoms to the off-by-one above,
+                // and the reason this gate produced 0 replies of 25 when it was first added.
+                if forwarded > 0 {
+                    wait_for_one_more(&responses_for_pump, &mut seen).await;
+                }
+                forwarded += 1;
+            }
+            if to_server.write_all(line.as_bytes()).await.is_err()
+                || to_server.write_all(b"\n").await.is_err()
+                || to_server.flush().await.is_err()
+            {
+                break;
+            }
+        }
+        // # End of input is not the end of output
+        //
+        // Closing the read side as soon as stdin ends truncated `tools/list` to zero tools while
+        // `sakur4.status`, a few hundred bytes, was unaffected — the difference is response size. Every
+        // forwarded request is answered before the close, bounded so a stall is logged rather than hung.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+        while responses_for_pump.load(std::sync::atomic::Ordering::SeqCst) < forwarded {
+            if tokio::time::Instant::now() >= deadline {
+                tracing::warn!("closing the read side with requests still unanswered");
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_micros(200)).await;
+        }
+        let _ = to_server.shutdown().await;
+    });
+
+    let drain = tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
+        let mut stdout =
+            CountingStdout { inner: tokio::io::stdout(), responses: responses_for_drain };
+        let _ = tokio::io::copy(&mut from_server, &mut stdout).await;
+        let _ = stdout.flush().await;
+    });
+
+    let running = rmcp::serve_server(server, (req_rx, res_tx))
+        .await
+        .context("starting the MCP server on stdio")?;
 
     tokio::select! {
         result = running.waiting() => {
+            pump.abort();
+            drain.abort();
             result.context("the MCP stdio session ended with an error")?;
         }
         _ = cancel.cancelled() => {
+            pump.abort();
+            drain.abort();
             tracing::info!("shutdown requested");
         }
     }
     Ok(())
+}
+
+/// Wait until the transport has written one more response than `seen`, then record it.
+///
+/// A comparison against a running total rather than a consumed permit, because **a permit can be lost**:
+/// an `AtomicBool` cleared with `swap(false)` erases a store landing between the writer's store and the
+/// reader's next check, and a one-slot `mpsc` with `try_send` drops a release while the slot is full. Every
+/// increment of a counter is observable and nothing is ever reset.
+async fn wait_for_one_more(responses: &std::sync::atomic::AtomicUsize, seen: &mut usize) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
+    while responses.load(std::sync::atomic::Ordering::SeqCst) <= *seen {
+        if tokio::time::Instant::now() >= deadline {
+            tracing::error!(
+                "no response for 120s; releasing the gate so the session cannot deadlock"
+            );
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_micros(200)).await;
+    }
+    *seen = responses.load(std::sync::atomic::Ordering::SeqCst);
+}
+
+/// `stdout` that counts completed responses, so both the gate and the end-of-file drain can consult it.
+///
+/// # Why newlines and not flushes
+///
+/// `tokio::io::copy` does not flush per message. From `tokio-1.53.1/src/io/util/copy.rs` it sets
+/// `need_flush` after a write and flushes only when a read returns `Pending` with a full buffer, so a count
+/// of flushes counts an event decided by the *reader's* behaviour rather than by a response being complete.
+/// JSON-RPC over stdio is newline-delimited, so a write containing a newline completed exactly that many.
+struct CountingStdout<W> {
+    inner: W,
+    responses: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl<W: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for CountingStdout<W> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let result = std::pin::Pin::new(&mut self.inner).poll_write(cx, buf);
+        if let std::task::Poll::Ready(Ok(written)) = &result {
+            let completed = buf[..*written].iter().filter(|b| **b == b'\n').count();
+            if completed > 0 {
+                self.responses.fetch_add(completed, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        result
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
 }
 
 /// Serve over streamable HTTP, with graceful shutdown on Ctrl-C.

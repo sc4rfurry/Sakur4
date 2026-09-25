@@ -281,6 +281,76 @@ async fn a_notification_gets_no_reply_and_does_not_hold_a_batch() {
     );
 }
 
+/// # A read sent after a write must see it, even when both are in one batch
+///
+/// **This is the test fourteen attempts were missing.** It was written first, watched failing at `1/12`
+/// rounds wrong, and deliberately held out of the suite because a failing test is a test people stop
+/// reading. It passes now, so it belongs here.
+///
+/// # The defect it pins
+///
+/// JSON-RPC 2.0 permits a server to process a batch *"as a set of concurrent tasks, processing them in any
+/// order"*, and MCP correlates responses only by `id`. Sakur4's tools are **stateful** — the preamble tells
+/// the model to commit a turn and then consult what it remembers — so order matters here in a way the
+/// protocol does not guarantee.
+///
+/// Measured before the fix: the dispatcher served queued requests in an **arbitrary** order, a different
+/// permutation each run. `memory.commit_episode` answered with a real `ep_…` identifier while a
+/// `sakur4.status` written after it reported the count from before it.
+///
+/// # Why twelve rounds
+///
+/// The failure was probabilistic, so one round passed about half the time — worse than no test, because it
+/// would have been trusted. Twelve rounds in one session, all frames written before any reply is read, makes
+/// a lucky pass vanishingly unlikely and makes the reported fraction the thing that shows the fix working.
+/// It fell from `1/12` to `0/12`.
+#[tokio::test]
+async fn a_read_in_a_batch_sees_the_write_before_it() {
+    const ROUNDS: u64 = 12;
+    let mut frames = vec![
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize",
+               "params":{"protocolVersion":"2025-11-25","capabilities":{},
+                         "clientInfo":{"name":"batch-order","version":"1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized","params":{}}),
+    ];
+    for round in 0..ROUNDS {
+        frames.push(json!({"jsonrpc":"2.0","id":100 + round * 2,"method":"tools/call",
+               "params":{"name":"memory.commit_episode",
+                         "arguments":{"session_id":"batch","role":"user",
+                                      "content":format!("turn {round}")}}}));
+        frames.push(json!({"jsonrpc":"2.0","id":101 + round * 2,"method":"tools/call",
+               "params":{"name":"sakur4.status","arguments":{}}}));
+    }
+
+    let replies = batched_session(&frames).await;
+    let by_id: std::collections::HashMap<u64, &Value> = replies
+        .iter()
+        .filter_map(|f| f.get("id").and_then(Value::as_u64).map(|id| (id, f)))
+        .collect();
+
+    let mut wrong = Vec::new();
+    for round in 0..ROUNDS {
+        let id = 101 + round * 2;
+        let expected = round + 1;
+        match by_id.get(&id).and_then(|f| f["result"]["structuredContent"]["episodes"].as_u64()) {
+            Some(episodes) if episodes >= expected => {}
+            Some(episodes) => wrong.push(format!(
+                "status {id} reported {episodes}, but {expected} commits preceded it"
+            )),
+            None => wrong.push(format!("status {id} never answered")),
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "a read in a batch was served before the write in front of it — {}/{ROUNDS} rounds wrong:\n{}\n\n\
+         A transport must not forward message N+1 until N has been answered. That is not something a lock \
+         can do — a lock orders the handlers, not the dispatch — which is why six lock-based attempts \
+         failed. See docs/DESIGN.md.",
+        wrong.len(),
+        wrong.join("\n")
+    );
+}
+
 #[tokio::test]
 async fn stdio_handshake_and_tool_catalog() {
     let mut client = StdioClient::spawn().await;

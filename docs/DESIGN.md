@@ -429,6 +429,10 @@ nearly-full window.
 
 ## What is not done
 
+**The pipelined-read ordering defect is no longer here.** It led this section for fourteen rounds and is
+**fixed** — the record of how is below, and it is worth reading because the last attempt succeeded only
+after instrumenting a counter instead of reasoning about it, having spent thirteen attempts reasoning.
+
 **This section listed completed work for several rounds.** The harness adapters, encryption at
 rest, real-server verification and the NFR numbers were all done and all still listed here. That is
 the more damaging direction for a document like this: a reader who checks it against the repository
@@ -1169,6 +1173,42 @@ what follows is what is genuinely outstanding, each with its evidence.
   than after it. The next attempt should instrument that specific wait — the value of `seen` and the counter
   at the moment it first blocks — instead of reasoning about it. The instrumentation is what worked here;
   it took one run to find a bug that thirteen attempts of reasoning had missed.
+
+  **A fifteenth attempt read that sentence, and the answer was in it. Resolved.**
+
+  *"a wait placed before the first request rather than after it"* — the gate waited **before forwarding**, and
+  `initialize` is an id-bearing request, so the very first message waited for a response that could not exist
+  because the request had not been sent. Nothing was in flight and the pump blocked anyway.
+
+  The fix is one condition:
+
+  ```rust
+  if !is_notification {
+      // Only when there IS a previous request to wait for.
+      if forwarded > 0 {
+          wait_for_one_more(&responses_for_pump, &mut seen).await;
+      }
+      forwarded += 1;
+  }
+  ```
+
+  Measured, twelve commit-then-status pairs per run, every frame written before any reply is read:
+
+  ```text
+  before:  replies 25/25   statuses 12/12   WRONG 5, 1, 5, 2, 4, 3   (arbitrary, as recorded)
+  after:   replies 25/25   statuses 12/12   WRONG 0, 0, 0, 0, 0, 0   six runs
+  control: tools/list -> 17 tools
+  ```
+
+  The test that was written first and watched failing at `1/12` now passes at `0/12` and **is in the suite**,
+  along with two others that pin the mistakes made on the way: a notification produces no reply and must not
+  be waited on, and a batch with stdin closed must still deliver the whole tool catalog.
+
+  **Fourteen failures, and every one of them was a one-line error in the transport.** Six tried to order the
+  handlers with a lock, which cannot work because a lock orders handlers and not dispatch. The rest were
+  plumbing. The generalisation worth keeping is not about this bug: **thirteen attempts reasoned about a
+  mechanism and the fourteenth instrumented it, and the instrumentation took one run.** Every attempt had
+  written a careful argument for why its fix would work; the counter printout needed no argument.
 
   **The protocol says the reordering is legal, which reframes the whole entry.** From the JSON-RPC
   2.0 specification:

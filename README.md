@@ -22,7 +22,7 @@ five.
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/sc4rfurry/Sakur4?style=flat-square&color=22d3ee)](https://github.com/sc4rfurry/Sakur4/stargazers)
 
-[![Tests](https://img.shields.io/badge/tests-264%20passing-34d399?style=flat-square)](#verification)
+[![Tests](https://img.shields.io/badge/tests-265%20passing-34d399?style=flat-square)](#verification)
 [![MCP](https://img.shields.io/badge/MCP-2026--07--28-8b5cf6?style=flat-square)](https://modelcontextprotocol.io)
 [![Rust](https://img.shields.io/badge/rust-1.94%2B-orange?style=flat-square)](https://www.rust-lang.org)
 [![Platforms](https://img.shields.io/badge/platforms-linux%20%C2%B7%20macOS%20%C2%B7%20windows-4b5563?style=flat-square)](#install)
@@ -967,24 +967,28 @@ correction is welcome — a comparison nobody can trust costs more than the row 
 
 Stated plainly, because the alternative is finding out later.
 
-**If you batch tool calls, wait for each answer before sending the next**
+**Batching is safe — this used to be the headline limitation**
 
 JSON-RPC permits a server to process messages "as a set of concurrent tasks, processing them in any
 order", and MCP's stdio transport correlates responses only by `id`. Sakur4 relies on the order: the
 preamble tells the model to commit a turn and then consult what it remembers, and the tools are
 stateful in exactly that way.
 
-Written as a **pipelined batch** — several frames at once, stdin closed — a read can be executed
-before the write in front of it. `memory.commit_episode` then answers with a real `ep_…` identifier
-while a `sakur4.status` in the same batch reports the count from before it. Sending each call and
-awaiting its answer is correct, and is what every harness tested here does.
+Written as a **pipelined batch** — several frames at once, stdin closed — a read could be executed
+before the write in front of it: `memory.commit_episode` answered with a real `ep_…` identifier while a
+`sakur4.status` in the same batch reported the count from before it.
 
-This is a live defect rather than a disclaimer. The cause is established: the server dispatches
-queued requests in an **arbitrary order** — measured, over repeated runs, as neither first-in-first-out
-nor last-in-first-out but a different permutation each time — so a read can begin before a write it was
-sent after. Awaiting each answer is the workaround, and it is what every harness tested here does.
-The full elimination, including five fixes that were tried and reverted, is in
-[docs/DESIGN.md](docs/DESIGN.md).
+**That is fixed.** The stdio transport now withholds message N+1 until the response to N has been
+written, so a batch is served in the order it was sent. A regression test sends twelve commit-then-status
+pairs in one batch with stdin closed and requires **every** round to be correct — the count that used to
+read `1/12` wrong now reads `0/12`.
+
+It took fourteen attempts and the record is worth reading, because the last one succeeded only after
+instrumenting a counter instead of reasoning about it — the first run printed `forwarded=3 answered=2`,
+and the cause was an off-by-one that had been mistaken for a threading problem throughout. Two earlier
+mistakes are documented in [docs/DESIGN.md](docs/DESIGN.md) and are now each pinned by a test: a
+notification produces no reply and must not be waited on, and end of input is not the end of output —
+a transport that closes its read side at EOF truncates a large reply such as `tools/list`.
 
 **Not yet true**
 
