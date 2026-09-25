@@ -46,6 +46,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { windowsInstallCheckVerdict } from "./docs/verification/install-check.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const EXE = process.platform === "win32" ? "sakur4d.exe" : "sakur4d";
@@ -121,6 +122,7 @@ const CATALOG = {
     "documented commands exist",
     "no unused dependencies",
     "latency verdict decision holds",
+    "install check platform gate holds",
     "documentation links resolve",
     "anchors go through the budget check",
     "workflows are structurally sound",
@@ -1305,8 +1307,30 @@ function harnessChecks() {
       record(
         "rust",
         "latency verdict decision holds",
+    "install check platform gate holds",
         ok ? PASS : FAIL,
         ok ? "PASS, FAIL and INCONCLUSIVE across every combination" : lastLines(r.output, 6),
+      );
+    }
+  }
+
+  // # And the platform gate for the Windows install check, asserted both ways
+  //
+  // The check ran on a Linux runner, where the installer correctly refused and the check called it a
+  // failure — two red CI runs. The fix is one condition whose dangerous form is *inverted*, and an inverted
+  // gate is invisible on Windows, which is where this runs. Both directions are asserted for that reason.
+  if (wanted("install-platform", "rust")) {
+    const script = join(ROOT, "docs", "verification", "install-check-test.mjs");
+    if (!existsSync(script)) {
+      record("rust", "install check platform gate holds", SKIP, "the check is missing");
+    } else {
+      const r = run(process.execPath, [script]);
+      const ok = r.ok && /platform gate holds in both directions/.test(r.output);
+      record(
+        "rust",
+        "install check platform gate holds",
+        ok ? PASS : FAIL,
+        ok ? "runs on Windows, skips everywhere else" : lastLines(r.output, 6),
       );
     }
   }
@@ -1547,18 +1571,43 @@ function harnessChecks() {
   // said Windows and CI tested it. This runs the PowerShell installer in `-DryRun`, which resolves the
   // release, downloads the archive, checks it against `SHA256SUMS.txt`, and reports where things would
   // go — everything but writing to the machine, so a check can run on any host.
+  //
+  // # It must not run on a non-Windows host, and it did
+  //
+  // A Linux runner has PowerShell, so the tool probe below succeeds — and `install.ps1` then dies with
+  // `unsupported architecture:` because `$env:PROCESSOR_ARCHITECTURE` does not exist there. **That is the
+  // installer behaving correctly**, refusing a platform it cannot serve, and this check counted it as a
+  // failure. Two CI runs went red on it.
+  //
+  // The lesson is the one this project keeps relearning in the other direction: a check that asks "did the
+  // command exit zero" without asking "was this command meant to run here" reports a correct refusal as a
+  // defect. The installer's refusal is asserted by its own logic; this check is for the case where it
+  // should have succeeded.
   if (wanted("install-path-windows", "harness")) {
     const script = join(ROOT, "install.ps1");
     const shell = ["pwsh", "powershell.exe"].find((candidate) => {
       const probe = spawnSync(candidate, ["-NoProfile", "-Command", "exit 0"], { encoding: "utf8" });
       return !probe.error && probe.status === 0;
     });
-    if (!existsSync(script) || !shell) {
+    // The platform decision is a pure function with its own test, because the dangerous way to get it wrong
+    // is inverted — skip on Windows, run on Linux — and this machine is Windows, so an inverted gate looks
+    // healthy here and fails only in CI. See `docs/verification/install-check.mjs`.
+    const verdict = windowsInstallCheckVerdict({
+      platform: process.platform,
+      hasPowershell: Boolean(shell),
+      hasScript: existsSync(script),
+    });
+    if (verdict !== "run") {
+      const reasons = {
+        "skip-missing-script": "install.ps1 is missing",
+        "skip-no-powershell": "needs PowerShell",
+        "skip-not-windows": `this is ${process.platform}; the installer refuses non-Windows hosts by design`,
+      };
       record(
         "harness",
         "Windows install path against the published release",
         SKIP,
-        "needs PowerShell",
+        reasons[verdict] ?? verdict,
       );
     } else {
       const r = run(shell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-DryRun"], {

@@ -291,6 +291,10 @@ node docs/verification/wiki-check.mjs
 # measure.mjs is the module under test — the pure decision, imported by nfr2-recall.mjs.
 node docs/verification/measure-check.mjs
 
+# The platform gate for the Windows-install check, asserted in BOTH directions — an inverted gate is
+# invisible on Windows, which is where it runs. install-check.mjs is the module under test.
+node docs/verification/install-check-test.mjs
+
 # Candidates for reading, not a verdict: public functions nothing here calls. Not wired into
 # erify.mjs, because most of what it lists is legitimate library surface — read the doc comments.
 node docs/verification/uncalled.mjs
