@@ -34,6 +34,7 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -83,15 +84,44 @@ function readConfig(cwd: string): Config {
   return {
     bin: process.env.SAKUR4_BIN,
     db: process.env.SAKUR4_DB ?? join(homedir(), ".sakur4", "sakur4.db"),
-    // A stable id per project, so memory does not bleed between repositories and
-    // does not require the operator to configure anything.
-    session: process.env.SAKUR4_SESSION ?? `omp-${basename(cwd)}`,
+    // # A session id that names the project **and** distinguishes it
+    //
+    // This was `omp-${basename(cwd)}` — a directory name. Two projects whose directories are both called
+    // `api` therefore shared a session id, and that mattered more than a collision of labels:
+    //
+    // `MemoryFabric::session_episodes` filters on `session_id` alone — **not** on `project_id` — and every
+    // episodic read goes through it: `timeline` for the assembled prompt, `recent_episodes` for the receipt,
+    // and the fold and anchor queries beside them. A shared basename therefore meant a shared **transcript**,
+    // and the timeline built for one project could contain the other's turns.
+    //
+    // The `project_id` dimension does not close it, because the session is the narrower key. Recall is
+    // project-scoped and was never affected; the prompt's own history was.
+    //
+    // So the readable name stays and a short digest of the **resolved** path is added: stable for a project,
+    // different between projects, and still legible in `sakur4.status`. `resolve` rather than the raw `cwd`
+    // so that `.` and an absolute path to the same directory agree.
+    session: process.env.SAKUR4_SESSION ?? sessionIdFor(cwd),
     projectRoot: process.env.SAKUR4_PROJECT_ROOT ?? cwd,
     retrieve: bool("SAKUR4_RETRIEVE", true),
     reportUsage: bool("SAKUR4_REPORT_USAGE", true),
     ownCompaction: bool("SAKUR4_OWN_COMPACTION", true),
     recallBudget: int("SAKUR4_RECALL_BUDGET", 1200),
   };
+}
+
+/**
+ * A session id that is stable per project and different between projects.
+ *
+ * `omp-<directory>-<8 hex>`: the readable part is what a person sees in `sakur4.status`, and the digest is
+ * what keeps two directories of the same name apart. Eight hex characters is 32 bits — a collision needs on
+ * the order of sixty thousand projects in one store to become likely, and a collision costs a shared
+ * transcript rather than a crash, so the price of being wrong is bounded and the price of a longer id is paid
+ * on every line of every status output.
+ */
+export function sessionIdFor(cwd: string): string {
+  const root = resolve(cwd);
+  const digest = createHash("sha256").update(root).digest("hex").slice(0, 8);
+  return `omp-${basename(root)}-${digest}`;
 }
 
 function basename(path: string): string {

@@ -80,14 +80,36 @@ if ($arch -eq 'ARM64') {
 $target = 'x86_64-pc-windows-msvc'
 
 # --- Which version --------------------------------------------------------------------------------
+#
+# # One attempt, then give up, and that is wrong for the same reason the release workflow's was
+#
+# The `v0.2.1` release's own install check failed with `curl: (22) ... 404` because GitHub does not serve a
+# release's assets the instant it exists. This has the same shape: a single call to the releases API, and
+# `Die` on anything that goes wrong — a dropped connection, a rate-limited response, a proxy hiccup.
+#
+# **A transient network failure is the one error this cannot distinguish from a real one**, and it is the
+# error it is most likely to hit on the machines that need it most. So it retries a few times with a
+# widening gap, reports how many attempts it took, and fails only when the attempts run out — naming
+# `-Version` as the way to skip the lookup entirely.
 if (-not $Version) {
     Say "  resolving  the latest release"
-    try {
-        $latest = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" `
-            -Headers @{ 'User-Agent' = 'sakur4-installer' }
-        $Version = $latest.tag_name
-    } catch {
-        Die "could not determine the latest release ($($_.Exception.Message)); pass -Version"
+    $attempts = 4
+    for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+        try {
+            $latest = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" `
+                -Headers @{ 'User-Agent' = 'sakur4-installer' } -TimeoutSec 30
+            $Version = $latest.tag_name
+            if ($attempt -gt 1) { Say "             resolved on attempt $attempt" }
+            break
+        } catch {
+            if ($attempt -eq $attempts) {
+                Die "could not determine the latest release after $attempts attempts ($($_.Exception.Message)).`n  Pass -Version v0.2.1 to skip the lookup, or check your network."
+            }
+            # Widening rather than fixed: a rate limit needs longer than a dropped packet.
+            $wait = $attempt * 2
+            Say "             attempt $attempt failed; retrying in ${wait}s"
+            Start-Sleep -Seconds $wait
+        }
     }
 }
 if (-not $Version) { Die 'could not determine the latest release; pass -Version' }

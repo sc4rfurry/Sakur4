@@ -126,6 +126,7 @@ const CATALOG = {
     "official MCP SDK conformance",
     "published wiki matches wiki/",
     "OMP plugin version is consistent",
+    "OMP session ids are per project",
     "documentation links resolve",
     "anchors go through the budget check",
     "workflows are structurally sound",
@@ -1403,8 +1404,34 @@ function harnessChecks() {
       record(
         "harness",
         "OMP plugin version is consistent",
+    "OMP session ids are per project",
         ok ? PASS : FAIL,
         ok ? r.output.trim().replace(/^ {2}/, "") : lastLines(r.output, 6),
+      );
+    }
+  }
+
+  // # Two projects with the same directory name must not share a session
+  //
+  // The plugin derived its session id as `omp-${basename(cwd)}`, and `session_episodes` filters on
+  // `session_id` alone — **not** `project_id` — so two directories called `api` shared a **transcript**, and
+  // the timeline built for one project could contain the other's turns. Recall was never affected because it
+  // is project-scoped; the prompt's own history was.
+  //
+  // The guard extracts the function from `index.ts` and evaluates it, which also means a rename or reshape
+  // fails loudly instead of silently testing nothing.
+  if (wanted("omp-session", "harness")) {
+    const script = join(ROOT, "docs", "verification", "omp-session-id.mjs");
+    if (!existsSync(script)) {
+      record("harness", "OMP session ids are per project", SKIP, "the check is missing");
+    } else {
+      const r = run(process.execPath, [script]);
+      const ok = r.ok && /stable per project and distinct between projects/.test(r.output);
+      record(
+        "harness",
+        "OMP session ids are per project",
+        ok ? PASS : FAIL,
+        ok ? "same directory name, different sessions; same project, same session" : lastLines(r.output, 6),
       );
     }
   }

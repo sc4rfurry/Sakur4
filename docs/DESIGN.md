@@ -113,12 +113,22 @@ honours it — and the leak is narrower and more specific than "everything is sh
     finds finished work, and stops trusting the entries that are still accurate. Two other paragraphs in this
     section were also finished when checked — FR-11's staleness annotation and `cargo deny` — and each was
     corrected in the round that noticed rather than the round that did the work.
-  * **The OMP plugin's `session_id` is still `omp-${basename(cwd)}`.** Two projects whose directories share a
-    name share a session id. With the `project_id` column in place the *episodic memory* no longer collides —
-    recall scopes by project, derived from the project root rather than the basename — but the identifier
-    itself is a directory name, so two projects in directories called `api` appear as one session in the
-    `sessions` table and in the status output. **The transcript is separated; the labels are not.**
-    `SAKUR4_SESSION` overrides it.
+  * **The OMP plugin's `session_id` was `omp-${basename(cwd)}` — fixed, and it was worse than a collision of
+    labels.** Two projects whose directories are both called `api` shared a session id, and
+    `MemoryFabric::session_episodes` filters on `session_id` **alone** — not on `project_id` — while every
+    episodic read goes through it: `timeline` for the assembled prompt, `recent_episodes` for the receipt, and
+    the fold and anchor queries beside them. **A shared basename therefore meant a shared transcript**, and the
+    timeline built for one project could contain the other's turns.
+
+    **The `project_id` work did not close this, and the reason is the useful part:** project scoping is applied
+    to *recall*, and recall was never the leak. The narrower key wins, so a session identifier that collides
+    defeats a project dimension that does not — and recall being correctly scoped is what made the defect look
+    handled.
+
+    The id is now `omp-<directory>-<8 hex>`: a digest of the resolved path, so it is stable per project,
+    distinct between projects, and still legible in `sakur4.status`. `SAKUR4_SESSION` overrides it.
+    `docs/verification/omp-session-id.mjs` asserts all five properties by **extracting the function from
+    `index.ts` and evaluating it**, so a rename or reshape fails loudly rather than testing nothing.
 
 **The requirements are listed here rather than in a separate specification.** There was a
 `sakur4_prd.json` in this repository: the document this was originally written against. It was
