@@ -68,6 +68,47 @@ Plus four structural checks added later, each of which found something:
 - **workflows are structurally sound** — GitHub accepts a malformed workflow and runs a *subset* of it,
   so this checks step indentation per job and that `cancel-in-progress` is the value each workflow needs.
 
+## The checks that test the tests
+
+Two of the newest checks do not examine Sakur4 at all — they examine a **decision** the verifier itself
+makes. Both exist because the decision had a failure mode that a live run could not produce, which is the
+worst position for a guard to be in: it looks like protection and exercises nothing.
+
+| Check | The decision | Why it needs its own test |
+|---|---|---|
+| **latency verdict decision holds** | whether an NFR-2 result is `PASS`, `FAIL` or `INCONCLUSIVE` | the branch that matters is *"outside target **and** the machine was busy"*, and on a real machine contention is nearly always true while the latencies are inside target — so it almost never fires |
+| **install check platform gate holds** | whether the Windows-install check may run on this host | the dangerous form is **inverted** — skip on Windows, run on Linux — and this machine *is* Windows, so an inverted gate looks perfectly healthy here and fails only in CI |
+
+Both are asserted in **both directions**, including the combination a live run cannot reach.
+
+**One of them caught its own author immediately.** `isContended` divided seconds by 1000 *as well*, making
+72 core-seconds per second look like `0.072` — the difference between "overloaded" and "idle" — and the
+verifier was reporting load as cumulative CPU time since **boot** over the process's elapsed time, printing
+`43029 core-seconds per second on 8 cores`, a number that cannot happen. Neither would have been visible
+without a test pinning the arithmetic.
+
+---
+
+## What CI checks beyond this machine
+
+`verify.mjs` runs locally and in CI, but CI reaches six things a developer machine often cannot:
+
+| Check | What it needs | What it establishes |
+|---|---|---|
+| **cargo deny** | nothing | licences, duplicate versions, sources and advisories, against `deny.toml` |
+| **cargo audit** | nothing | known vulnerabilities. It found a **medium-severity `rustls` advisory** on its first hand-run, ten days after publication |
+| **official MCP SDK conformance** | `@modelcontextprotocol/sdk` | the daemon driven by a **third-party** MCP client over stdio — see below |
+| **encryption at rest (FR-20)** | OpenSSL development files | FR-20's acceptance criterion |
+| **Hermes context engine (FR-16)** | Python | 44 contracts against a live daemon |
+| **install path** | a published release | the archive a user downloads, fetched back over the network and installed |
+
+**Why the SDK check matters more than it sounds.** The HTTP tests drive the server through `rmcp`'s own
+client, which is a genuinely independent implementation. The stdio tests use a **hand-rolled JSON-RPC
+client this project wrote** — a client of ours testing a server of ours, where a shared misunderstanding of
+the protocol makes both happy. *Nothing independent covered the transport every harness actually uses.*
+The SDK check closes that, and it is why CI installs a third-party JavaScript package to test a Rust
+server.
+
 ---
 
 ## The checks that do not run by default
