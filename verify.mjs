@@ -123,6 +123,7 @@ const CATALOG = {
     "no unused dependencies",
     "latency verdict decision holds",
     "install check platform gate holds",
+    "official MCP SDK conformance",
     "documentation links resolve",
     "anchors go through the budget check",
     "workflows are structurally sound",
@@ -1308,8 +1309,41 @@ function harnessChecks() {
         "rust",
         "latency verdict decision holds",
     "install check platform gate holds",
+    "official MCP SDK conformance",
         ok ? PASS : FAIL,
         ok ? "PASS, FAIL and INCONCLUSIVE across every combination" : lastLines(r.output, 6),
+      );
+    }
+  }
+
+  // # Conformance against the official MCP SDK, when one is available
+  //
+  // The stdio tests use a hand-rolled JSON-RPC client this project wrote, so until this check existed the
+  // only independent MCP client behind any transport was `rmcp` against HTTP. `SAKUR4_MCP_SDK_PATH` points
+  // at an installation of `@modelcontextprotocol/sdk`; without it the check says it cannot run rather than
+  // passing, and it is **not** excused by `--allow-absent` in the sense that matters — the reason says a
+  // path is missing, which is an absent prerequisite and therefore excusable, so CI without the SDK does
+  // not go red on it.
+  if (wanted("mcp-sdk", "harness")) {
+    const script = join(ROOT, "docs", "verification", "mcp-sdk-conformance.mjs");
+    const binary = daemonBinary();
+    if (!existsSync(script) || !binary) {
+      record("harness", "official MCP SDK conformance", SKIP, "needs a built daemon");
+    } else if (!process.env.SAKUR4_MCP_SDK_PATH) {
+      record(
+        "harness",
+        "official MCP SDK conformance",
+        SKIP,
+        "SAKUR4_MCP_SDK_PATH is not configured (npm install --prefix <dir> @modelcontextprotocol/sdk)",
+      );
+    } else {
+      const r = run(process.execPath, [script, binary]);
+      const ok = r.ok && /the official SDK and Sakur4 agree on the protocol/.test(r.output);
+      record(
+        "harness",
+        "official MCP SDK conformance",
+        ok ? PASS : FAIL,
+        ok ? "handshake, tools, resources, prompts, refusal — via a third-party client" : lastLines(r.output, 8),
       );
     }
   }
@@ -1329,6 +1363,7 @@ function harnessChecks() {
       record(
         "rust",
         "install check platform gate holds",
+    "official MCP SDK conformance",
         ok ? PASS : FAIL,
         ok ? "runs on Windows, skips everywhere else" : lastLines(r.output, 6),
       );

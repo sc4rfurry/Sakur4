@@ -295,6 +295,10 @@ node docs/verification/measure-check.mjs
 # invisible on Windows, which is where it runs. install-check.mjs is the module under test.
 node docs/verification/install-check-test.mjs
 
+# Conformance against the OFFICIAL MCP TypeScript SDK, over stdio. Needs SAKUR4_MCP_SDK_PATH pointing at a
+# directory with @modelcontextprotocol/sdk installed; without it the check reports that it cannot run.
+node docs/verification/mcp-sdk-conformance.mjs ./target/release/sakur4d
+
 # Candidates for reading, not a verdict: public functions nothing here calls. Not wired into
 # erify.mjs, because most of what it lists is legitimate library surface — read the doc comments.
 node docs/verification/uncalled.mjs

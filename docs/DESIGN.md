@@ -444,8 +444,40 @@ what follows is what is genuinely outstanding, each with its evidence.
   default paths make no outbound calls and the live checks are opt-in behind `--upstream`, but the
   blocked-egress run itself has not been performed. The property is designed for; it is not
   demonstrated.
-* **MCP reference-client conformance** — no run against the official conformance suite. Both
-  transports are exercised against a real SDK client, which is not the same claim.
+* **MCP reference-client conformance** — no run against the official conformance *suite*, and that remains
+  true. **But the claim here used to be weaker than it sounded, and is now correct.** "Both transports are
+  exercised against a real SDK client" was half true: the HTTP tests drive the server through `rmcp`'s own
+  client, and **the stdio tests used a hand-rolled JSON-RPC client this project wrote** — a client of ours
+  testing a server of ours, where a shared misunderstanding of the protocol makes both happy.
+
+  `docs/verification/mcp-sdk-conformance.mjs` now drives the same daemon with the **official MCP TypeScript
+  SDK** over stdio, so a disagreement with the reference implementation is a failing check. It is resolved
+  rather than vendored — `SAKUR4_MCP_SDK_PATH` points at an installation — because adding `node_modules` and
+  a lockfile to a Rust project for one check is the wrong trade, and without the variable the check reports
+  that it cannot run rather than passing.
+
+  It passes: the handshake, `tools/list` (17 tools, every one with an input schema), a `tools/call`
+  round-trip with its structured content, a read after a write, `resources/list`, `prompts/list`, and an
+  unknown tool refused.
+
+  **And it found one thing worth recording.** The SDK prints **92 warnings** on `tools/list` —
+  `unknown format "uint" ignored in schema at path …` — because `schemars` emits `"format": "uint"` for
+  Rust's `usize`, and `uint` is not a JSON Schema format.
+
+  **That is not a conformance failure**, and asserting it as one would be the check being stricter than the
+  standard it claims to test. The spec says an unrecognised `format` must be **ignored**, and the reference
+  implementation ignores it — every call in that file succeeded, including ones whose arguments contain
+  `usize` fields. Asserting otherwise would repeat the mistake the wiki link checker and the workflow YAML
+  heuristic both made: a check that flags a correct thing.
+
+  It is reported as a **note** instead, because the two ways it bites are real and neither appears in a
+  conformance run: a client that *validates* strictly rather than ignoring the keyword would reject the
+  schema, and 92 warnings per session is noise that teaches a reader to skip the log.
+
+  **The fix is one substitution at the `schemars` layer** — `"uint"` to `"uint64"`, the standard name for an
+  unsigned 64-bit integer. **It is deliberately not done here:** it changes the schema for all 17 tools,
+  which is a wire-contract change and belongs in a release with a changelog entry of its own, not bundled
+  into the round that noticed it.
 * **LoCoMo and the Endurance Benchmark** — not run. The A/B benchmark in [`bench/`](bench/) is a
   different and narrower measurement: matched windows, one repository, one model. It does not
   substitute for a standardised long-conversation benchmark.
