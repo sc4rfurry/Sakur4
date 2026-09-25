@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/sakur4-core", "crates/sakur4d", "crates/sakur4-testkit"]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 rust-version = "1.94"
 license = "Apache-2.0"
@@ -31,8 +31,8 @@ consolidate-commits = false
 [workspace.dependencies]
 # Path *and* version: `cargo package` resolves the version when building the
 # published archive, so a bare path dependency makes the crate unpublishable.
-sakur4-core = { version = "0.2.1", path = "crates/sakur4-core" }
-sakur4-testkit = { version = "0.2.1", path = "crates/sakur4-testkit" }
+sakur4-core = { version = "0.2.2", path = "crates/sakur4-core" }
+sakur4-testkit = { version = "0.2.2", path = "crates/sakur4-testkit" }
 
 # --- core runtime ---
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "net", "fs", "io-util", "process"] }

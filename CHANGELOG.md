@@ -17,6 +17,58 @@ home on crates.io rather than as a stability promise, and may change within a
 
 Nothing yet.
 
+## [0.2.2] - 2026-09-25
+
+**A patch, per this file's own policy** — nothing was added to, removed from or renamed in the MCP tool
+surface.
+
+**Upgrading is worth it for one thing above all: 0.2.1 can show one project another project's transcript.**
+Two separate session-naming defects caused it, both fixed here, and both are the kind a session never
+reports because a plausible-looking history is indistinguishable from a correct one.
+
+### Fixed
+
+* **Two projects whose directories share a name shared a transcript.** The OMP plugin derived its session
+  id as `omp-${basename(cwd)}`, and `session_episodes` filters on `session_id` **alone** — not on
+  `project_id` — while every episodic read goes through it: `timeline` for the assembled prompt,
+  `recent_episodes` for the receipt, and the fold and anchor queries beside them. **A shared basename
+  therefore meant a shared history.**
+
+  *The `project_id` work in 0.2.0 did not close this, and the reason is worth knowing:* project scoping is
+  applied to **recall**, and recall was never the leak. The narrower key wins, so a session identifier that
+  collides defeats a project dimension that does not — and recall being correctly scoped is what made the
+  defect look handled.
+
+  The id is now `omp-<directory>-<8 hex of the resolved path>`: stable per project, distinct between
+  projects, still legible in `sakur4.status`.
+
+* **The reverse proxy used the constant `"proxy"`.** One session for **every project on the machine** — the
+  same defect as above, with a constant instead of a basename. It is now `proxy-<project_id>`, derived from
+  the engine the proxy opened. `--session` still overrides it.
+
+  It was also the least visible of the two: the proxy is the route an OpenAI-compatible harness takes
+  rather than the MCP tools, so the integration checks never executed it, and `--session` existing made it
+  look like something a user was expected to configure.
+
+* **The OMP plugin announced `0.1.0` while its package said `0.2.1`.** The version lives in four places and
+  only one is a manifest. It reaches a daemon's `sessions` table and its logs, so it is the field someone
+  reads to answer "which plugin is this?".
+
+* **`install.ps1` retries its release lookup.** It made one call to the releases API and gave up on
+  anything that went wrong. Observed failing once and succeeding on a re-run, then — with the retry in
+  place — reporting `resolved on attempt 4`. A transient network error is the one failure it cannot
+  distinguish from a real one, and the one it is most likely to hit.
+
+* Server-side, `cargo deny` now runs in CI against a new `deny.toml` covering licences, duplicate
+  versions, sources and advisories; the official MCP TypeScript SDK drives the daemon over stdio in CI; and
+  the published wiki is checked against the tracked pages, because it had drifted into describing this
+  project's fixed defects as outstanding.
+
+### Added
+
+* `docs/verification/omp-session-id.mjs` — asserts five properties of the derived session id by extracting
+  the function from `index.ts` and evaluating it, so a rename fails loudly rather than testing nothing.
+* `docs/verification/plugin-version.mjs`, `wiki-published.mjs`, `install-check.mjs`, `measure.mjs`.
 ## [0.2.1] - 2026-09-25
 
 **A patch, per this file's own policy:** nothing was added to, removed from or renamed in the MCP tool
@@ -386,7 +438,8 @@ The first release. Everything below is new.
 - **`cargo deny` is wired into CI as of 0.2.1** (`cargo audit` was, as of 0.2.0.) Review `Cargo.lock`
   changes in a pull request.
 
-[Unreleased]: https://github.com/sc4rfurry/Sakur4/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/sc4rfurry/Sakur4/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/sc4rfurry/Sakur4/releases/tag/v0.2.2
 [0.2.1]: https://github.com/sc4rfurry/Sakur4/releases/tag/v0.2.1
 [0.2.0]: https://github.com/sc4rfurry/Sakur4/releases/tag/v0.2.0
 [0.1.0]: https://github.com/sc4rfurry/Sakur4/releases/tag/v0.1.0

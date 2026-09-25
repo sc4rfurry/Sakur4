@@ -280,7 +280,7 @@ function hero() {
   </linearGradient></defs>`;
 
   // The version, set as a value rather than a claim — monospaced, because that is what it is.
-  s += pill(504, 60, "v0.2.1", { fill: T.panel, stroke: T.panelEdge, ink: T.inkFaint });
+  s += pill(504, 60, "v0.2.2", { fill: T.panel, stroke: T.panelEdge, ink: T.inkFaint });
 
   s += text(64, 162, "Cache-coherent memory and context for local coding agents", {
     size: 19,
