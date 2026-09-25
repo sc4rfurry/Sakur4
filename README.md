@@ -1034,7 +1034,7 @@ a transport that closes its read side at EOF truncates a large reply such as `to
 - NFR latency and memory numbers are unmeasured on reference hardware — the development
   box has a GPU with 4 GB, which cannot host the target workload at all. That is
   why the embedded and fake backends exist.
-- `cargo deny` / `cargo audit` are not in CI. Review `Cargo.lock` changes by hand.
+- `cargo audit` and `cargo deny` both run in CI. Before 0.2.1 the licence and dup hand.
 
 The full list, including every deviation from the source requirements, is in
 [docs/DESIGN.md](docs/DESIGN.md).

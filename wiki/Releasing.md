@@ -124,7 +124,7 @@ it, so a step under the wrong key is not a syntax error — it is a step that si
 
 ## What is not automated yet
 
-- **`cargo deny`** — licences and duplicate versions. A policy question the project has not answered.
+- ~~**`cargo deny`**~~ — now runs in CI against `deny.toml`. It was a policy question the project has not answered.
   (`cargo audit` **does** run in CI, and found a medium-severity `rustls` advisory on its first hand-run.)
 - **A signed release.** Archives are checksummed but not GPG- or cosign-signed, so a checksum proves a
   download was not corrupted rather than proving origin.

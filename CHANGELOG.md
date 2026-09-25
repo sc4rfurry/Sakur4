@@ -383,7 +383,7 @@ The first release. Everything below is new.
 - **Optional encryption at rest (FR-20) is implemented but off by default.**
   Build with `--features encryption`. The default build links plain SQLite, so a store
   is readable by anyone with file access unless the feature was enabled.
-- **`cargo deny` is not wired into CI.** (`cargo audit` is, as of 0.2.0.) Review `Cargo.lock`
+- **`cargo deny` is wired into CI as of 0.2.1** (`cargo audit` was, as of 0.2.0.) Review `Cargo.lock`
   changes in a pull request.
 
 [Unreleased]: https://github.com/sc4rfurry/Sakur4/compare/v0.2.1...HEAD

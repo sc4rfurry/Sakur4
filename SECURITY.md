@@ -73,5 +73,5 @@ server you point it at — both of which are typically localhost.
 
 ## Dependency auditing
 
-`cargo deny` and `cargo audit` are not wired into CI yet. Until they are, review
+Both run in CI. `cargo deny` was wired up in 0.2.1 against `deny.toml`; before that, review
 `Cargo.lock` changes in a pull request rather than assuming something else does.

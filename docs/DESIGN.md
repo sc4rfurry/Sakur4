@@ -471,14 +471,29 @@ what follows is what is genuinely outstanding, each with its evidence.
   [`integrations/hermes-plugin/LIVE-TESTING.md`](../integrations/hermes-plugin/LIVE-TESTING.md).
 * **Signed release artifacts** — the release publishes archives with SHA-256 checksums, which detect
   corruption and not tampering. There is no GPG signature and no build provenance attestation.
-* **`cargo audit` runs in CI; `cargo deny` does not.** Running the audit by hand the first time found a
-  **medium-severity vulnerability in `rustls`** — RUSTSEC-2026-0285, "TLS 1.3 handshake messages
-  incorrectly accepted across encryption level boundaries", present in 0.23.44 and fixed in 0.23.45,
-  reaching this project through `reqwest` for the reverse proxy. The advisory had been published ten
-  days and nothing here would have said so, which is the argument for the step rather than for that
-  particular fix. `cargo deny` remains unrun: it covers licences and duplicate versions, which is a
-  policy question this project has not answered.
-* **Three `PromptParts` slots are populated only by tests and the testkit.** `PromptParts` renders
+  * **`cargo audit` and `cargo deny` both run in CI.** Running the audit by hand the first time found a
+    **medium-severity vulnerability in `rustls`** — RUSTSEC-2026-0285, "TLS 1.3 handshake messages
+    incorrectly accepted across encryption level boundaries", present in 0.23.44 and fixed in 0.23.45,
+    reaching this project through `reqwest` for the reverse proxy. The advisory had been published ten
+    days and nothing here would have said so, which is the argument for the step rather than for that
+    particular fix.
+
+    **`cargo deny` was listed here for many rounds as "a policy question this project has not answered",
+    and answering it took one file.** That framing was the problem: it made a `deny.toml` look like a
+    decision to be reached rather than an artifact to be written, so it stayed undone while every release
+    shipped without a licence or duplicate-version check.
+
+    Two things were learned writing it. **Without a configuration it rejects every dependency**, because
+    the default allow-list is empty — the first run reported 300+ rejections including `aho-corasick`'s
+    `Unlicense OR MIT`, which is a correct default and a useless signal. And **an aspirational allow-list
+    is visible as such**: the first draft allowed fifteen permissive licences, and the check reported seven
+    that nothing in this tree uses plus a `ring` exception that was never matched. A wide list is not a
+    security hole; it is a silent promise that nobody has checked most of it. What is committed is what the
+    tree needs, and adding one costs a line and a reason.
+
+    `multiple-versions` is `deny` with the two current duplicates named individually — `syn` 2 and 3, and
+    `base64` 0.22 and 0.23 — so a third duplicate fails the build. The distinction worth drawing is between
+    a duplicate nobody chose and one nobody noticed.mptParts` slots are populated only by tests and the testkit.** `PromptParts` renders
   eight parts; every production caller uses five — `with_system`, `with_anchors`, `with_timeline`,
   and `with_recall` in two of the three. Nothing in `src/` calls `with_repo_map`,
   `with_tool_schemas` or `with_folds`; the only callers are `prompt.rs`'s own tests and

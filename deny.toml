@@ -1,0 +1,100 @@
+# Dependency policy: licences, duplicate versions, sources, advisories.
+#
+# # Why this file did not exist until now
+#
+# `cargo deny` was listed as an open item in `docs/RELEASING.md` and in the wiki's Security page for many
+# rounds, with the note that it "covers licences and duplicate versions — a policy question this project has
+# not answered". This is the answer, and writing it took one command plus this file, so the item was never
+# expensive — it was just never done.
+#
+# Without a configuration, `cargo deny check licenses` **rejects every dependency**, because the default is
+# an empty allow-list. That is a correct default and a useless signal: the first run reported 300+ rejections,
+# including `aho-corasick`'s `Unlicense OR MIT`.
+#
+# # What this project actually promises
+#
+# Sakur4 is Apache-2.0 and is used as a **local sidecar**. Dependency licences matter for two reasons and
+# only two: a user redistributing a binary must be able to comply, and nothing may impose a licence on
+# Sakur4's own source. Both are satisfied by permissive licences, which is why the list below is permissive
+# libraries only — no copyleft in the production graph.
+
+[graph]
+# The workspace as a user would build it. `all-features` is left off so an optional dependency cannot make
+# the policy pass or fail depending on whether a feature happened to be enabled; `cargo deny --all-features`
+# is what CI runs.
+targets = [
+  { triple = "x86_64-unknown-linux-gnu" },
+  { triple = "aarch64-unknown-linux-gnu" },
+  { triple = "x86_64-apple-darwin" },
+  { triple = "aarch64-apple-darwin" },
+  { triple = "x86_64-pc-windows-msvc" },
+]
+
+[licenses]
+# # Smaller than the usual permissive set, and `cargo deny` is what keeps it honest
+#
+# The first draft of this file allowed fifteen licences, because all fifteen are permissive and all
+# plausible. Running the check reported **seven that no dependency here uses**, plus a `ring` exception
+# that was never matched — which is the useful part: `license-not-encountered` turns an aspirational
+# allow-list into a measured one.
+#
+# A wide list is not a security hole. It is a silent promise: it says "any dependency under these terms is
+# fine here" when nothing has ever been checked against most of them. What follows is exactly what the tree
+# needs today, and adding one costs a line and a reason.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "Unlicense",
+  "CC0-1.0",
+]
+
+# # Licences deliberately *not* allowed, named rather than left out
+#
+# `MPL-2.0` is file-level copyleft: permissive enough for a binary, but it obliges publishing the source of
+# the *covered files* if they are modified. Nothing here needs it, and adding it silently would make a
+# promise this file exists to state explicitly.
+#
+# `BSD-2-Clause`, `0BSD`, `BSL-1.0`, `OpenSSL`, `NCSA`, `Unicode-DFS-2016` and `CDLA-Permissive-2.0` are
+# all fine licences and none of them is in this tree. They were in the first draft; each was reported as
+# unused, and a licence nothing depends on is a decision nobody made.
+
+[bans]
+# # `deny` rather than `warn`, with the current two duplicates named below
+#
+# The tree has exactly two duplicated crates today, and both are ordinary: `syn` 1 and 2 because the
+# proc-macro ecosystem is mid-migration, and `base64` because two transitive dependencies disagree on a
+# major. A `warn` would report them on every run forever and be read as noise.
+#
+# `deny` inverts that: the two are skipped **with a reason each**, and a third duplicate fails the build,
+# which is the moment someone should decide whether it is as harmless as these two. The distinction that
+# matters is between a duplicate nobody chose and a duplicate nobody noticed.
+multiple-versions = "deny"
+wildcards = "deny"
+skip = [
+  # `syn` 2 and 3. The proc-macro ecosystem is migrating, and holding both during the transition is
+  # normal; neither copy is linked into the binary.
+  { name = "syn", version = "=2.0.119" },
+  # `base64` 0.22 and 0.23, pulled by two different transitive dependencies. Both are widely used and
+  # maintained, and neither is security-relevant here — but this is the kind of entry that should be
+  # re-checked when either dependency moves.
+  { name = "base64", version = "=0.22.1" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# Every dependency comes from crates.io. A git dependency would mean an unpinned moving target inside a
+# supply chain this project asks users to trust with their transcripts.
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[advisories]
+# `cargo audit` runs in CI and reads the same database; this section exists so `cargo deny` is a complete
+# answer rather than one that silently skips advisories.
+version = 2
+yanked = "deny"
+ignore = []

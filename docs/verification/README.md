@@ -161,7 +161,7 @@ node docs/verification/nfr2-recall.mjs --n 100000     # ~5 minutes of seeding
 | install script | `README.md`'s one-liner, confirmed to fetch and verify |
 | `repository` in `Cargo.toml` | the real URL, checked by `repo-url.mjs` on every run |
 | crates.io | **not published** — `sakur4-core` must go first, then `sakur4d` |
-| `cargo audit` / `cargo deny` | **not in CI** |
+| `cargo audit` / `cargo deny` | **in CI**, in the lint job |
 | signed artifacts | **no** — checksums detect corruption, not tampering |
 
 The last three are the remaining distribution gaps, and none is configuration: one needs a

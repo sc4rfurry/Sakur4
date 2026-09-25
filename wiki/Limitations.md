@@ -147,7 +147,7 @@ always null.
 
 | Gap | Why it matters |
 |---|---|
-| `cargo deny` is not run | Covers licences and duplicate versions — a policy question this project has not answered, not a defect |
+| ~~`cargo deny` is not run~~ | Now runs in CI against `deny.toml`: licences, duplicate versions, sources and advisories |y question this project has not answered, not a defect |
 | FR-19's acceptance test is unrun | The suite has not been executed with network egress blocked at the OS level |
 | `cargo audit` runs in CI, but only since recently | Running it by hand the first time found a medium-severity `rustls` advisory published ten days earlier |
 

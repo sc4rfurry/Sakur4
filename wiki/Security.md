@@ -84,7 +84,7 @@ vacuously.
 | **Known-vulnerability scan** | `cargo audit` runs in CI on every push. Running it by hand the first time found a **medium-severity `rustls` advisory** (RUSTSEC-2026-0285, TLS 1.3 handshake messages accepted across encryption-level boundaries) that had been published ten days earlier — reached through `reqwest` for the reverse proxy |
 | **Checksum-verified installs** | `install.sh` fetches `SHA256SUMS.txt` and **refuses to install** an archive that is not listed or does not match. A missing checksum file is a failure, not a silent downgrade |
 | **Signed artifacts** | **Not yet.** A checksum proves a download was not corrupted; it does not prove origin. See [Limitations](Limitations) |
-| **Licence and duplicate-version policy** | `cargo deny` is not run — a policy question the project has not answered |
+| **Licence and duplicate-version policy** | Runs in CI against `deny.toml` — licences, duplicates, sources |icy question the project has not answered |
 | **Unused dependencies** | Checked. Three were declared and referenced nowhere, including file-watching crates that implied a feature which did not exist |
 
 ---

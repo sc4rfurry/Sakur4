@@ -78,6 +78,27 @@ jobs:
           cargo install cargo-audit --locked --quiet
           cargo audit
 
+      # ---------------------------------------------------------------------------
+      # Licences, duplicate versions, and where a dependency came from.
+      # ---------------------------------------------------------------------------
+      #
+      # # This was an open item for many rounds and cost one file
+      #
+      # `cargo deny` was listed in `docs/RELEASING.md` and the wiki's Security page as "a policy question
+      # this project has not answered". Writing `deny.toml` took a command and an hour; the reason it went
+      # undone was that it looked like a decision rather than a file.
+      #
+      # Without a configuration it rejects **every** dependency, because the default allow-list is empty —
+      # so the first run reported 300+ rejections including `aho-corasick`'s `Unlicense OR MIT`, which is a
+      # correct default and a useless signal. `deny.toml` now states what this project promises.
+      #
+      # `advisories` too, so this is a complete answer rather than one that silently skips them, and
+      # `--all-features` so an optional dependency cannot slip past a policy check by being disabled.
+      - name: cargo deny
+        run: |
+          cargo install cargo-deny --locked --quiet
+          cargo deny --all-features check advisories bans licenses sources
+
   # ---------------------------------------------------------------------------
   # Tests on every supported platform.
   #
