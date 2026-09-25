@@ -136,7 +136,7 @@ const CATALOG = {
     "feature-gated tests this machine cannot compile",
   ],
   hermes: ["context engine (FR-16)"],
-  bench: ["A/B (scripted)", "NFR-2 recall at scale"],
+  bench: ["A/B (scripted)", "NFR-2 recall at scale", "the demo walkthrough demonstrates its claims"],
   live: [
     "llama.cpp prefix behaviour",
     "compaction case",
@@ -1432,6 +1432,35 @@ function harnessChecks() {
         "OMP session ids are per project",
         ok ? PASS : FAIL,
         ok ? "same directory name, different sessions; same project, same session" : lastLines(r.output, 6),
+      );
+    }
+  }
+
+  // # The README's flagship walkthrough, asserted rather than illustrated
+  //
+  // `sakur4d demo` commits turns, pins a constraint, recalls, evicts and prints a receipt, and its closing text
+  // claims *"the receipt above is the same one `context.receipt` returns over MCP, and the eviction plan is the
+  // same one `context.plan_eviction` returns."*
+  //
+  // **Nothing verified that.** `doc-commands.mjs` checks that `demo` is a real subcommand — not that it runs,
+  // not that it produces a receipt, and not that the paths it claims to share are the ones it took. A
+  // regression that made the walkthrough print nothing would have passed every check in this suite.
+  //
+  // It is also the only end-to-end check here that needs no network, no port and no inference server, which
+  // makes it the right one to rely on when those are unavailable — which is how the gap was noticed.
+  if (wanted("demo-run", "bench")) {
+    const script = join(ROOT, "docs", "verification", "demo-run.mjs");
+    const binary = daemonBinary();
+    if (!existsSync(script) || !binary) {
+      record("bench", "the demo walkthrough demonstrates its claims", SKIP, "needs a built daemon");
+    } else {
+      const r = run(process.execPath, [script, binary], { timeout: 300_000 });
+      const ok = r.ok && /demonstrates every claim/.test(r.output);
+      record(
+        "bench",
+        "the demo walkthrough demonstrates its claims",
+        ok ? PASS : FAIL,
+        ok ? "receipt, eviction plan, symbolic facts, staleness, window — with nothing configured" : lastLines(r.output, 8),
       );
     }
   }

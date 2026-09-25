@@ -309,6 +309,10 @@ node docs/verification/plugin-version.mjs
 # index.ts and evaluated, so a rename fails loudly rather than testing nothing.
 node docs/verification/omp-session-id.mjs
 
+# The README's flagship walkthrough, asserted: it must exit cleanly and demonstrate every claim its
+# closing text makes. Needs no network, no port and no inference server.
+node docs/verification/demo-run.mjs ./target/release/sakur4d
+
 # Candidates for reading, not a verdict: public functions nothing here calls. Not wired into
 # erify.mjs, because most of what it lists is legitimate library surface — read the doc comments.
 node docs/verification/uncalled.mjs
