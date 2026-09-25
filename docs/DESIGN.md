@@ -508,10 +508,30 @@ what follows is what is genuinely outstanding, each with its evidence.
     a harmless annotation for a possibly-wrong constraint is not an improvement.
 
   **The change worth making, when someone wants to make it, is the opposite of the one I proposed:** declare
-  the three as `u64` explicitly so the wire contract stops depending on the target's pointer width, and let
-  the format be `uint64` as a consequence rather than as the goal. That is a wire-contract change across three
-  fields and belongs in a release with a changelog entry — not in the round that noticed it, and not as a
-  one-substitution fix.
+  the fields as `u64` explicitly so the wire contract stops depending on the target's pointer width, and let
+  the format follow from the type rather than being the goal.
+
+  **It was then costed, and the costing is the reason it is still open.** There are **five** declarations, not
+  three — `RepoMapInput.token_budget`, `RepoMapOutput.tokens_used`, `RepoMapOutput.token_budget`,
+  `RecordUsageInput.prompt_tokens` and `RecordUsageInput.completion_tokens` — and they do not stand alone:
+
+  * `MemoryFabric`'s `ProviderUsage` stores all three usage counts as `usize`, so the tool would assign a
+    `u64` into a `usize` field. On a 64-bit target that is lossless; on a 32-bit one it **truncates**.
+  * Rust does not insert that conversion, so it needs an explicit `u64 as usize` — **a silent truncation in
+    the one place the change was supposed to remove platform dependence.** The correct form is
+    `usize::try_from(…)` with an error, which means the tool can now *fail* on a value a client legitimately
+    sent, and that failure needs a message and a test.
+  * That propagates: `provider_cache.rs` already does `row.completion_tokens as i64` for its receipt, so a
+    `usize`-to-`i64` set of casts sits underneath and would need its own look.
+
+  So it is not "four type annotations". It is a wire-contract change, a fallible conversion with an error
+  path, and an audit of the integer casts below it — **and the reward is a schema annotation on five fields
+  whose values are token counts.** That is a reasonable trade to make deliberately and a bad one to make at
+  the end of a round, which is exactly the distinction this entry exists to record.
+
+  **What would make it worth doing:** a target where `usize` is 32 bits wanting to run Sakur4, or a client
+  that validates strictly and rejects the schema. Neither has appeared, and both would be visible — the first
+  as a build target, the second as a failing conformance check.
 * **LoCoMo and the Endurance Benchmark** — not run. The A/B benchmark in [`bench/`](bench/) is a
   different and narrower measurement: matched windows, one repository, one model. It does not
   substitute for a standardised long-conversation benchmark.
