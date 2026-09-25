@@ -332,12 +332,33 @@ jobs:
   consolidated:
     name: verify.mjs (--require-all)
     runs-on: ubuntu-latest
+    env:
+      # The conformance check needs the official MCP TypeScript SDK, installed below. Without this the
+      # check reports that it cannot run rather than passing — the honest behaviour, and also why CI
+      # installs it: an independent MCP client behind stdio is the whole point of the check.
+      SAKUR4_MCP_SDK_PATH: ${{ runner.temp }}/mcp-sdk
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+
+      # ---------------------------------------------------------------------------
+      # The official MCP TypeScript SDK, for the conformance check in the `harness` group.
+      # ---------------------------------------------------------------------------
+      #
+      # # Why a Rust project's CI installs a third-party SDK to test itself
+      #
+      # The stdio tests use a hand-rolled JSON-RPC client this project wrote — a client of ours testing a
+      # server of ours, where a shared misunderstanding of the protocol makes both happy. `rmcp`'s own
+      # client covers HTTP; **nothing independent covered stdio**, which is the transport every harness
+      # actually uses.
+      #
+      # Installed to a temporary path rather than vendored: a `node_modules` and a lockfile inside a Rust
+      # repository, for one check, is the wrong trade.
+      - name: the official MCP SDK
+        run: npm install --prefix "$SAKUR4_MCP_SDK_PATH" --no-audit --no-fund @modelcontextprotocol/sdk
 
       - name: Install the encryption feature's crypto provider
         run: |

@@ -460,6 +460,14 @@ what follows is what is genuinely outstanding, each with its evidence.
   round-trip with its structured content, a read after a write, `resources/list`, `prompts/list`, and an
   unknown tool refused.
 
+  **CI runs it.** The consolidated job installs `@modelcontextprotocol/sdk` to `$RUNNER_TEMP/mcp-sdk` and
+  passes the path through `SAKUR4_MCP_SDK_PATH`, so the check executes there rather than skipping. Installed
+  rather than vendored, and the first attempt at that workflow edit **corrupted the job block badly enough
+  that reverting the whole file was the safer move** — which is worth recording, because the second attempt
+  took one `edit` and two verification runs. The difference was editing the exact block instead of computing
+  line numbers and writing them back, and it is the same lesson as the ordering defect: the tool that
+  operates on the thing beats the tool that operates on a description of the thing.
+
   **And it found one thing worth recording.** The SDK prints **92 warnings** on `tools/list` —
   `unknown format "uint" ignored in schema at path …` — because `schemars` emits `"format": "uint"` for
   Rust's `usize`, and `uint` is not a JSON Schema format.
