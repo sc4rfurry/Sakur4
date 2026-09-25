@@ -672,8 +672,32 @@ async fn doctor(cli: &Cli, refresh: bool) -> Result<()> {
     println!("  requested        {}", engine.requested_backend());
     println!("  resolved         {} ({})", status.backend_name, status.backend_spec);
     println!("  note             {}", status.backend_note);
-    println!("  capabilities     {}", status.cache_summary);
-    println!("  coherence        {}", coherence_verdict(&status.capabilities));
+    // # These two describe the backend that is *running*, and now they say so
+    //
+    // With `--backend http://127.0.0.1:9`, this printed:
+    //
+    // ```text
+    // requested        http://127.0.0.1:9
+    // resolved         embedded (sakur4://embedded)
+    // note             … was unreachable …; degraded to the embedded backend
+    // capabilities     slots+save+restore+checkpoint-ring+tokenize+metrics
+    // coherence        checkpoint-aligned eviction boundaries available
+    // ```
+    //
+    // **Every line is true of the backend it describes, and the block as a whole misleads.** The
+    // capabilities and the coherence verdict belong to the *embedded* backend — and it genuinely implements
+    // them: it tracks position and rewinds in memory, so its `save`, `restore` and checkpoint list are real
+    // rather than declared. What went wrong is the reader's inference: four lines appear to describe the
+    // requested server, three of them name it, and the two most load-bearing describe something else.
+    //
+    // Naming the running backend on those two lines is a small change, and it is the difference between
+    // "Sakur4 thinks my llama.cpp has checkpoint alignment" and "Sakur4 is not using my llama.cpp at all".
+    println!("  capabilities     {}  [{}]", status.cache_summary, status.backend_name);
+    println!(
+        "  coherence        {}  [{}]",
+        coherence_verdict(&status.capabilities),
+        status.backend_name
+    );
     println!();
     println!("context management");
     println!("  tokenizer        {}", status.tokenizer);
