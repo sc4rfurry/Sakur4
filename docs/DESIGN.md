@@ -1102,6 +1102,37 @@ what follows is what is genuinely outstanding, each with its evidence.
      back. Both, because the first is what the twelfth attempt measured and the second is what it broke.
   2. Only then add the gate, re-running both.
 
+  **A thirteenth attempt did step 1 and identified the truncated-response cause by isolating it, not by
+  guessing.**
+
+  A pump-only transport with a **1.5-second delay before the read side closed** produced both:
+
+  ```text
+  control 1  tools/list -> 17 tools                 (was 0)
+  control 2  replies 25/25   statuses 12/12         three runs, WRONG 4, 3, 1
+  ```
+
+  **So it was timing, and it is now proved rather than inferred.** `yield_now()` between messages was not
+  enough; a delay was. The read side closing as soon as stdin ended cut a write in progress, and the reason
+  `sakur4.status` survived while `tools/list` did not is response size.
+
+  With both controls satisfied, the real mechanism was put in its place of the delay — a shared
+  `AtomicUsize` of completed responses, incremented by a writer that counts **newlines** rather than flushes
+  (because `tokio::io::copy` flushes only when the reader stalls, so counting flushes counts the wrong
+  event), and read by the pump for two purposes: the ordering gate before forwarding message N+1, and the
+  end-of-file drain before closing the read side.
+
+  **A counter rather than a flag or a channel, because both of those lose a signal.** An `AtomicBool`
+  cleared with `swap(false)` erases a store landing between the writer's store and the reader's next check;
+  a one-slot `mpsc` with `try_send` drops a release while the slot is full. Every increment of a counter is
+  observable and nothing is cleared, so neither can happen.
+
+  **It produced 0 replies of 25**, and was reverted — so the counter alone is not sufficient either. What
+  remains unexplained is narrow and worth stating exactly: a shell proven to deliver 25 answers and a
+  17-tool catalog **with a delay**, plus a release mechanism that cannot lose an event, still stalls when
+  the two are combined. The next attempt should instrument the counter itself — print it from both sides —
+  rather than reason about it, because every previous attempt reasoned and twelve were wrong.
+
   **The protocol says the reordering is legal, which reframes the whole entry.** From the JSON-RPC
   2.0 specification:
 
