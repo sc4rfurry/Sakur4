@@ -19,7 +19,7 @@ set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REPO="sc4rfurry/Sakur4"
-TAG="${SAKUR4_VERSION:-v0.2.0}"
+TAG="${SAKUR4_VERSION:-v0.2.1}"
 TARGET="x86_64-unknown-linux-gnu"
 BIN="sakur4d"
 

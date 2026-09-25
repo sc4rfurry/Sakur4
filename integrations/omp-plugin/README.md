@@ -133,7 +133,7 @@ indistinguishable, because OMP surfaces extension-load errors only to a TTY.
   not one anything is tested against, and nothing enforces it: `package.json` declares
   `"@earendil-works/pi-coding-agent": "*"`.
 - Node.js 18+ (OMP bundles its own runtime).
-- `sakur4d` 0.2.0 or newer. No GPU, model or network needed — the daemon's
+- `sakur4d` 0.2.1 or newer. No GPU, model or network needed — the daemon's
   embedded backend simulates a llama.cpp slot, so the extension is fully usable
   without a local model.
 

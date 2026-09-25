@@ -1,6 +1,6 @@
 {
   "name": "omp-sakur4",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Sakur4 memory and context management for Oh My Pi: persistent memory, pinned constraints that survive compaction, code-graph queries, and prompt-cache-aware compaction.",
   "type": "module",
   "license": "Apache-2.0",

@@ -17,6 +17,58 @@ home on crates.io rather than as a stability promise, and may change within a
 
 Nothing yet.
 
+## [0.2.1] - 2026-09-25
+
+**A patch, per this file's own policy:** nothing was added to, removed from or renamed in the MCP tool
+surface. The only change to it is a description string (`code.get_repo_map`'s, which promised a
+strict-prefix behaviour no truncation marker can deliver).
+
+**Upgrading from 0.2.0 is worth it for one thing above all: the pipelined-read ordering defect is
+fixed.** It was the headline limitation of this project, it could silently hand a session a stale count,
+and it is gone.
+
+### Fixed
+
+* **A batched read is no longer served before a write it was sent after.** JSON-RPC permits a server to
+  process a batch *"in any order"*, and MCP correlates responses only by `id` — so a `memory.commit_episode`
+  and a `sakur4.status` written together could be answered in either order, and the status could report the
+  count from before the commit. **The stdio transport now withholds message N+1 until the response to N has
+  been written.**
+
+  Measured, twelve commit-then-status pairs per run, every frame written before any reply is read:
+
+  ```text
+  0.2.0:  replies 25/25   statuses 12/12   WRONG 5, 1, 5, 2, 4, 3
+  0.2.1:  replies 25/25   statuses 12/12   WRONG 0, 0, 0, 0, 0, 0
+  ```
+
+  **Fourteen attempts; six of them tried to order the handlers with a lock, which cannot work** — a lock
+  orders handlers, not dispatch. The record is in `docs/DESIGN.md`, and the last attempt succeeded only
+  after instrumenting a counter instead of reasoning about it. Two mistakes made on the way are now each
+  pinned by a test: a notification produces no reply and must not be waited on, and end of input is not the
+  end of output — a transport that closes its read side at EOF truncates a large reply such as `tools/list`.
+
+* **A latency figure taken on a busy machine is no longer reported as a regression.** `NFR-2 recall at
+  scale` reported 1352.9 ms in a full run and 23.0 ms alone, because the benchmark was measuring 261
+  concurrent tests. The verdict is now `PASS`, `FAIL` or `INCONCLUSIVE`, and the last of those is recorded
+  as a skip carrying the load rather than as a failure.
+
+* **`code.get_repo_map`'s description no longer promises a strict prefix.** It said a smaller budget returns
+  a strict prefix of a larger one and that was false at three budget pairs out of three; the footer's
+  variable-width counts moved the divergence. The counts are gone (they are in the structured result) and the
+  description states what is measured.
+
+* **`FtsStore::search_episodes` no longer claims to exclude unattributed rows.** Its doc comment said a
+  scoped search excludes `project_id IS NULL` "rather than treating NULL as a match"; the predicate is
+  `(?p IS NULL OR project_id = ?p)`, so `None` is a wildcard over **every** project. The tool path was never
+  affected — `memory.recall` always binds a project — but a guarantee was stated that no test checked.
+
+### Added
+
+* **`install.ps1` runs correctly on non-Windows hosts** by skipping rather than failing, with the platform
+  decision asserted in both directions by its own test.
+* Regression tests for the batch ordering, the notification reply count, and the batched tool catalog.
+
 ## [0.2.0] - 2026-09-24
 
 **A minor bump rather than a patch**, per this file's own policy: the MCP tool surface gained an
@@ -334,6 +386,7 @@ The first release. Everything below is new.
 - **`cargo deny` is not wired into CI.** (`cargo audit` is, as of 0.2.0.) Review `Cargo.lock`
   changes in a pull request.
 
-[Unreleased]: https://github.com/sc4rfurry/Sakur4/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/sc4rfurry/Sakur4/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/sc4rfurry/Sakur4/releases/tag/v0.2.1
 [0.2.0]: https://github.com/sc4rfurry/Sakur4/releases/tag/v0.2.0
 [0.1.0]: https://github.com/sc4rfurry/Sakur4/releases/tag/v0.1.0
