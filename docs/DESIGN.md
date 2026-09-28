@@ -573,6 +573,19 @@ what follows is what is genuinely outstanding, each with its evidence.
 * **LoCoMo and the Endurance Benchmark** — not run. The A/B benchmark in [`bench/`](bench/) is a
   different and narrower measurement: matched windows, one repository, one model. It does not
   substitute for a standardised long-conversation benchmark.
+
+### Closed while working through this list
+
+**These were outstanding when the list was written and are not any more.** They are kept under their own
+heading because the reasoning in each is still worth reading, and because a reader who met them in the list
+above would otherwise have to diff the repository to learn they are done.
+
+**This heading exists because four entries above were finished work described as outstanding** — FR-11's
+staleness annotation, `cargo deny`, episodic recall, and the status counts — each corrected in the round that
+noticed rather than the round that did the work. **A gap list that understates the project costs the same trust
+as one that overstates it:** a reader who checks one entry and finds it already done stops believing the entries
+that are not.
+
 * **FR-11's staleness annotation is implemented** — migration 4 gave `dependency_graph_edge` a
   `target_hash`, the indexing pass records the caller's own hash when it first observes a call site,
   and `impact_of_change` compares it with the caller's hash today. The annotation is rendered by
